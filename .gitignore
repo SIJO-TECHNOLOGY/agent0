@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Local editor/vault state
+.obsidian/
+.vscode/
+.idea/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Node / frontend
+node_modules/
+dist/
+build/
+
+# Python / LangGraph backend
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Java / Spring Boot MCP server
+target/
+.gradle/
+out/
+*.class
