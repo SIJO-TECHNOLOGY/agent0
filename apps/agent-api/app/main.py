@@ -1,0 +1,161 @@
+"""FastAPI application factory and module-level app instance."""
+
+from __future__ import annotations
+
+import inspect
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+from app import __version__
+from app.api import health_router, ready_router, search_router
+from app.api.dependencies import McpClientUnavailableError
+from app.config import get_settings
+from app.mcp.factory import create_mcp_client
+from app.models.api import ErrorEnvelope, ErrorPayload, McpDependencyStatus
+
+logger = logging.getLogger(__name__)
+
+
+def _configure_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+async def _close_client(client: object) -> None:
+    """Close an MCP client supporting async aclose, sync close, or neither."""
+    for attr in ("aclose", "close"):
+        method = getattr(client, attr, None)
+        if method is None:
+            continue
+        result = method()
+        if inspect.isawaitable(result):
+            await result
+        return
+
+
+def _sanitize_connect_error(exc: BaseException) -> str:
+    """Produce a short, user-safe message for the health endpoint."""
+    return f"{type(exc).__name__}: {exc}"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    _configure_logging(settings.log_level)
+
+    # The factory itself may raise McpClientNotImplementedError on a
+    # configuration error (e.g. unsupported transport). That is a real
+    # fail-fast case, not a connectivity blip, so we deliberately do not
+    # catch it here.
+    client = create_mcp_client(settings)
+
+    if settings.use_mock_mcp:
+        status_value: str = "mock"
+        error: str | None = None
+    else:
+        status_value = "connected"
+        error = None
+        connect = getattr(client, "connect", None)
+        if callable(connect):
+            try:
+                await connect()
+            except (KeyboardInterrupt, SystemExit):
+                # Never swallow process-control signals.
+                raise
+            except BaseException as exc:  # noqa: BLE001 — see comment
+                # Treat any connect failure as "MCP unavailable" so the
+                # process still comes up and /api/health stays reachable.
+                # We deliberately widen to BaseException (above the
+                # KeyboardInterrupt/SystemExit re-raise) so internal
+                # asyncio.CancelledError from the MCP SDK's TaskGroup is
+                # also captured. Without this, FastAPI startup would abort
+                # and /api/health would be unreachable.
+                logger.exception("mcp.connect_failed")
+                # Best-effort close in case partial state was allocated.
+                try:
+                    await _close_client(client)
+                except Exception:  # noqa: BLE001
+                    logger.exception("mcp.close_after_failed_connect_failed")
+                client = None
+                status_value = "unavailable"
+                error = _sanitize_connect_error(exc)
+
+    app.state.mcp_client = client
+    app.state.mcp_status = McpDependencyStatus(
+        status=status_value,  # type: ignore[arg-type]
+        url=settings.mcp_server_url,
+        transport=settings.mcp_transport,
+        error=error,
+    )
+
+    try:
+        yield
+    finally:
+        bound = getattr(app.state, "mcp_client", None)
+        if bound is not None:
+            await _close_client(bound)
+        app.state.mcp_client = None
+        app.state.mcp_status = None
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="Sijo Agent API",
+        version=__version__,
+        description=(
+            "LangGraph-orchestrated natural-language search over BoondManager "
+            "via MCP tools."
+        ),
+        lifespan=lifespan,
+    )
+
+    app.include_router(health_router)
+    app.include_router(ready_router)
+    app.include_router(search_router)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_handler(
+        _: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        envelope = ErrorEnvelope(
+            error=ErrorPayload(
+                code="invalid_request",
+                message="The request payload failed validation.",
+                details={"errors": jsonable_encoder(exc.errors())},
+            )
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=jsonable_encoder(envelope),
+        )
+
+    @app.exception_handler(McpClientUnavailableError)
+    async def _mcp_unavailable_handler(
+        _: Request, __: McpClientUnavailableError
+    ) -> JSONResponse:
+        envelope = ErrorEnvelope(
+            error=ErrorPayload(
+                code="mcp_client_unavailable",
+                message=(
+                    "The MCP client is not initialized. The Agent API cannot "
+                    "serve search requests until an MCP client is bound."
+                ),
+            )
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=jsonable_encoder(envelope),
+        )
+
+    return app
+
+
+app = create_app()
