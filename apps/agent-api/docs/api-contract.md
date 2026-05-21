@@ -94,7 +94,7 @@ Design internal workflow events so future SSE or WebSocket support can stream:
 - Partial result counts.
 - Final summary.
 
-## Related Architecture Decisions
+## Operational API Decisions
 
-- [ADR-002 - MCP Client Wiring Review](../../../docs/decisions/adr-002-mcp-client-wiring-review.md)
-- [ADR-003 - Graceful MCP Degradation And Health Strategy](../../../docs/decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md)
+- [ADR-003 - Graceful MCP Degradation And Health Strategy](../../../docs/decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md) explains why liveness, readiness, and search availability are separate API concerns.
+- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../../../docs/decisions/adr-004-asyncio-cancelled-error-mcp-startup.md) explains why startup cancellation errors still surface as MCP-unavailable behavior instead of taking down `/api/health`.

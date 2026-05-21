@@ -100,10 +100,11 @@ flowchart TD
     E --> F["Test verification"]
 ```
 
-## Related Architecture Decisions
+## Decision Flow
 
-- [ADR-002 - MCP Client Wiring Review](./adr-002-mcp-client-wiring-review.md)
-- [ADR-003 - Graceful MCP Degradation And Health Strategy](./adr-003-graceful-mcp-degradation-and-health-strategy.md)
+- Primary context: [ADR-003 - Graceful MCP Degradation And Health Strategy](./adr-003-graceful-mcp-degradation-and-health-strategy.md), because this ADR is a fix to that startup degradation path.
+- Guardrail preserved: [ADR-002 - MCP Client Wiring Review](./adr-002-mcp-client-wiring-review.md), because the fix keeps MCP unavailable behavior explicit and does not reintroduce silent mock fallback.
+- System context: [Sijo AI Agent Architecture](../architecture/sijo-ai-agent-architecture.md), which keeps Agent API orchestration separate from deterministic MCP tool execution.
 
 ## Conclusion
 

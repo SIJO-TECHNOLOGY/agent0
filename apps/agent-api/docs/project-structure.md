@@ -60,7 +60,7 @@ config -> all runtime setup
 
 Avoid circular imports by keeping shared schemas in `app/models` and runtime settings in `app/config`.
 
-## Related Architecture Decisions
+## Architecture Inputs
 
-- [ADR-002 - MCP Client Wiring Review](../../../docs/decisions/adr-002-mcp-client-wiring-review.md)
-- [ADR-003 - Graceful MCP Degradation And Health Strategy](../../../docs/decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md)
+- [Sijo AI Agent Architecture](../../../docs/architecture/sijo-ai-agent-architecture.md) defines the module boundaries between web UI, Agent API, MCP server, and BoondManager.
+- [ADR-002 - MCP Client Wiring Review](../../../docs/decisions/adr-002-mcp-client-wiring-review.md) explains why MCP integration belongs behind an explicit client abstraction and composition boundary.

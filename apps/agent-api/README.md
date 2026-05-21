@@ -47,6 +47,10 @@ POST /api/search
 
 The endpoint accepts a natural-language query and optional filters, then returns interpreted intent, execution plan, tool calls, results, summary, confidence, and warnings.
 
+## System Context
+
+This module implements the Agentic Backend described in the [Sijo AI Agent Architecture](../../docs/architecture/sijo-ai-agent-architecture.md). It should preserve the boundary between LangGraph orchestration and deterministic MCP tool execution.
+
 ## Documentation
 
 - [Implementation Plan](./docs/implementation-plan.md)
@@ -57,8 +61,8 @@ The endpoint accepts a natural-language query and optional filters, then returns
 - [Claude Code Instructions](./CLAUDE.md)
 - [Agent API Skill](./SKILL.md)
 
-## Related Architecture Decisions
+## Decision Trail
 
-- [ADR-002 - MCP Client Wiring Review](../../docs/decisions/adr-002-mcp-client-wiring-review.md)
-- [ADR-003 - Graceful MCP Degradation And Health Strategy](../../docs/decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md)
-- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../../docs/decisions/adr-004-asyncio-cancelled-error-mcp-startup.md)
+- [ADR-002 - MCP Client Wiring Review](../../docs/decisions/adr-002-mcp-client-wiring-review.md) explains why MCP clients must be selected explicitly through configuration.
+- [ADR-003 - Graceful MCP Degradation And Health Strategy](../../docs/decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md) defines health, readiness, and search behavior when MCP is unavailable.
+- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../../docs/decisions/adr-004-asyncio-cancelled-error-mcp-startup.md) records the async startup edge case found while validating ADR-003.

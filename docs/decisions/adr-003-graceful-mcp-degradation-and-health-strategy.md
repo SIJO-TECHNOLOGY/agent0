@@ -126,9 +126,11 @@ flowchart TD
 
 The workflow helped separate immediate functionality from production-grade operational behavior.
 
-## Related Architecture Decisions
+## Decision Flow
 
-- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](./adr-004-asyncio-cancelled-error-mcp-startup.md)
+- System context: [Sijo AI Agent Architecture](../architecture/sijo-ai-agent-architecture.md) defines the Agent API and MCP server boundary that this resilience behavior preserves.
+- Builds on: [ADR-002 - MCP Client Wiring Review](./adr-002-mcp-client-wiring-review.md), because graceful degradation is safe only when mock-vs-real MCP wiring is explicit and cannot silently fall back to fake data.
+- Follow-up: [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](./adr-004-asyncio-cancelled-error-mcp-startup.md) fixes an async startup edge case discovered while validating this strategy.
 
 ## Conclusion
 

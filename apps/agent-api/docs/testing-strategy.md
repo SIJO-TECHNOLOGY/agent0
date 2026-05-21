@@ -59,6 +59,8 @@ Recommended fixtures:
 - Tests verify the public API contract and core workflow behavior.
 - Tests cover both successful and degraded execution paths.
 
-## Related Architecture Decisions
+## Review-Driven Test Coverage
 
-- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../../../docs/decisions/adr-004-asyncio-cancelled-error-mcp-startup.md)
+- [ADR-002 - MCP Client Wiring Review](../../../docs/decisions/adr-002-mcp-client-wiring-review.md) requires tests for mock-vs-real MCP selection and prevention of silent fallback.
+- [ADR-003 - Graceful MCP Degradation And Health Strategy](../../../docs/decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md) requires tests for `/api/health`, `/api/ready`, and structured `503` behavior when MCP is unavailable.
+- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../../../docs/decisions/adr-004-asyncio-cancelled-error-mcp-startup.md) requires tests for startup `asyncio.CancelledError` handling in the MCP connection path.

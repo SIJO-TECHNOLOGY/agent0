@@ -235,6 +235,14 @@ Logs should support debugging and audit needs without exposing sensitive data un
 - Scheduled monitoring for new matching profiles or opportunities.
 - Additional MCP tools for other internal systems.
 
+## Implementation Decision Trail
+
+The global architecture is the system context for the Agent API implementation. The following ADRs document how implementation review refined the MCP boundary and runtime behavior:
+
+- [ADR-002 - MCP Client Wiring Review](../decisions/adr-002-mcp-client-wiring-review.md) protects the MCP client boundary and makes mock-vs-real configuration explicit.
+- [ADR-003 - Graceful MCP Degradation And Health Strategy](../decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md) defines health, readiness, and search behavior when the MCP dependency is unavailable.
+- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../decisions/adr-004-asyncio-cancelled-error-mcp-startup.md) records the async startup edge case discovered while validating graceful degradation.
+
 ## Implementation Notes For AI Coding Agents
 
 - Preserve the separation between frontend, agent backend, and MCP server.

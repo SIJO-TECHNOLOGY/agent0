@@ -95,6 +95,12 @@ Use this checklist when reviewing future AI-generated infrastructure or integrat
 - [ ] Do tests cover both mock and real dependency wiring?
 - [ ] Does failure mode behavior match operational expectations?
 
+## Decision Flow
+
+This review is anchored in the [Sijo AI Agent Architecture](../architecture/sijo-ai-agent-architecture.md), which assigns reasoning and orchestration to the Agent API while keeping BoondManager access behind deterministic MCP tools.
+
+The next operational decision is [ADR-003 - Graceful MCP Degradation And Health Strategy](./adr-003-graceful-mcp-degradation-and-health-strategy.md), which builds on explicit MCP wiring to define what happens when the remote MCP dependency is unavailable.
+
 ## Conclusion
 
 This review showed why human architectural judgment remains critical in AI-assisted engineering.

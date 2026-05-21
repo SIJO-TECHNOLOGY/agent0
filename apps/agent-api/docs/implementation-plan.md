@@ -89,8 +89,10 @@ The Agent API receives a search request, interprets the user intent, plans tool 
 - Results include a summary, confidence score, and warnings array.
 - Tests cover successful search, no results, MCP failure, invalid request, and replanning.
 
-## Related Architecture Decisions
+## Architecture Inputs
 
-- [ADR-002 - MCP Client Wiring Review](../../../docs/decisions/adr-002-mcp-client-wiring-review.md)
-- [ADR-003 - Graceful MCP Degradation And Health Strategy](../../../docs/decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md)
-- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../../../docs/decisions/adr-004-asyncio-cancelled-error-mcp-startup.md)
+This plan implements the Agentic Backend described in the [Sijo AI Agent Architecture](../../../docs/architecture/sijo-ai-agent-architecture.md).
+
+- [ADR-002 - MCP Client Wiring Review](../../../docs/decisions/adr-002-mcp-client-wiring-review.md) constrains MCP client selection and dependency injection.
+- [ADR-003 - Graceful MCP Degradation And Health Strategy](../../../docs/decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md) constrains health, readiness, and unavailable-MCP behavior.
+- [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../../../docs/decisions/adr-004-asyncio-cancelled-error-mcp-startup.md) constrains async startup failure handling.
