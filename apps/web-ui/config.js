@@ -1,5 +1,5 @@
 export const API_URL = "http://localhost:8000";
-export const DEV_MODE = true;
+export const DEV_MODE = false;
 
 export const APP_NAME = "SIJO Assistant";
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-SIJO Assistant Frontend is a static vanilla JavaScript application that talks only to a FastAPI backend.
+SIJO Assistant Frontend is a vanilla JavaScript application built with Vite and served as static files. It talks only to a FastAPI backend.
 
 ```mermaid
 flowchart LR
@@ -30,6 +30,8 @@ Defines the static shell:
 - Input area
 - Candidate drawer
 
+Vite uses this file as the application entry point during development and production builds.
+
 ### `style.css`
 
 Defines the complete visual system:
@@ -38,6 +40,7 @@ Defines the complete visual system:
 - Login and loading screens
 - Chat bubbles
 - Candidate cards
+- Candidate result summary and lightweight visual controls
 - Clarification forms
 - Candidate detail and technical summary cards
 - Candidate drawer
@@ -53,6 +56,14 @@ Centralizes:
 - Feature flags
 - UI messages
 - Candidate display settings
+
+### `package.json` and `vite.config.js`
+
+Provide Node.js development and build tooling.
+
+- `npm run dev` starts the local frontend server on `http://localhost:5500`.
+- `npm run build` generates static deployable files in `dist/`.
+- `npm run preview` previews the production build.
 
 ### `msalConfig.js`
 
@@ -92,6 +103,7 @@ Owns UI orchestration:
 - Conversation loading
 - Sending chat messages
 - Rendering assistant responses by `ui.type`
+- Rendering enriched candidate cards, AI evaluations, highlights, and recent experiences
 - Candidate drawer behavior
 - Clarification submission
 
@@ -126,6 +138,15 @@ flowchart TD
   F --> L["error"]
 ```
 
+For `candidate_cards`, the frontend can render optional search summary fields
+(`ui.title`, `ui.subtitle`, `ui.filters_summary`) before the cards. It can also
+apply lightweight local display controls such as sorting already received
+candidates by match score or hiding profiles that are not already marked as
+available.
+
+These controls do not replace backend filtering and do not construct
+BoondManager queries.
+
 ## State Ownership
 
 The backend owns:
@@ -143,4 +164,11 @@ The frontend owns:
 - Current conversation ID
 - Current open candidate drawer
 - Rendering only
+- Lightweight display-only sorting/filtering of already received candidate cards
 
+The frontend must not own:
+
+- Candidate search business rules
+- BoondManager query construction
+- MCP tool selection
+- Candidate creation or modification

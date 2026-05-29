@@ -73,7 +73,17 @@
             <span class="brand-fallback" hidden>SIJO</span>
           </div>
           <div class="empty-title">Bonjour,<br><span>comment puis-je vous aider ?</span></div>
-          <p class="empty-sub">Posez une question ou commencez à écrire.</p>
+          <p class="empty-sub">Décrivez votre besoin candidat complet, par exemple : Développeur Java senior, Paris, finance, dispo rapidement.</p>
+          <div class="search-guides" aria-label="Critères de recherche suggérés">
+            <span>Poste</span>
+            <span>Localisation</span>
+            <span>Expérience</span>
+            <span>Compétences</span>
+            <span>Secteur</span>
+            <span>Disponibilité</span>
+            <span>Contrat</span>
+            <span>TJM / salaire</span>
+          </div>
         </div>
         <div class="messages-inner" id="messages"></div>
       </div>
@@ -81,10 +91,20 @@
       <div class="input-zone">
         <div class="input-error" id="inputError" role="alert"></div>
         <div class="input-wrap">
-          <textarea id="messageInput" placeholder="Écrivez votre message..." rows="1"></textarea>
+          <textarea id="messageInput" placeholder="Décrivez le profil recherché : poste, localisation, compétences, secteur, disponibilité..." rows="1"></textarea>
           <button class="send" id="sendBtn" type="button" aria-label="Envoyer">
             <span class="send-arrow" aria-hidden="true"></span>
           </button>
+        </div>
+        <div class="criteria-row" aria-label="Critères utiles pour votre recherche">
+          <span>Poste</span>
+          <span>Localisation</span>
+          <span>Années d'expérience</span>
+          <span>Compétences</span>
+          <span>Secteur</span>
+          <span>Disponibilité</span>
+          <span>Contrat</span>
+          <span>TJM / salaire</span>
         </div>
         <div class="hint"><kbd>Entrée</kbd> pour envoyer · <kbd>Maj + Entrée</kbd> saut de ligne</div>
       </div>
@@ -131,6 +151,8 @@
           <dd id="drawerMatch">Score N/A</dd>
         </div>
       </dl>
+
+      <div id="drawerExtra"></div>
     </div>
 
     <div class="drawer-footer">

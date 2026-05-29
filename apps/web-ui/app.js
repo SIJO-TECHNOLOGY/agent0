@@ -58,6 +58,7 @@ const elements = {
   drawerLocation: document.getElementById("drawerLocation"),
   drawerAvailability: document.getElementById("drawerAvailability"),
   drawerMatch: document.getElementById("drawerMatch"),
+  drawerExtra: document.getElementById("drawerExtra"),
   drawerBoondBtn: document.getElementById("drawerBoondBtn"),
 };
 
@@ -404,7 +405,7 @@ function renderAssistantResponse(response) {
     && Array.isArray(response.candidates)
     && response.candidates.length > 0
   ) {
-    renderCandidateCards(response.candidates);
+    renderCandidateCards(response.candidates, response.ui);
   }
 }
 
@@ -440,7 +441,16 @@ function renderCandidateDetail(candidate) {
   summary.className = "candidate-summary";
   summary.textContent = candidate.summary || "Aucun résumé disponible.";
 
-  detail.append(header, meta, summary, renderSkillTags(candidate.skills));
+  detail.append(
+    header,
+    meta,
+    summary,
+    renderHighlightTags(candidate.highlights),
+    renderSkillTags(candidate.skills, candidate.highlights),
+    renderAiEvaluation(candidate),
+    renderExperiences(candidate.experiences),
+    renderCandidateInsights(candidate),
+  );
   elements.messages.appendChild(detail);
   setUiState("active");
   scrollToBottom();
@@ -582,13 +592,48 @@ async function submitClarification(form, sourceResponse) {
   }
 }
 
-function renderCandidateCards(candidates) {
+function renderCandidateCards(candidates, ui = {}) {
   const wrapper = document.createElement("div");
-  wrapper.className = "candidate-cards";
+  wrapper.className = "candidate-results";
 
-  candidates.forEach((candidate) => {
-    wrapper.appendChild(renderCandidateCard(candidate));
+  const toolbar = renderCandidateResultsToolbar(ui, candidates);
+  const list = document.createElement("div");
+  list.className = "candidate-cards";
+
+  const controls = toolbar.querySelectorAll("input, select");
+  const renderList = () => {
+    list.innerHTML = "";
+    const availableOnly = toolbar.querySelector("[data-available-only]")?.checked;
+    const sortMode = toolbar.querySelector("[data-sort]")?.value || "default";
+
+    let visibleCandidates = [...candidates];
+    if (availableOnly) {
+      visibleCandidates = visibleCandidates.filter(isAvailableSoon);
+    }
+
+    if (sortMode === "score") {
+      visibleCandidates.sort((a, b) => Number(b.match_score || 0) - Number(a.match_score || 0));
+    }
+
+    if (visibleCandidates.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "candidate-empty-note";
+      empty.textContent = "Aucun profil ne correspond à ce filtre d'affichage.";
+      list.appendChild(empty);
+      return;
+    }
+
+    visibleCandidates.forEach((candidate) => {
+      list.appendChild(renderCandidateCard(candidate));
+    });
+  };
+
+  controls.forEach((control) => {
+    control.addEventListener("change", renderList);
   });
+
+  renderList();
+  wrapper.append(toolbar, list);
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
@@ -619,6 +664,7 @@ function renderCandidateCard(candidate) {
   meta.append(
     createMetaItem("Expérience", formatExperience(candidate.experience_years)),
     createMetaItem("Localisation", candidate.location || CANDIDATE_CONFIG.fallback_location),
+    createMetaItem("Contrat", formatList(candidate.contract_preferences)),
     createMetaItem("Disponibilité", candidate.availability || CANDIDATE_CONFIG.fallback_availability),
   );
 
@@ -626,7 +672,7 @@ function renderCandidateCard(candidate) {
   summary.className = "candidate-summary";
   summary.textContent = candidate.summary || "Aucun résumé disponible.";
 
-  const skills = renderSkillTags(candidate.skills);
+  const skills = renderSkillTags(candidate.skills, candidate.highlights);
 
   const actions = document.createElement("div");
   actions.className = "candidate-actions";
@@ -652,7 +698,17 @@ function renderCandidateCard(candidate) {
     actions.appendChild(boondBtn);
   }
 
-  card.append(header, meta, summary, skills, actions);
+  card.append(
+    header,
+    meta,
+    renderHighlightTags(candidate.highlights),
+    summary,
+    renderAiEvaluation(candidate),
+    skills,
+    renderExperiences(candidate.experiences),
+    renderCandidateInsights(candidate),
+    actions,
+  );
 
   return card;
 }
@@ -670,7 +726,15 @@ function openCandidateDrawer(candidate) {
   elements.drawerAvailability.textContent = candidate.availability || CANDIDATE_CONFIG.fallback_availability;
   elements.drawerMatch.textContent = formatMatchScore(candidate.match_score);
   elements.drawerSkills.innerHTML = "";
-  elements.drawerSkills.append(...createSkillElements(candidate.skills));
+  elements.drawerSkills.append(...createSkillElements(candidate.skills, candidate.highlights));
+  elements.drawerExtra.innerHTML = "";
+  elements.drawerExtra.append(
+    renderDrawerDetailList(candidate),
+    renderDrawerSection("Évaluation IA", renderAiEvaluation(candidate)),
+    renderDrawerSection("Dernières expériences", renderExperiences(candidate.experiences, 5)),
+    renderDrawerSection("Analyse technique", renderTechnicalNotes(candidate)),
+    renderDrawerSection("Mots-clés détectés", renderHighlightTags(candidate.highlights)),
+  );
   elements.drawerBoondBtn.hidden = !FEATURES.boond_redirect || !candidate.boond_url;
   elements.drawerBoondBtn.disabled = !FEATURES.boond_redirect || !candidate.boond_url;
 
@@ -836,6 +900,213 @@ function createMetaItem(label, value) {
   return item;
 }
 
+function renderCandidateResultsToolbar(ui, candidates) {
+  const toolbar = document.createElement("section");
+  toolbar.className = "candidate-results-toolbar";
+
+  const copy = document.createElement("div");
+  copy.className = "candidate-results-copy";
+
+  const title = document.createElement("h3");
+  title.textContent = ui.title || `${candidates.length} profil${candidates.length > 1 ? "s" : ""} candidat${candidates.length > 1 ? "s" : ""} trouvé${candidates.length > 1 ? "s" : ""}`;
+  copy.appendChild(title);
+
+  if (ui.subtitle) {
+    const subtitle = document.createElement("p");
+    subtitle.textContent = ui.subtitle;
+    copy.appendChild(subtitle);
+  }
+
+  const filters = Array.isArray(ui.filters_summary) ? ui.filters_summary : [];
+  if (filters.length) {
+    const filterList = document.createElement("div");
+    filterList.className = "result-filter-tags";
+    filters.forEach((filter) => {
+      const tag = document.createElement("span");
+      tag.textContent = filter;
+      filterList.appendChild(tag);
+    });
+    copy.appendChild(filterList);
+  }
+
+  const controls = document.createElement("div");
+  controls.className = "candidate-result-controls";
+
+  if (candidates.some((candidate) => candidate.availability)) {
+    const label = document.createElement("label");
+    label.className = "availability-toggle";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.availableOnly = "true";
+
+    const text = document.createElement("span");
+    text.textContent = "Profils disponibles";
+
+    label.append(input, text);
+    controls.appendChild(label);
+  }
+
+  if (candidates.some((candidate) => candidate.match_score !== null && candidate.match_score !== undefined)) {
+    const sort = document.createElement("select");
+    sort.dataset.sort = "true";
+    sort.setAttribute("aria-label", "Trier les candidats");
+
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "default";
+    defaultOption.textContent = "Ordre reçu";
+
+    const scoreOption = document.createElement("option");
+    scoreOption.value = "score";
+    scoreOption.textContent = "Score décroissant";
+
+    sort.append(defaultOption, scoreOption);
+    controls.appendChild(sort);
+  }
+
+  toolbar.append(copy, controls);
+  return toolbar;
+}
+
+function renderHighlightTags(highlights) {
+  const normalized = Array.isArray(highlights) ? highlights.filter(Boolean) : [];
+  if (!normalized.length) return emptyFragment();
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "highlight-tags";
+
+  normalized.forEach((highlight) => {
+    const tag = document.createElement("span");
+    tag.textContent = highlight;
+    wrapper.appendChild(tag);
+  });
+
+  return wrapper;
+}
+
+function renderAiEvaluation(candidate) {
+  const evaluation = candidate?.ai_evaluation || candidate?.match_explanation;
+  if (!evaluation || typeof evaluation !== "object") return emptyFragment();
+
+  const wrapper = document.createElement("section");
+  wrapper.className = "ai-evaluation";
+
+  const heading = document.createElement("div");
+  heading.className = "ai-evaluation-heading";
+
+  const label = document.createElement("span");
+  label.textContent = evaluation.label || "Évaluation IA";
+  heading.appendChild(label);
+
+  if (evaluation.score_label) {
+    const score = document.createElement("strong");
+    score.textContent = evaluation.score_label;
+    heading.appendChild(score);
+  }
+
+  wrapper.appendChild(heading);
+
+  const reasons = Array.isArray(evaluation.reasons) ? evaluation.reasons.filter(Boolean).slice(0, 4) : [];
+  if (reasons.length) {
+    const list = document.createElement("ul");
+    reasons.forEach((reason) => {
+      const item = document.createElement("li");
+      item.textContent = reason;
+      list.appendChild(item);
+    });
+    wrapper.appendChild(list);
+  }
+
+  return wrapper;
+}
+
+function renderExperiences(experiences, limit = 3) {
+  const normalized = Array.isArray(experiences) ? experiences.filter(Boolean).slice(0, limit) : [];
+  if (!normalized.length) return emptyFragment();
+
+  const section = document.createElement("section");
+  section.className = "candidate-experiences";
+
+  const title = document.createElement("h4");
+  title.textContent = "Dernières expériences";
+  section.appendChild(title);
+
+  const list = document.createElement("ul");
+  normalized.forEach((experience) => {
+    const item = document.createElement("li");
+
+    const main = document.createElement("strong");
+    main.textContent = [experience.title, experience.company].filter(Boolean).join(" · ") || "Expérience";
+    item.appendChild(main);
+
+    if (experience.period) {
+      const period = document.createElement("span");
+      period.textContent = experience.period;
+      item.appendChild(period);
+    }
+
+    list.appendChild(item);
+  });
+
+  section.appendChild(list);
+  return section;
+}
+
+function renderCandidateInsights(candidate) {
+  const strengths = candidate?.strengths || candidate?.strong_points;
+  const warnings = candidate?.watch_points || candidate?.weaknesses || candidate?.vigilance_points;
+  const hasStrengths = Array.isArray(strengths) && strengths.length > 0;
+  const hasWarnings = Array.isArray(warnings) && warnings.length > 0;
+  if (!hasStrengths && !hasWarnings) return emptyFragment();
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "candidate-insights";
+
+  if (hasStrengths) {
+    wrapper.appendChild(renderSummaryList("Points forts détectés", strengths.slice(0, 4)));
+  }
+
+  if (hasWarnings) {
+    wrapper.appendChild(renderSummaryList("Points de vigilance", warnings.slice(0, 4)));
+  }
+
+  return wrapper;
+}
+
+function renderDrawerDetailList(candidate) {
+  const details = document.createElement("dl");
+  details.className = "drawer-details";
+  details.append(
+    createMetaItem("Contrat", formatList(candidate.contract_preferences)),
+    createMetaItem("Salaire", candidate.salary_expectation || "Non renseigné"),
+    createMetaItem("TJM", candidate.tjm || "Non renseigné"),
+    createMetaItem("Mobilité", candidate.mobility || "Non renseignée"),
+  );
+  return details;
+}
+
+function renderTechnicalNotes(candidate) {
+  if (candidate?.technical_summary && typeof candidate.technical_summary === "string") {
+    const paragraph = document.createElement("p");
+    paragraph.textContent = candidate.technical_summary;
+    return paragraph;
+  }
+
+  return renderCandidateInsights(candidate);
+}
+
+function renderDrawerSection(title, content) {
+  if (!content || !content.childNodes?.length) return emptyFragment();
+
+  const section = document.createElement("section");
+  section.className = "drawer-section";
+
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  section.append(heading, content);
+  return section;
+}
+
 function renderSummaryList(title, items) {
   const section = document.createElement("section");
   section.className = "technical-summary-section";
@@ -875,24 +1146,37 @@ function formatToolLevel(level) {
   return `${value}/5`;
 }
 
-function renderSkillTags(skills) {
+function renderSkillTags(skills, highlights = []) {
   const container = document.createElement("div");
   container.className = "candidate-skills";
-  container.append(...createSkillElements(skills));
+  container.append(...createSkillElements(skills, highlights));
   return container;
 }
 
-function createSkillElements(skills) {
+function createSkillElements(skills, highlights = []) {
   const normalizedSkills = Array.isArray(skills) && skills.length
     ? skills.slice(0, CANDIDATE_CONFIG.max_visible_skills)
     : ["Compétences non renseignées"];
+  const highlightSet = new Set((Array.isArray(highlights) ? highlights : []).map((item) => String(item).toLowerCase()));
 
   return normalizedSkills.map((skill) => {
     const tag = document.createElement("span");
     tag.className = "skill-tag";
+    tag.classList.toggle("highlight", highlightSet.has(String(skill).toLowerCase()));
     tag.textContent = skill;
     return tag;
   });
+}
+
+function isAvailableSoon(candidate) {
+  const availability = String(candidate.availability || "").toLowerCase();
+  if (!availability) return false;
+  if (availability.includes("préavis") || availability.includes("preavis")) return false;
+  return availability.includes("disponible") || availability.includes("immédiat") || availability.includes("immediat");
+}
+
+function emptyFragment() {
+  return document.createDocumentFragment();
 }
 
 function formatExperience(years) {

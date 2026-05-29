@@ -1,8 +1,8 @@
-# SIJO Assistant API Contract (Frontend → Backend)
+# SIJO Assistant API Contract (Frontend to Backend)
 
-This document describes what the frontend expects from the backend. Any structural, naming, or HTTP-status mismatch can cause visible issues in the interface.
-
----
+This document describes what the frontend expects from the backend. The
+frontend remains candidate-search focused and renders only normalized REST
+responses.
 
 ## Base Configuration
 
@@ -11,31 +11,21 @@ This document describes what the frontend expects from the backend. Any structur
 | Base URL | `http://localhost:8000` |
 | Format | JSON (`Content-Type: application/json`) |
 | Auth | Microsoft MSAL bearer token in the `Authorization` header |
-| Chat timeout | 60 seconds. After that, a timeout error is shown to the user. |
+| Chat timeout | 15 seconds for `/api/chat` |
 
-In production, the base URL and MSAL settings (`clientId`, `tenantId`, `redirectUri`) must be configured in `config.js` and `msalConfig.js`.
-
----
-
-## Expected Endpoints
+## Endpoints
 
 ### `GET /api/health`
 
-Checks whether the backend is reachable when the app starts.
-
-Expected response (`200`):
+Expected response:
 
 ```json
 { "status": "ok" }
 ```
 
----
-
 ### `GET /api/conversations`
 
-Loads the authenticated user’s conversation list for the sidebar.
-
-Expected response (`200`):
+Returns the authenticated user's conversation list.
 
 ```json
 [
@@ -48,103 +38,62 @@ Expected response (`200`):
 ]
 ```
 
-Return `[]` when there are no conversations. Do not return `null`.
-
----
+Return `[]` when there are no conversations.
 
 ### `POST /api/conversations`
 
 Creates a new conversation.
 
-Request body:
-
 ```json
 { "title": "Nouvelle conversation" }
 ```
 
-Expected response (`200` or `201`):
-
-```json
-{
-  "id": "string",
-  "title": "string",
-  "created_at": "ISO 8601",
-  "updated_at": "ISO 8601"
-}
-```
-
----
-
 ### `GET /api/conversations/:id`
 
-Loads an existing conversation and its message history.
-
-Expected response (`200`):
+Loads an existing conversation.
 
 ```json
 {
   "id": "string",
   "title": "string",
   "messages": [
-    {
-      "role": "user",
-      "content": "string"
-    },
-    {
-      "role": "assistant",
-      "content": "string"
-    }
+    { "role": "user", "content": "string" },
+    { "role": "assistant", "content": "string" }
   ]
 }
 ```
 
-`messages` may be `[]`, but the field must be present.
-
----
-
 ### `DELETE /api/conversations/:id`
-
-Deletes a conversation.
 
 Expected response: `204 No Content`.
 
-The response body must be empty. The frontend treats `204` as a successful response without parsing JSON.
-
----
-
 ### `POST /api/chat`
 
-Main endpoint. It covers two use cases:
+Main candidate-search endpoint.
 
-- sending a regular user message
-- submitting a clarification form
-
-#### Case 1 — Regular User Message
-
-Request body:
+Request:
 
 ```json
 {
-  "message": "string",
-  "conversation_id": "string | null"
+  "message": "Find a senior Java developer in Paris",
+  "conversation_id": "conv_123"
 }
 ```
 
-`conversation_id` is `null` when this is the first message of a conversation that has not been created yet.
+The frontend does not send full conversation history. The backend owns
+conversation state.
 
-#### Case 2 — Clarification Form Submission
-
-Request body:
+Clarification submission:
 
 ```json
 {
   "message": null,
-  "conversation_id": "string | null",
+  "conversation_id": "conv_123",
   "interaction": {
     "type": "clarification",
     "action": "submit",
     "values": {
-      "field_name": "value entered by the user"
+      "location": "Paris"
     },
     "source_ui": {
       "type": "clarification"
@@ -153,55 +102,57 @@ Request body:
 }
 ```
 
-`source_ui` is the `ui` object returned by the response that triggered the clarification form.
+## Response Envelope
 
-#### Expected Response (`200`) — Common Structure
-
-```json
-{
-  "conversation_id": "string",
-  "message": "string",
-  "ui": {
-    "type": "text"
-  }
-}
-```
-
-The `ui` field should be present. It controls what the frontend renders after the text message.
-
-| `ui.type` | Frontend behavior | Required extra fields |
-|---|---|---|
-| `text` | Displays only the text message | none |
-| `candidate_cards` | Displays candidate cards below the message | `ui.candidates` or root `candidates` as a non-empty array |
-| `clarification` | Displays an interactive clarification form | `ui.title` optional, `ui.questions` required |
-| `candidate_detail` | Displays a detailed candidate profile | `ui.candidate` |
-| `technical_summary` | Displays a structured technical analysis | `ui.title`, `ui.summary`, `ui.strengths`, `ui.weaknesses`, `ui.languages`, `ui.tools` |
-| `error` | Displays the message in an error bubble | none |
-| `loading` | Transitional UI state. The backend should normally not return this. | none |
-
-If `ui` is missing or `null`, the frontend infers:
-
-- `candidate_cards` when root `candidates` is a non-empty array
-- `text` otherwise
-
-Explicit `ui` is strongly recommended.
-
-Strict validation rule: if `message` is empty, candidates are empty, `ui.candidate` is absent, and `ui.type` is not `technical_summary` or `loading`, the frontend treats the response as malformed.
-
----
-
-## Candidate Cards
-
-Candidate cards can be provided in two places. The frontend prioritizes `ui.candidates`.
-
-Preferred format:
+Preferred response:
 
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "I found 3 candidates.",
+  "message": "I found candidates matching your search.",
+  "ui": {
+    "type": "candidate_cards"
+  }
+}
+```
+
+Legacy response remains supported:
+
+```json
+{
+  "conversation_id": "conv_123",
+  "answer": "I found candidates matching your search.",
+  "candidates": []
+}
+```
+
+## Supported UI Types
+
+| `ui.type` | Frontend behavior |
+|---|---|
+| `text` | Displays only the assistant message. |
+| `candidate_cards` | Displays sourcing-oriented candidate cards. |
+| `clarification` | Displays an inline clarification form. |
+| `candidate_detail` | Displays a candidate-specific detail card. |
+| `technical_summary` | Displays a candidate technical analysis card. |
+| `error` | Displays an error bubble. |
+| `loading` | Transitional state. The backend should normally not return this. |
+
+Unsupported UI types are treated as malformed responses.
+
+## Candidate Cards
+
+Preferred response:
+
+```json
+{
+  "conversation_id": "conv_123",
+  "message": "I found 5 candidates matching your search.",
   "ui": {
     "type": "candidate_cards",
+    "title": "278 relevant profiles found",
+    "subtitle": "7 profiles available immediately",
+    "filters_summary": ["Java", "Senior", "Paris", "Finance"],
     "candidates": [
       {
         "id": "candidate_1",
@@ -213,37 +164,107 @@ Preferred format:
         "skills": ["Java", "Spring", "Kafka"],
         "match_score": 0.86,
         "summary": "Confirmed backend profile.",
-        "boond_url": "https://ui.boondmanager.com/"
+        "boond_url": "https://ui.boondmanager.com/",
+        "contract_preferences": ["CDI", "Freelance"],
+        "salary_expectation": "55k",
+        "tjm": "600",
+        "mobility": "Paris and hybrid",
+        "ai_evaluation": {
+          "label": "AI evaluation",
+          "score_label": "Ideal match - 92%",
+          "reasons": [
+            "Java/Spring experience matches the need",
+            "Recent banking sector experience",
+            "Available quickly"
+          ]
+        },
+        "experiences": [
+          {
+            "title": "Senior Java Software Engineer",
+            "company": "EY",
+            "period": "May 2023 - present"
+          }
+        ],
+        "highlights": ["Java", "Spring Boot", "Euronext"],
+        "strengths": ["Strong Java/Spring alignment"],
+        "watch_points": ["Availability should be confirmed"],
+        "technical_summary": "Solid Java/Spring backend profile."
       }
     ]
   }
 }
 ```
 
-Legacy fallback:
+`ui.title`, `ui.subtitle`, and `ui.filters_summary` are optional and displayed
+above the cards when present.
+
+## Candidate Object
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Candidate identifier. |
+| `full_name` | string | Displayed as card and drawer title. |
+| `title` | string | Candidate title or target role. |
+| `experience_years` | number \| null | Displayed as years when known. |
+| `location` | string \| null | Candidate location or remote information. |
+| `availability` | string \| null | Free text availability. |
+| `skills` | string[] | Displayed as skill tags. |
+| `match_score` | number \| null | Float from `0` to `1`, displayed as a percentage. |
+| `summary` | string \| null | Candidate summary. |
+| `boond_url` | string \| null | Opens BoondManager in a new tab when present. |
+| `contract_preferences` | string[] | Optional contract preferences. |
+| `salary_expectation` | string \| null | Optional salary expectation. |
+| `tjm` | string \| null | Optional daily rate. |
+| `mobility` | string \| null | Optional mobility or remote preference. |
+| `ai_evaluation` | object \| null | Optional AI match explanation block. |
+| `match_explanation` | object \| null | Alternative name for `ai_evaluation`. |
+| `experiences` | object[] | Optional recent experiences. Cards display up to 3. |
+| `highlights` | string[] | Optional keywords displayed as highlight tags. |
+| `strengths` | string[] | Optional detected strengths. |
+| `strong_points` | string[] | Alternative name for strengths. |
+| `watch_points` | string[] | Optional watch points. |
+| `weaknesses` | string[] | Alternative name for watch points. |
+| `vigilance_points` | string[] | Alternative name for watch points. |
+| `technical_summary` | string \| null | Optional technical note shown in the drawer. |
+
+All enriched fields are optional. The frontend must remain stable when they are
+absent.
+
+## AI Evaluation Object
 
 ```json
 {
-  "conversation_id": "conv_123",
-  "answer": "I found 3 candidates.",
-  "candidates": [
-    {
-      "id": "candidate_1",
-      "full_name": "Sarah Martin"
-    }
+  "label": "AI evaluation",
+  "score_label": "Ideal match - 92%",
+  "reasons": [
+    "Java/Spring experience matches the need",
+    "Recent banking sector experience"
   ]
 }
 ```
 
-Both are valid. When `ui.candidates` is present, root `candidates` is ignored.
+`reasons` should be short and grounded in backend data.
 
----
+## Experience Object
+
+```json
+{
+  "title": "Senior Java Software Engineer",
+  "company": "EY",
+  "period": "May 2023 - present"
+}
+```
+
+## Lightweight Frontend Controls
+
+For `candidate_cards`, the frontend may display:
+
+- sort by `match_score`
+- show only candidates whose `availability` already indicates quick availability
+
+These controls are visual only. Backend filtering remains authoritative.
 
 ## Clarification
-
-Used when the backend needs more information before searching.
-
-Response:
 
 ```json
 {
@@ -257,30 +278,15 @@ Response:
         "field": "location",
         "label": "Desired location",
         "required": false
-      },
-      {
-        "field": "experience",
-        "label": "Experience level",
-        "required": false
       }
     ]
   }
 }
 ```
 
-Question fields:
-
-| Field | Type | Notes |
-|---|---|---|
-| `field` | string | Used as the key in submitted `values` |
-| `label` | string | Label displayed to the user |
-| `required` | boolean | Marks the input as required when `true` |
-
----
-
 ## Candidate Detail
 
-Used when the backend returns a detailed candidate profile.
+`candidate_detail` uses the same candidate object as candidate cards:
 
 ```json
 {
@@ -292,28 +298,15 @@ Used when the backend returns a detailed candidate profile.
       "id": "candidate_1",
       "full_name": "Sarah Martin",
       "title": "Backend Java Engineer",
-      "experience_years": 7,
-      "location": "Paris",
-      "availability": "Available immediately",
       "skills": ["Java", "Spring Boot"],
-      "match_score": 0.86,
-      "summary": "Confirmed backend profile.",
-      "boond_url": "https://ui.boondmanager.com/",
-      "contract_preferences": ["CDI", "Freelance"],
-      "salary_expectation": "55k€",
-      "tjm": "600€"
+      "experiences": [],
+      "ai_evaluation": null
     }
   }
 }
 ```
 
-`contract_preferences`, `salary_expectation`, and `tjm` are optional fields used only by the candidate detail view.
-
----
-
 ## Technical Summary
-
-Used when the backend returns a technical candidate analysis.
 
 ```json
 {
@@ -321,7 +314,7 @@ Used when the backend returns a technical candidate analysis.
   "message": "Here is the technical analysis.",
   "ui": {
     "type": "technical_summary",
-    "title": "Technical analysis — Sarah Martin",
+    "title": "Technical analysis - Sarah Martin",
     "summary": "Strong Java/Spring profile with microservices experience.",
     "strengths": ["Advanced Java", "Microservices architecture"],
     "weaknesses": ["Limited frontend experience"],
@@ -334,118 +327,22 @@ Used when the backend returns a technical candidate analysis.
 }
 ```
 
-Fields:
+## Security And Scope
 
-| Field | Type | Notes |
-|---|---|---|
-| `title` | string | Analysis heading |
-| `summary` | string | Free narrative summary |
-| `strengths` | string[] | Strengths |
-| `weaknesses` | string[] | Watch points |
-| `languages` | string[] | Language skills |
-| `tools` | `{ name: string, level: number }[]` | Skill/tool levels, usually from 1 to 5 |
-
-`technical_summary` responses are valid even when `message` is empty.
-
----
-
-## Candidate Detail Endpoint
-
-### `GET /api/candidates/:id`
-
-Loads a candidate detail.
-
-Expected response (`200`): same shape as the standard candidate object.
-
-This endpoint exists in the frontend API layer but is not currently used by the UI. Candidate data is currently carried by `/api/chat` responses.
-
----
-
-## Standard Candidate Object
-
-Used in `ui.candidates`, root `candidates`, and `/api/candidates/:id`.
-
-```json
-{
-  "id": "string",
-  "full_name": "string",
-  "title": "string",
-  "experience_years": 5,
-  "location": "string",
-  "availability": "string",
-  "skills": ["Java", "Spring Boot"],
-  "match_score": 0.86,
-  "summary": "string",
-  "boond_url": "https://ui.boondmanager.com/"
-}
-```
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | string | Unique identifier |
-| `full_name` | string | Displayed as card and drawer title |
-| `title` | string | Candidate role/title |
-| `experience_years` | number | Displayed as years |
-| `location` | string | City, region, or remote information |
-| `availability` | string | Free text |
-| `skills` | string[] | The UI displays at most 5 skills |
-| `match_score` | number | Float from 0 to 1, displayed as a percentage |
-| `summary` | string | Short profile summary |
-| `boond_url` | string \| null | When missing, the BoondManager button is hidden |
-
----
-
-## Expected HTTP Behavior
-
-| Situation | HTTP status |
-|---|---|
-| Successful response with JSON body | `200` |
-| Successful creation | `200` or `201` |
-| Successful deletion without body | `204` |
-| Generic error | `4xx` or `5xx` |
-
-The frontend does not currently differentiate backend error codes. Any non-2xx response triggers the generic backend error message. `204` is the only no-body success case handled explicitly.
-
----
-
-## Authentication
-
-The frontend sends a Microsoft bearer token with backend requests:
-
-```http
-Authorization: Bearer <access_token>
-```
-
-The backend must validate the token against Microsoft. In `DEV_MODE = true`, the frontend uses a mock token (`dev-token`), which the backend may ignore for local development.
-
----
-
-## Optional Debug Field
-
-The frontend logs this field in the console when `DEV_MODE = true`.
-
-```json
-{
-  "debug": {
-    "intent": "candidate_search",
-    "filters": { "skills": ["Java"] },
-    "response_time_ms": 180
-  }
-}
-```
-
-Debug fields are never displayed to the user.
-
----
-
-## Important Notes
-
-- Dates must use ISO 8601 format (`created_at`, `updated_at`).
-- `/api/chat` responses should always return `conversation_id`.
-- The frontend does not send full history. The backend owns conversation state.
-- Raw JSON must never be displayed to the user.
-- Malformed JSON triggers a `malformed_response` frontend error.
-- `message` is preferred over `answer`; `answer` exists only for legacy compatibility.
-- The frontend does not know or call MCP tools.
+- The frontend does not call MCP tools.
 - The frontend does not call OpenAI directly.
 - The frontend does not call BoondManager APIs directly.
+- The frontend only opens `boond_url` when the backend provides it.
+- The frontend must not implement candidate creation, candidate modification,
+  generic BoondManager actions, confirmations, or generic table/list rendering.
+
+## Error Handling
+
+The frontend maps API failures to user-friendly messages:
+
+- network error
+- timeout
+- malformed response
+- generic backend error
+
+Raw JSON must never be displayed to the user.

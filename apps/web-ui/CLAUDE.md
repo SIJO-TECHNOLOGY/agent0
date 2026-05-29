@@ -14,6 +14,10 @@ Allowed frontend capabilities:
 - Chat interface for candidate search.
 - Conversation history loaded from the backend.
 - Candidate cards.
+- Enriched candidate result summaries.
+- AI match evaluation display.
+- Recent experience display.
+- Lightweight display-only sorting/filtering of already received candidates.
 - Candidate detail rendering.
 - Candidate technical summary rendering.
 - Clarification forms.
@@ -34,6 +38,8 @@ Out of scope:
 - Vanilla JavaScript modules
 - MSAL Browser via CDN
 - REST API calls to a FastAPI backend
+- Node.js for local development scripts
+- Vite for development server and production build
 
 No React, Vue, Angular, or frontend framework should be introduced.
 
@@ -73,6 +79,23 @@ When disabled:
 - Microsoft SSO is required before accessing the chat.
 - Backend API calls must use the Microsoft access token.
 
+## Local Development And Build
+
+Use Node.js commands from the `frontend/` directory:
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run preview
+```
+
+`npm run dev` serves the frontend on `http://localhost:5500`.
+
+`npm run build` generates static deployable files in `dist/`.
+
+`dist/` and `node_modules/` are generated artifacts and should not be edited manually.
+
 ## Rendering Model
 
 The frontend chooses the rendering based only on `ui.type` returned by the backend.
@@ -89,9 +112,31 @@ Supported UI types:
 
 Do not add generic rendering primitives unless the candidate-search POC explicitly needs them.
 
+For `candidate_cards`, the frontend may render optional fields:
+
+- `ui.title`
+- `ui.subtitle`
+- `ui.filters_summary`
+- `candidate.contract_preferences`
+- `candidate.salary_expectation`
+- `candidate.tjm`
+- `candidate.mobility`
+- `candidate.ai_evaluation` or `candidate.match_explanation`
+- `candidate.experiences`
+- `candidate.highlights`
+- `candidate.strengths` or `candidate.strong_points`
+- `candidate.watch_points`, `candidate.weaknesses`, or `candidate.vigilance_points`
+- `candidate.technical_summary`
+
+All these fields are optional. The frontend must remain robust when they are
+missing.
+
+Lightweight sorting/filtering is allowed only for already received candidate
+cards. The frontend must not construct BoondManager queries or apply backend
+business rules.
+
 ## Backend Relationship
 
 The backend may use tools such as candidate dictionaries, candidate search, candidate details, or technical documents. The frontend must not know or call those tools directly.
 
 The frontend only consumes normalized REST responses from the backend.
-

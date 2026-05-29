@@ -16,6 +16,17 @@ The user can ask for candidates using natural language, for example:
 
 The backend interprets the request and returns a response with `ui.type = "candidate_cards"` when structured candidate results are available.
 
+The first screen and input help the user formulate a complete candidate need:
+
+- role
+- location
+- experience level
+- skills
+- sector
+- availability
+- contract
+- daily rate or salary
+
 ### Candidate Cards
 
 Candidate cards display:
@@ -24,13 +35,29 @@ Candidate cards display:
 - Title
 - Experience
 - Location
+- Contract preference
 - Availability
 - Skills
 - Match score
 - Summary
+- Recent experiences when provided
+- Highlight keywords when provided
+- AI evaluation when provided
+- Strengths and watch points when provided
 - Optional BoondManager URL button
 
 The frontend displays cards only when the backend response explicitly asks for `candidate_cards`.
+
+Candidate result groups may also display:
+
+- result title
+- result subtitle
+- applied filter badges
+- lightweight local sorting by match score
+- lightweight local "available profiles" display toggle
+
+These controls only affect already received candidates. They do not build
+BoondManager queries.
 
 ### Candidate Detail
 
@@ -46,7 +73,11 @@ Candidate detail may include:
 - Contract preferences
 - Salary expectation
 - TJM
+- Mobility
 - Skills
+- Experiences
+- AI evaluation
+- Technical summary
 - Summary
 
 ### Technical Summary
@@ -95,4 +126,3 @@ The frontend must not implement:
 - Generic CRUD workflows
 - Generic table/list/action rendering
 - Backend business logic
-

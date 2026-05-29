@@ -101,6 +101,9 @@ Example:
   "message": "I found 5 candidates matching your search.",
   "ui": {
     "type": "candidate_cards",
+    "title": "278 relevant profiles found",
+    "subtitle": "7 profiles available immediately",
+    "filters_summary": ["Java", "Senior", "Paris", "Finance"],
     "candidates": [
       {
         "id": "candidate_1",
@@ -112,6 +115,30 @@ Example:
         "skills": ["Java", "Spring", "Kafka"],
         "match_score": 0.86,
         "summary": "Confirmed backend profile.",
+        "contract_preferences": ["CDI", "Freelance"],
+        "salary_expectation": "55k",
+        "tjm": "600",
+        "mobility": "Paris and hybrid",
+        "ai_evaluation": {
+          "label": "AI evaluation",
+          "score_label": "Ideal match - 92%",
+          "reasons": [
+            "Java/Spring experience matches the need",
+            "Recent banking sector experience",
+            "Available quickly"
+          ]
+        },
+        "experiences": [
+          {
+            "title": "Senior Java Software Engineer",
+            "company": "EY",
+            "period": "May 2023 - present"
+          }
+        ],
+        "highlights": ["Java", "Spring Boot", "Euronext"],
+        "strengths": ["Strong Java/Spring alignment"],
+        "watch_points": ["Availability should be confirmed"],
+        "technical_summary": "Solid Java/Spring backend profile.",
         "boond_url": "https://ui.boondmanager.com/"
       }
     ]
@@ -127,6 +154,36 @@ Legacy candidate location also works:
   "candidates": []
 }
 ```
+
+`ui.title`, `ui.subtitle`, and `ui.filters_summary` are optional. When present,
+the frontend displays a search-results summary above the candidate cards.
+
+Candidate cards support optional sourcing-oriented fields:
+
+- `contract_preferences`
+- `salary_expectation`
+- `tjm`
+- `mobility`
+- `ai_evaluation` or `match_explanation`
+- `experiences`
+- `highlights`
+- `strengths` or `strong_points`
+- `watch_points`, `weaknesses`, or `vigilance_points`
+- `technical_summary`
+
+The frontend is defensive: missing optional fields are simply hidden or replaced
+with a non-business fallback label.
+
+## Lightweight Frontend Controls
+
+For `candidate_cards` responses, the frontend may display lightweight visual
+controls:
+
+- sort by `match_score` when scores are present
+- show only available profiles when `availability` is present
+
+These controls do not build BoondManager queries and do not replace backend
+filtering. They only rearrange or hide already received candidates in the UI.
 
 ## Clarification
 
@@ -250,4 +307,3 @@ The frontend maps API failures to user-friendly messages:
 - Generic backend error
 
 Raw JSON must not be displayed to the user.
-

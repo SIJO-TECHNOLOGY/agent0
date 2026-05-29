@@ -15,13 +15,30 @@ frontend/
 │   └── skills.md
 ├── index.html
 ├── style.css
+├── app.js
+├── api.js
+├── auth.js
 ├── config.js
 ├── msalConfig.js
-├── auth.js
-├── api.js
-├── app.js
+├── package.json
+├── package-lock.json
+├── vite.config.js
+├── README.md
+├── .gitignore
 └── CLAUDE.md
 ```
+
+Generated folders:
+
+```txt
+frontend/
+├── node_modules/
+└── dist/
+```
+
+`node_modules/` is created by `npm install`.
+
+`dist/` is created by `npm run build` and contains the deployable static build.
 
 ## File Responsibilities
 
@@ -42,6 +59,10 @@ It contains:
 - Sidebar
 - Chat bubbles
 - Candidate cards
+- Candidate result summary
+- AI evaluation blocks
+- Highlight tags
+- Recent experience blocks
 - Candidate drawer
 - Clarification form
 - Candidate detail
@@ -99,14 +120,43 @@ Responsibilities:
 - Wire DOM events.
 - Manage startup flow.
 - Render messages and candidate UI.
+- Render enriched candidate card fields when provided.
+- Apply display-only candidate sorting/filtering to already received results.
 - Submit chat and clarification payloads.
 - Open and close candidate drawer.
+
+### `package.json`
+
+Node.js project manifest.
+
+Scripts:
+
+- `npm run dev`: starts the Vite development server on `http://localhost:5500`
+- `npm run build`: generates the production build in `dist/`
+- `npm run preview`: previews the production build locally
+
+### `vite.config.js`
+
+Vite configuration for development and production builds.
+
+The app remains vanilla HTML/CSS/JavaScript. Vite is used only as local tooling and build tooling, not as a frontend framework.
+
+### `README.md`
+
+Human-facing quickstart and project overview.
+
+### `CLAUDE.md`
+
+Coding-agent context, constraints, project scope, and restrictions.
 
 ## Naming Guidance
 
 Use explicit names:
 
 - `renderCandidateCards`
+- `renderCandidateResultsToolbar`
+- `renderAiEvaluation`
+- `renderExperiences`
 - `renderCandidateDetail`
 - `renderTechnicalSummary`
 - `renderClarificationForm`
@@ -125,7 +175,7 @@ The frontend is intentionally narrow and candidate-focused.
 Do not add:
 
 - React/Vue/Angular
-- Build toolchain unless explicitly required
+- Another build toolchain unless explicitly required
 - Frontend routing
 - Global state library
 - Direct OpenAI integration
