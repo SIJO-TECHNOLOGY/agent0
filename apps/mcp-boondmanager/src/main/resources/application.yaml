@@ -1,0 +1,26 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: mcp-boondmanager
+  ai:
+    mcp:
+      server:
+        name: mcp-boondmanager
+        version: @project.version@
+        type: SYNC
+        protocol: STREAMABLE
+        streamable-http:
+          mcp-endpoint: /mcp
+
+boondmanager:
+  base-url: ${BOONDMANAGER_BASE_URL}
+  jwt-client: ${BOONDMANAGER_JWT_CLIENT}
+  timeout: ${BOONDMANAGER_TIMEOUT:15s}
+
+logging:
+  pattern:
+    level: "%5p [%X{correlationId:-}]"
+  level:
+    com.sijo.mcpboondmanager: INFO
