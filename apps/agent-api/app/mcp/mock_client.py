@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 from app.mcp.client import McpClient, McpToolError, McpTransientError
+from app.mcp.result_normalizer import coerce_records
 from app.models.tools import McpTool
 
 ToolHandler = Callable[[dict[str, object]], Awaitable[list[dict[str, object]]]]
@@ -160,4 +161,9 @@ class MockMcpClient(McpClient):
         handler = self._handlers.get(tool)
         if handler is None:
             raise McpToolError(f"unknown tool: {tool}", tool=tool)
-        return await handler(inputs)
+        raw = await handler(inputs)
+        # Apply the same envelope-unwrap that the real RemoteMcpClient
+        # runs, so test fixtures can use realistic wrapper shapes (e.g.
+        # ``{"candidates": [...], "meta": {...}}``) and see the same
+        # downstream behaviour as production.
+        return coerce_records(raw, tool=tool)

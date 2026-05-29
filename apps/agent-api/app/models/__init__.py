@@ -1,6 +1,8 @@
 """Pydantic schemas for API contracts, graph state, and MCP boundaries."""
 
 from app.models.api import (
+    CandidateCard,
+    CandidateCardsUI,
     ErrorEnvelope,
     ErrorPayload,
     HealthDependencies,
@@ -18,6 +20,8 @@ from app.models.warnings import Warning
 
 __all__ = [
     "AgentError",
+    "CandidateCard",
+    "CandidateCardsUI",
     "ErrorEnvelope",
     "ErrorPayload",
     "GraphState",

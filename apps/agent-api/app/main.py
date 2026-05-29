@@ -13,11 +13,20 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import health_router, ready_router, search_router
+from app.api import (
+    health_router,
+    mcp_debug_router,
+    mcp_tools_router,
+    ready_router,
+    search_router,
+    search_stream_router,
+)
 from app.api.dependencies import McpClientUnavailableError
 from app.config import get_settings
 from app.mcp.factory import create_mcp_client
 from app.models.api import ErrorEnvelope, ErrorPayload, McpDependencyStatus
+from app.services.llm_backends import LlmBackendError, build_chat_fn
+from app.services.llm_planner import StructuredLlmPlanner
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +105,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         error=error,
     )
 
+    # Build the LLM planner when configured. Fail fast on misconfig so
+    # we never silently fall back to the deterministic planner when the
+    # operator asked for LLM planning.
+    if settings.use_llm_planner:
+        try:
+            chat_fn = build_chat_fn(
+                provider=settings.llm_provider,
+                model=settings.llm_model,
+                api_key=settings.llm_api_key,
+                temperature=settings.llm_temperature,
+            )
+        except LlmBackendError:
+            logger.exception("llm_planner.init_failed")
+            raise
+        app.state.llm_planner = StructuredLlmPlanner(chat_fn=chat_fn)
+        logger.info(
+            "llm_planner.ready",
+            extra={
+                "provider": settings.llm_provider,
+                "model": settings.llm_model,
+            },
+        )
+    else:
+        app.state.llm_planner = None
+
     try:
         yield
     finally:
@@ -104,6 +138,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await _close_client(bound)
         app.state.mcp_client = None
         app.state.mcp_status = None
+        app.state.llm_planner = None
 
 
 def create_app() -> FastAPI:
@@ -120,6 +155,12 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(ready_router)
     app.include_router(search_router)
+    app.include_router(search_stream_router)
+    app.include_router(mcp_tools_router)
+    # Debug router is always registered but its handler returns 404
+    # when ENABLE_MCP_DEBUG_ENDPOINTS is false so its existence stays
+    # invisible in production.
+    app.include_router(mcp_debug_router)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_handler(

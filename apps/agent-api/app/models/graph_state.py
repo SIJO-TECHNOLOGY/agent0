@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.errors import AgentError
-from app.models.intent import InterpretedIntent, PlanStep
+from app.models.intent import InterpretedIntent, LlmToolPlan, PlanStep
 from app.models.results import SearchResult
 from app.models.tools import McpTool, ToolCall
 from app.models.warnings import Warning
@@ -25,6 +25,7 @@ class GraphState(BaseModel):
     selected_tools: list[str] = Field(default_factory=list)
     tool_calls: list[ToolCall] = Field(default_factory=list)
     results: list[SearchResult] = Field(default_factory=list)
+    llm_plan: LlmToolPlan | None = None
 
     summary: str = ""
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)

@@ -34,6 +34,49 @@ class Settings(BaseSettings):
 
     use_mock_mcp: bool = Field(default=True)
 
+    enable_mcp_debug_endpoints: bool = Field(
+        default=False,
+        description=(
+            "Gate for development-only MCP introspection endpoints "
+            "(e.g. POST /api/mcp/tools/{tool_name}/call). Must remain "
+            "False in shared / production environments."
+        ),
+    )
+
+    # --- LLM planner -----------------------------------------------------
+    use_llm_planner: bool = Field(
+        default=False,
+        description=(
+            "When true, the primary planner is an LLM with discovered MCP "
+            "tool information. When false, the deterministic fallback "
+            "planner runs (useful for tests, mock mode, and dev without "
+            "LLM credentials)."
+        ),
+    )
+    llm_provider: str = Field(
+        default="anthropic",
+        description="LLM backend identifier (only 'anthropic' is supported).",
+    )
+    llm_model: str = Field(
+        default="claude-sonnet-4-6",
+        description="Model name passed to the configured LLM provider.",
+    )
+    llm_api_key: str | None = Field(
+        default=None,
+        description=(
+            "API key for the configured LLM provider. Required when "
+            "USE_LLM_PLANNER=true."
+        ),
+    )
+    llm_temperature: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Temperature passed to the LLM. Default 0 for determinism.",
+    )
+    llm_max_plan_steps: int = Field(
+        default=6, ge=1, le=20,
+        description="Hard upper bound on planned tool calls per query.",
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

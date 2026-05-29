@@ -6,9 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.intent import InterpretedIntent, PlanStep
-from app.models.results import SearchResult
-from app.models.tools import ToolCall
+from app.models.tools import McpTool
 from app.models.warnings import Warning
 
 
@@ -29,19 +27,50 @@ class SearchRequest(BaseModel):
         return stripped
 
 
-class SearchResponse(BaseModel):
-    """Outgoing search response."""
+class CandidateCard(BaseModel):
+    """UI-friendly candidate card derived from MCP results.
+
+    Values are normalized away from raw MCP/BoondManager payloads so the
+    frontend never sees provider-specific shapes. Unknown scalar fields
+    are ``None`` and unknown list fields are ``[]``.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    original_query: str
-    interpreted_intent: InterpretedIntent
-    execution_plan: list[PlanStep]
-    tool_calls: list[ToolCall]
-    results: list[SearchResult]
-    summary: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    warnings: list[Warning] = Field(default_factory=list)
+    id: str
+    full_name: str | None = None
+    title: str | None = None
+    experience_years: float | None = None
+    location: str | None = None
+    availability: str | None = None
+    skills: list[str] = Field(default_factory=list)
+    match_score: float | None = None
+    summary: str | None = None
+    boond_url: str | None = None
+
+
+class CandidateCardsUI(BaseModel):
+    """UI block presenting a list of candidate cards."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["candidate_cards"] = "candidate_cards"
+    candidates: list[CandidateCard] = Field(default_factory=list)
+
+
+class SearchResponse(BaseModel):
+    """Frontend-oriented search response envelope.
+
+    The Agent API normalizes orchestration output into a small,
+    UI-shaped contract. Raw MCP payloads, execution plans, and
+    tool-call traces never leak through this surface.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str
+    message: str
+    ui: CandidateCardsUI
 
 
 class ErrorPayload(BaseModel):
@@ -96,3 +125,12 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
     dependencies: HealthDependencies
+
+
+class McpToolsResponse(BaseModel):
+    """Catalogue of MCP tools discovered from the connected server."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tools: list[McpTool] = Field(default_factory=list)
+    count: int = Field(ge=0, default=0)

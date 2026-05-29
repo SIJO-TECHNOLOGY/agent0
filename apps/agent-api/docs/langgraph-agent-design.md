@@ -4,9 +4,45 @@
 
 Use Plan-and-Execute with lightweight reflection.
 
-Reflection is only for evaluating result quality and deciding whether a bounded replan is needed. The MVP must not implement open-ended autonomous loops.
+Two workflow shapes coexist in `app/graph/workflow.py`:
 
-## Workflow
+- **LLM workflow** (`build_llm_workflow`) — the **primary real-mode**
+  planner. The LLM receives the user query, discovered MCP tool names /
+  descriptions / input schemas, and execution constraints; it returns a
+  strictly-validated `LlmToolPlan`. LangGraph executes that plan with
+  bounded fan-out for per-candidate enrichment.
+- **Deterministic workflow** (`build_deterministic_workflow`) — the
+  fallback used when `USE_LLM_PLANNER=false`, in mock mode, in tests,
+  and when LLM credentials are not configured. It uses keyword
+  heuristics and the prior plan-by-rules logic.
+
+Reflection is only for evaluating result quality and deciding whether a bounded replan is needed (deterministic path). Neither path implements open-ended autonomous loops.
+
+## LLM Workflow
+
+```mermaid
+flowchart TD
+    A["discover_mcp_tools"] --> B["plan_with_llm"]
+    B --> C["execute_llm_plan"]
+    C --> D["evaluate_results"]
+    D --> E["rank_candidates"]
+    E --> F["generate_final_response"]
+```
+
+Key invariants:
+
+- **Validation before execution.** `plan_with_llm` parses the LLM's
+  JSON, validates each step against the live tool catalogue, drops
+  steps with unknown tool names / extra inputs / missing required
+  fields, and raises `LlmPlannerError` if nothing survives.
+- **Bounded fan-out.** Steps with `depends_on` (e.g.
+  `getCandidateDetail` after `searchCandidates`) execute at most
+  `max_enrichments` times — once per candidate id returned by the
+  prior tool. Fan-out results are merged into the existing
+  `SearchResult` rather than appended as new candidates.
+- **MCP-only execution.** No tool runs outside `McpClient.call_tool`.
+
+## Deterministic Workflow (fallback)
 
 ```mermaid
 flowchart TD
@@ -16,7 +52,9 @@ flowchart TD
     D --> E["evaluate_results"]
     E --> F["replan_if_needed"]
     F -->|replan| B
-    F -->|continue| G["generate_final_response"]
+    F -->|continue| G["enrich_candidates"]
+    G --> H["rank_candidates"]
+    H --> I["generate_final_response"]
 ```
 
 ## Nodes

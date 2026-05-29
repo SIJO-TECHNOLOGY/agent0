@@ -26,6 +26,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import CallToolResult, TextContent, Tool
 
 from app.mcp.client import McpClient, McpToolError, McpTransientError
+from app.mcp.result_normalizer import coerce_records as _coerce_records
 from app.models.tools import McpTool
 
 logger = logging.getLogger(__name__)
@@ -209,33 +210,6 @@ def _normalize_result(
                 tool=tool,
             )
     return payloads
-
-
-def _coerce_records(value: object, *, tool: str) -> list[dict[str, object]]:
-    """Coerce a structured payload into list[dict]."""
-    if isinstance(value, dict):
-        # Many MCP servers wrap a list under a top-level key. If a single
-        # `results`-style key exists with a list value, unwrap it.
-        for unwrap_key in ("results", "items", "data"):
-            inner = value.get(unwrap_key)
-            if isinstance(inner, list) and all(isinstance(i, dict) for i in inner):
-                return [dict(i) for i in inner]
-        return [dict(value)]
-    if isinstance(value, list):
-        records: list[dict[str, object]] = []
-        for item in value:
-            if not isinstance(item, dict):
-                raise McpToolError(
-                    f"tool {tool!r} returned a list item that is not an object",
-                    tool=tool,
-                )
-            records.append(dict(item))
-        return records
-    raise McpToolError(
-        f"tool {tool!r} returned unsupported structured content of type "
-        f"{type(value).__name__}",
-        tool=tool,
-    )
 
 
 def _parse_json_safely(text: str) -> object | None:

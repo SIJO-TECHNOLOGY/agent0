@@ -1,0 +1,436 @@
+"""LLM-based MCP tool planner.
+
+This module is the **primary** real-mode planner: it asks an LLM to
+interpret the user's query against the discovered MCP tool catalogue
+and emit a strictly-validated, bounded execution plan.
+
+Design rules (enforced here, not in the workflow):
+
+- No free-form tool execution semantics in the LLM output.
+- No unknown tool names. No schema-violating inputs.
+- No unbounded plans (caller supplies ``max_steps``).
+- No silent fallbacks: validation failures raise ``LlmPlannerError``;
+  callers decide whether to surface them as warnings or fail.
+
+The LLM call itself is injected via ``ChatFn`` so production wires up
+the Anthropic SDK while tests pass a stub that returns a canned JSON
+plan — no network access required.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Final, Protocol
+
+from pydantic import ValidationError
+
+from app.models.intent import LlmToolPlan, PlannedToolCall
+from app.models.tools import McpTool
+from app.services.event_emitter import EventEmitter, NoopEventEmitter
+
+logger = logging.getLogger(__name__)
+
+
+class LlmPlannerError(RuntimeError):
+    """Raised when LLM planning produces no usable plan."""
+
+
+@dataclass(frozen=True)
+class PlannerConstraints:
+    """Caller-provided bounds the LLM must respect."""
+
+    max_plan_steps: int = 6
+    max_enrichments: int = 5
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "max_plan_steps": self.max_plan_steps,
+            "max_enrichments": self.max_enrichments,
+        }
+
+
+ChatFn = Callable[[str, str], Awaitable[str]]
+"""(system_prompt, user_prompt) -> raw LLM text response."""
+
+
+class LlmPlanner(Protocol):
+    """Async planner contract.
+
+    Implementations must return a *validated* ``LlmToolPlan`` or raise
+    ``LlmPlannerError``. The workflow never calls into an LLM directly.
+
+    The optional ``emitter`` lets implementations stream
+    ``plan_created`` (raw LLM plan) and ``plan_validated`` (after the
+    strict validator) events to a streaming-mode consumer. Non-streaming
+    callers can omit it.
+    """
+
+    async def plan(
+        self,
+        *,
+        query: str,
+        filters: dict[str, object],
+        tools: list[McpTool],
+        constraints: PlannerConstraints,
+        emitter: EventEmitter | None = None,
+    ) -> LlmToolPlan: ...
+
+
+_RESULT_SELECTOR_ALLOWED: Final[frozenset[str]] = frozenset({"candidate_ids"})
+
+# Tools that may use ``result_selector="candidate_ids"`` to fan out
+# over a previous search's candidate ids. Other tools (e.g.
+# ``searchCandidates``, ``getDictionary``) MUST NOT request that
+# selector — it makes no semantic sense for them.
+_FANOUT_ELIGIBLE_TOOLS: Final[frozenset[str]] = frozenset(
+    {"getCandidateDetail", "getCandidateTechnicalDocument"}
+)
+
+
+def _schema_property_names(schema: dict[str, object]) -> set[str]:
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return set()
+    return {str(name) for name in properties.keys()}
+
+
+def _required_property_names(schema: dict[str, object]) -> set[str]:
+    required = schema.get("required")
+    if not isinstance(required, list):
+        return set()
+    return {str(name) for name in required if isinstance(name, str)}
+
+
+@dataclass(frozen=True)
+class PlanValidationResult:
+    """Validator output retaining both accepted and rejected steps.
+
+    Used by the streaming path so the ``plan_validated`` event can
+    surface what the validator dropped (and why).
+    """
+
+    accepted: LlmToolPlan
+    rejected: list[dict[str, str]]
+
+
+def validate_plan_with_diagnostics(
+    raw_plan: LlmToolPlan,
+    tools: list[McpTool],
+    constraints: PlannerConstraints,
+) -> PlanValidationResult:
+    """Validate the LLM plan, returning accepted steps + rejection reasons.
+
+    Never raises — the caller decides whether an empty ``accepted.plan``
+    is fatal (``validate_plan`` enforces that policy for non-streaming
+    callers).
+    """
+    if len(raw_plan.plan) > constraints.max_plan_steps:
+        logger.warning(
+            "llm_planner.plan_truncated",
+            extra={
+                "original_steps": len(raw_plan.plan),
+                "max_steps": constraints.max_plan_steps,
+            },
+        )
+
+    tools_by_name = {tool.name: tool for tool in tools}
+
+    validated_steps: list[PlannedToolCall] = []
+    rejected: list[dict[str, str]] = []
+    completed_tools: set[str] = set()
+
+    for step in raw_plan.plan[: constraints.max_plan_steps]:
+        error = _validate_step(step, tools_by_name, completed_tools)
+        if error is not None:
+            rejected.append({"tool": step.tool_name, "reason": error})
+            continue
+        validated_steps.append(step)
+        completed_tools.add(step.tool_name)
+
+    if rejected:
+        logger.warning("llm_planner.steps_rejected", extra={"rejected": rejected})
+
+    accepted = raw_plan.model_copy(update={"plan": validated_steps})
+    return PlanValidationResult(accepted=accepted, rejected=rejected)
+
+
+def validate_plan(
+    raw_plan: LlmToolPlan,
+    tools: list[McpTool],
+    constraints: PlannerConstraints,
+) -> LlmToolPlan:
+    """Validate every planned step against the discovered MCP catalogue.
+
+    Drops invalid steps and returns the validated remainder. If nothing
+    survives, raises ``LlmPlannerError`` so the workflow can surface a
+    clean failure instead of pretending to act.
+    """
+    result = validate_plan_with_diagnostics(raw_plan, tools, constraints)
+    if not result.accepted.plan:
+        raise LlmPlannerError(
+            "LLM produced no valid plan steps "
+            f"(rejected={len(result.rejected)}, original={len(raw_plan.plan)})"
+        )
+    return result.accepted
+
+
+def _validate_step(
+    step: PlannedToolCall,
+    tools_by_name: dict[str, McpTool],
+    completed_tools: set[str],
+) -> str | None:
+    tool = tools_by_name.get(step.tool_name)
+    if tool is None:
+        return f"unknown tool {step.tool_name!r}"
+
+    allowed_properties = _schema_property_names(tool.input_schema)
+    if allowed_properties:
+        for key in step.inputs:
+            if key not in allowed_properties:
+                return (
+                    f"input {key!r} is not declared in {step.tool_name} "
+                    "input_schema"
+                )
+
+    if step.depends_on is not None:
+        if step.depends_on not in completed_tools:
+            return (
+                f"depends_on {step.depends_on!r} does not refer to an "
+                "earlier validated step"
+            )
+        if (
+            step.result_selector is not None
+            and step.result_selector not in _RESULT_SELECTOR_ALLOWED
+        ):
+            return f"unsupported result_selector {step.result_selector!r}"
+        # `candidate_ids` is only meaningful for candidate enrichment
+        # tools; allowing it on, say, ``searchCandidates`` would let the
+        # LLM accidentally request fan-out where a direct call was meant.
+        if (
+            step.result_selector == "candidate_ids"
+            and step.tool_name not in _FANOUT_ELIGIBLE_TOOLS
+        ):
+            return (
+                f"result_selector='candidate_ids' is only allowed on "
+                f"candidate-enrichment tools, not {step.tool_name!r}"
+            )
+        # A depends_on with no selector is an ordering hint only; if
+        # the tool has required schema fields, they must be supplied
+        # by the LLM (the executor will not invent them).
+        if step.result_selector is None:
+            required = _required_property_names(tool.input_schema)
+            missing = required - set(step.inputs.keys())
+            if missing:
+                return (
+                    f"required input(s) {sorted(missing)} missing for "
+                    f"{step.tool_name}"
+                )
+    else:
+        # Without dependency-fill, required schema fields must be present.
+        required = _required_property_names(tool.input_schema)
+        missing = required - set(step.inputs.keys())
+        if missing:
+            return (
+                f"required input(s) {sorted(missing)} missing for "
+                f"{step.tool_name}"
+            )
+
+    return None
+
+
+def build_planner_prompt(
+    *,
+    query: str,
+    filters: dict[str, object],
+    tools: list[McpTool],
+    constraints: PlannerConstraints,
+) -> tuple[str, str]:
+    """Build the (system_prompt, user_prompt) pair sent to the LLM."""
+    system = (
+        "You are the planning component of an MCP-backed candidate search "
+        "agent. You receive a user query and a catalogue of available MCP "
+        "tools. You must return a JSON object matching the schema below, "
+        "and nothing else (no prose, no markdown fences).\n\n"
+        "RULES (must be obeyed):\n"
+        "1. Use only tools whose name appears in the provided catalogue.\n"
+        "2. Use only input fields declared in each tool's input_schema.\n"
+        "3. Required schema fields must be present unless `depends_on` "
+        "fills them from a previous tool's results.\n"
+        "4. Never invent dictionary IDs or magic constants — only call "
+        "getDictionary first and then reuse its returned ids.\n"
+        "5. Never propose a tool call that targets a system outside MCP.\n"
+        "6. Plan must contain at most max_plan_steps entries.\n"
+        "7. Use `depends_on` + `result_selector='candidate_ids'` ONLY for "
+        "candidate-enrichment tools (`getCandidateDetail`, "
+        "`getCandidateTechnicalDocument`) that should run once per "
+        "candidate id returned by the named earlier search step.\n"
+        "8. To say 'run B after A but with explicit inputs' (e.g. "
+        "`searchCandidates` after `getDictionary`), leave `depends_on` "
+        "AND `result_selector` BOTH null. Steps already execute in plan "
+        "order, so no extra marker is needed; you must supply every "
+        "required schema input yourself.\n\n"
+        "OUTPUT SCHEMA (return JSON object with these keys exactly):\n"
+        "{\n"
+        '  "interpreted_intent": {... object summarising what you parsed ...},\n'
+        '  "plan": [\n'
+        "    {\n"
+        '      "tool_name": "...",\n'
+        '      "reason": "...",\n'
+        '      "inputs": {...},\n'
+        '      "depends_on": "tool_name or null",\n'
+        '      "result_selector": "candidate_ids or null"\n'
+        "    }\n"
+        "  ],\n"
+        '  "assumptions": ["..."],\n'
+        '  "warnings": ["..."]\n'
+        "}"
+    )
+
+    tool_lines: list[str] = []
+    for tool in tools:
+        tool_lines.append(
+            "- name: " + tool.name
+            + "\n  description: " + (tool.description or "")
+            + "\n  input_schema: " + json.dumps(tool.input_schema)
+        )
+    tool_block = "\n".join(tool_lines) if tool_lines else "(none)"
+
+    user = (
+        f"User query: {query!r}\n"
+        f"User filters (raw): {json.dumps(filters, default=str)}\n"
+        f"Execution constraints: {json.dumps(constraints.as_dict())}\n\n"
+        f"Available MCP tools:\n{tool_block}\n\n"
+        "Produce the JSON plan now."
+    )
+    return system, user
+
+
+def parse_plan_response(text: str) -> LlmToolPlan:
+    """Parse the LLM's text response into an LlmToolPlan.
+
+    Tolerant of a single Markdown code fence around the JSON since that
+    is the most common LLM defection from "JSON only".
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        # Remove the opening fence (with or without language tag) and the
+        # closing fence.
+        first_newline = stripped.find("\n")
+        if first_newline != -1:
+            stripped = stripped[first_newline + 1 :]
+        if stripped.rstrip().endswith("```"):
+            stripped = stripped.rstrip()[: -3]
+    stripped = stripped.strip()
+
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise LlmPlannerError(f"LLM returned non-JSON output: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise LlmPlannerError(
+            "LLM JSON output must be an object at the top level"
+        )
+
+    try:
+        return LlmToolPlan.model_validate(payload)
+    except ValidationError as exc:
+        raise LlmPlannerError(f"LLM JSON failed schema validation: {exc}") from exc
+
+
+def serialize_planned_steps(
+    plan: list[PlannedToolCall],
+) -> list[dict[str, object]]:
+    """Render planned steps for UI events (safe scalar payload only)."""
+    rendered: list[dict[str, object]] = []
+    for index, step in enumerate(plan, start=1):
+        rendered.append(
+            {
+                "step": index,
+                "tool_name": step.tool_name,
+                "reason": step.reason,
+                "inputs": dict(step.inputs),
+                "depends_on": step.depends_on,
+                "result_selector": step.result_selector,
+            }
+        )
+    return rendered
+
+
+class StructuredLlmPlanner(LlmPlanner):
+    """Default ``LlmPlanner`` implementation.
+
+    Composes a prompt, calls the injected ``ChatFn``, parses + validates
+    the JSON response into a bounded ``LlmToolPlan``. Knows nothing
+    about HTTP, SDKs, or BoondManager.
+
+    When an ``EventEmitter`` is supplied, emits:
+    - ``plan_created`` once the raw LLM response has been parsed.
+    - ``plan_validated`` once the validator has dropped any bad steps.
+    """
+
+    def __init__(self, chat_fn: ChatFn) -> None:
+        self._chat_fn = chat_fn
+
+    async def plan(
+        self,
+        *,
+        query: str,
+        filters: dict[str, object],
+        tools: list[McpTool],
+        constraints: PlannerConstraints,
+        emitter: EventEmitter | None = None,
+    ) -> LlmToolPlan:
+        sink = emitter or NoopEventEmitter()
+        system, user = build_planner_prompt(
+            query=query,
+            filters=filters,
+            tools=tools,
+            constraints=constraints,
+        )
+        logger.info(
+            "llm_planner.request",
+            extra={
+                "query": query,
+                "available_tool_count": len(tools),
+                "max_plan_steps": constraints.max_plan_steps,
+            },
+        )
+        raw_text = await self._chat_fn(system, user)
+        raw_plan = parse_plan_response(raw_text)
+
+        await sink.emit(
+            "plan_created",
+            {
+                "plan": serialize_planned_steps(raw_plan.plan),
+                "assumptions": list(raw_plan.assumptions),
+                "warnings": list(raw_plan.warnings),
+            },
+        )
+
+        validation = validate_plan_with_diagnostics(raw_plan, tools, constraints)
+        await sink.emit(
+            "plan_validated",
+            {
+                "accepted_steps": serialize_planned_steps(validation.accepted.plan),
+                "rejected_steps": list(validation.rejected),
+            },
+        )
+        if not validation.accepted.plan:
+            raise LlmPlannerError(
+                "LLM produced no valid plan steps "
+                f"(rejected={len(validation.rejected)}, "
+                f"original={len(raw_plan.plan)})"
+            )
+
+        logger.info(
+            "llm_planner.plan_validated",
+            extra={
+                "plan_step_count": len(validation.accepted.plan),
+                "tools": [step.tool_name for step in validation.accepted.plan],
+            },
+        )
+        return validation.accepted

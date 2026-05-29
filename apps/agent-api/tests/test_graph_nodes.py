@@ -19,7 +19,7 @@ from app.mcp.client import McpToolError
 from app.mcp.mock_client import MockMcpClient
 from app.models.graph_state import GraphState
 from app.models.intent import InterpretedIntent, PlanStep
-from app.models.tools import ToolCall, ToolCallStatus
+from app.models.tools import McpTool, ToolCall, ToolCallStatus
 
 
 def _ctx(client: MockMcpClient, *, max_replan: int = 1, retries: int = 2) -> NodeContext:
@@ -41,6 +41,266 @@ async def test_analyze_intent_extracts_keywords_and_seniority() -> None:
     assert result.interpreted_intent.objective == "find_consultants"
     assert "python" in result.interpreted_intent.entities
     assert result.interpreted_intent.constraints.get("seniority") == "senior"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_detects_candidate_detail_lookup() -> None:
+    state = GraphState(
+        original_query="Find the candidate information with candidate id 41924"
+    )
+    ctx = _ctx(MockMcpClient())
+
+    result = await analyze_intent(state, ctx)
+
+    assert result.interpreted_intent is not None
+    assert result.interpreted_intent.objective == "get_candidate_detail"
+    assert result.interpreted_intent.constraints.get("candidate_id") == "41924"
+    # Candidate-id lookups do not need keyword ambiguity warnings.
+    assert result.interpreted_intent.ambiguity_notes == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_tolerates_candidate_id_typo() -> None:
+    state = GraphState(original_query="cadidate id 41924")
+    ctx = _ctx(MockMcpClient())
+
+    result = await analyze_intent(state, ctx)
+
+    assert result.interpreted_intent is not None
+    assert result.interpreted_intent.objective == "get_candidate_detail"
+    assert result.interpreted_intent.constraints.get("candidate_id") == "41924"
+
+
+@pytest.mark.asyncio
+async def test_build_plan_produces_get_candidate_detail_step() -> None:
+    state = GraphState(
+        original_query="candidate id 41924",
+        interpreted_intent=InterpretedIntent(
+            objective="get_candidate_detail",
+            constraints={"candidate_id": "41924"},
+        ),
+    )
+    ctx = _ctx(MockMcpClient())
+
+    result = await build_plan(state, ctx)
+
+    assert len(result.execution_plan) == 1
+    step = result.execution_plan[0]
+    assert step.expected_tool == "getCandidateDetail"
+    # Planner uses candidateId as a placeholder; select_tools may rewrite.
+    assert step.inputs == {"candidateId": 41924}
+
+
+@pytest.mark.asyncio
+async def test_select_tools_rewrites_inputs_when_schema_uses_id_field() -> None:
+    tool = McpTool(
+        name="getCandidateDetail",
+        description="Fetch candidate by id.",
+        input_schema={
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+            "required": ["id"],
+        },
+    )
+    client = MockMcpClient(tools=[tool])
+    state = GraphState(
+        original_query="candidate id 41924",
+        interpreted_intent=InterpretedIntent(
+            objective="get_candidate_detail",
+            constraints={"candidate_id": "41924"},
+        ),
+        execution_plan=[
+            PlanStep(
+                step=1,
+                description="x",
+                expected_tool="getCandidateDetail",
+                inputs={"candidateId": 41924},
+            )
+        ],
+    )
+
+    result = await select_tools(state, _ctx(client))
+
+    assert result.selected_tools == ["getCandidateDetail"]
+    assert result.execution_plan[0].inputs == {"id": 41924}
+
+
+@pytest.mark.asyncio
+async def test_select_tools_preserves_candidate_id_inputs_when_schema_matches() -> None:
+    tool = McpTool(
+        name="getCandidateDetail",
+        description="Fetch candidate by candidateId.",
+        input_schema={
+            "type": "object",
+            "properties": {"candidateId": {"type": "integer"}},
+            "required": ["candidateId"],
+        },
+    )
+    client = MockMcpClient(tools=[tool])
+    state = GraphState(
+        original_query="candidate id 41924",
+        interpreted_intent=InterpretedIntent(
+            objective="get_candidate_detail",
+            constraints={"candidate_id": "41924"},
+        ),
+        execution_plan=[
+            PlanStep(
+                step=1,
+                description="x",
+                expected_tool="getCandidateDetail",
+                inputs={"candidateId": 41924},
+            )
+        ],
+    )
+
+    result = await select_tools(state, _ctx(client))
+
+    assert result.selected_tools == ["getCandidateDetail"]
+    assert result.execution_plan[0].inputs == {"candidateId": 41924}
+
+
+@pytest.mark.asyncio
+async def test_select_tools_picks_search_candidates_over_legacy_mock() -> None:
+    real_tool = McpTool(
+        name="searchCandidates",
+        description="Search candidates.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "keywords": {"type": "string"},
+                "page": {"type": "integer"},
+                "numberPerPage": {"type": "integer"},
+            },
+        },
+    )
+    # Mock client exposes ONLY the real tool, not the legacy one — so the
+    # fallback path is exercised even though both names are listed.
+    client = MockMcpClient(tools=[real_tool])
+    state = GraphState(
+        original_query="dev java cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find_consultants", entities=["java", "cib"]
+        ),
+        execution_plan=[
+            PlanStep(
+                step=1,
+                description="x",
+                expected_tool="searchCandidates",
+                alternative_tools=["search_consultants"],
+                inputs={"keywords": ["java", "cib"]},
+            )
+        ],
+    )
+
+    result = await select_tools(state, _ctx(client))
+
+    assert result.selected_tools == ["searchCandidates"]
+    step = result.execution_plan[0]
+    assert step.expected_tool == "searchCandidates"
+    assert step.alternative_tools == []
+    # keywords must be a string, page/numberPerPage defaults injected.
+    assert step.inputs == {
+        "keywords": "java cib",
+        "page": 1,
+        "numberPerPage": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_select_tools_falls_back_to_legacy_when_real_tool_missing() -> None:
+    # Default MockMcpClient exposes search_consultants but not searchCandidates.
+    client = MockMcpClient()
+    state = GraphState(
+        original_query="java consultants",
+        interpreted_intent=InterpretedIntent(
+            objective="find_consultants", entities=["java"]
+        ),
+        execution_plan=[
+            PlanStep(
+                step=1,
+                description="x",
+                expected_tool="searchCandidates",
+                alternative_tools=["search_consultants"],
+                inputs={"keywords": ["java"]},
+            )
+        ],
+    )
+
+    result = await select_tools(state, _ctx(client))
+
+    assert result.selected_tools == ["search_consultants"]
+    step = result.execution_plan[0]
+    assert step.expected_tool == "search_consultants"
+    # Legacy tool keeps its list-shaped keywords (no schema rewrite for it).
+    assert step.inputs == {"keywords": ["java"]}
+
+
+@pytest.mark.asyncio
+async def test_select_tools_emits_unmapped_experience_warning() -> None:
+    real_tool = McpTool(
+        name="searchCandidates",
+        description="Search candidates.",
+        input_schema={
+            "type": "object",
+            "properties": {"keywords": {"type": "string"}},
+        },
+    )
+    client = MockMcpClient(tools=[real_tool])
+    state = GraphState(
+        original_query="dev java 10 years experience",
+        interpreted_intent=InterpretedIntent(
+            objective="find_consultants",
+            entities=["java"],
+            constraints={"min_experience_years": "10"},
+        ),
+        execution_plan=[
+            PlanStep(
+                step=1,
+                description="x",
+                expected_tool="searchCandidates",
+                alternative_tools=["search_consultants"],
+                inputs={"keywords": ["java"]},
+            )
+        ],
+    )
+
+    result = await select_tools(state, _ctx(client))
+
+    assert any(
+        w.code == "experience_filter_unmapped" for w in result.warnings
+    )
+    # We still proceeded with the search rather than inventing a filter id.
+    assert result.selected_tools == ["searchCandidates"]
+    assert result.execution_plan[0].inputs == {"keywords": "java"}
+
+
+@pytest.mark.asyncio
+async def test_select_tools_warns_when_get_candidate_detail_unavailable() -> None:
+    # Default MockMcpClient does not expose getCandidateDetail.
+    client = MockMcpClient()
+    state = GraphState(
+        original_query="candidate id 41924",
+        interpreted_intent=InterpretedIntent(
+            objective="get_candidate_detail",
+            constraints={"candidate_id": "41924"},
+        ),
+        execution_plan=[
+            PlanStep(
+                step=1,
+                description="x",
+                expected_tool="getCandidateDetail",
+                inputs={"candidateId": 41924},
+            )
+        ],
+    )
+
+    result = await select_tools(state, _ctx(client))
+
+    assert result.selected_tools == []
+    assert any(
+        w.code == "tool_unavailable" and "getCandidateDetail" in w.message
+        for w in result.warnings
+    )
 
 
 @pytest.mark.asyncio
@@ -67,7 +327,10 @@ async def test_build_plan_produces_at_least_one_step() -> None:
     result = await build_plan(state, ctx)
 
     assert result.execution_plan
-    assert result.execution_plan[0].expected_tool == "search_consultants"
+    # Real MCP tool is preferred; legacy mock tool stays as fallback so
+    # mock-mode discovery still resolves to a valid tool.
+    assert result.execution_plan[0].expected_tool == "searchCandidates"
+    assert "search_consultants" in result.execution_plan[0].alternative_tools
     assert result.execution_plan[0].inputs == {"keywords": ["python"]}
 
 
@@ -84,10 +347,14 @@ async def test_build_plan_widens_after_replan() -> None:
 
     result = await build_plan(state, ctx)
 
-    tools = [step.expected_tool for step in result.execution_plan]
-    assert "search_consultants" in tools
-    assert "search_projects" in tools
-    assert "search_opportunities" in tools
+    expected_tools = [step.expected_tool for step in result.execution_plan]
+    fallback_tools = [
+        name for step in result.execution_plan for name in step.alternative_tools
+    ]
+    assert "searchCandidates" in expected_tools
+    assert "search_consultants" in fallback_tools
+    assert "search_projects" in expected_tools
+    assert "search_opportunities" in expected_tools
 
 
 @pytest.mark.asyncio
@@ -221,7 +488,9 @@ async def test_no_replan_when_budget_exhausted() -> None:
     result = await replan_if_needed(state, _ctx(MockMcpClient(), max_replan=1))
 
     assert result.replan_count == 1
-    assert should_replan(result) == "generate_final_response"
+    # When the replan budget is exhausted, the workflow now proceeds
+    # through enrichment + ranking before generating the final response.
+    assert should_replan(result) == "enrich_candidates"
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,14 @@ from typing import Final
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.\-]{1,}")
 
+# Matches phrases like "candidate id 41924", "candidateId=41924", "candidate#41924",
+# and the common typo "cadidate id 41924". Requires an "id"-style anchor so we
+# don't over-trigger on stray numbers.
+_CANDIDATE_ID_RE: re.Pattern[str] = re.compile(
+    r"\b(?:candidate|cadidate)\s*(?:id|ids|_id|#)\s*[:=]?\s*(\d+)\b",
+    re.IGNORECASE,
+)
+
 _SENIORITY_TERMS: Final[dict[str, str]] = {
     "junior": "junior",
     "intermediate": "intermediate",
@@ -23,8 +31,12 @@ _SENIORITY_TERMS: Final[dict[str, str]] = {
 }
 
 _TYPE_HINTS: Final[dict[str, str]] = {
+    "candidate": "search_consultants",
+    "candidates": "search_consultants",
     "consultant": "search_consultants",
     "consultants": "search_consultants",
+    "dev": "search_consultants",
+    "devs": "search_consultants",
     "developer": "search_consultants",
     "developers": "search_consultants",
     "engineer": "search_consultants",
@@ -43,6 +55,7 @@ _TYPE_HINTS: Final[dict[str, str]] = {
 
 _STOPWORDS: Final[frozenset[str]] = frozenset(
     {
+        # Articles and conjunctions
         "the",
         "a",
         "an",
@@ -51,25 +64,106 @@ _STOPWORDS: Final[frozenset[str]] = frozenset(
         "of",
         "for",
         "with",
+        "from",
+        # Verbs/imperatives that frame the request
         "find",
         "search",
         "show",
-        "me",
         "list",
+        "get",
+        "fetch",
+        "give",
+        # Pronouns / determiners
+        "me",
+        "my",
+        "i",
+        "his",
+        "her",
+        "their",
+        "they",
+        "we",
+        "us",
+        "you",
+        "your",
+        "him",
+        # Auxiliaries / modals
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "do",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "should",
+        "would",
+        "could",
+        "can",
+        "must",
+        "may",
+        "might",
+        "will",
+        "shall",
+        # Question / connector words
+        "who",
+        "what",
+        "when",
+        "where",
+        "why",
+        "how",
+        # Common adverbs / prepositions
         "in",
         "on",
-        "available",
-        "who",
-        "are",
-        "is",
         "to",
+        "at",
+        "by",
+        "as",
+        "than",
+        "then",
+        # Quantifiers that don't help keyword filtering
+        "any",
+        "all",
+        "more",
+        "less",
+        "most",
+        "few",
+        "many",
+        "much",
+        # Search-specific noise
+        "available",
         "next",
         "this",
         "that",
-        "any",
-        "all",
-        "by",
+        "year",
+        "years",
+        "yrs",
+        "month",
+        "months",
+        "experience",
+        "experiences",
+        "last",
+        "first",
+        "previous",
+        "current",
+        "about",
+        "around",
+        "looking",
+        "need",
+        "want",
+        "wanted",
+        "wanting",
     }
+)
+
+
+_YEARS_EXPERIENCE_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(\d{1,2})\s*\+?\s*(?:year|yr)s?\b",
+    re.IGNORECASE,
 )
 
 
@@ -102,6 +196,39 @@ def extract_seniority(query: str) -> str | None:
         if normalized:
             return normalized
     return None
+
+
+def extract_min_years_experience(query: str) -> int | None:
+    """Return the smallest integer ``N`` mentioned as "<N> years" of experience.
+
+    Accepts forms like "10 years experience", "more than 10 years", "10+ yrs".
+    Returns ``None`` when no number is present so callers don't invent a
+    filter the MCP server can't satisfy reliably.
+    """
+    matches = _YEARS_EXPERIENCE_RE.findall(query)
+    if not matches:
+        return None
+    try:
+        values = [int(value) for value in matches]
+    except (TypeError, ValueError):
+        return None
+    return min(values) if values else None
+
+
+def extract_candidate_id(query: str) -> int | None:
+    """Return a candidate ID parsed from the query, or None.
+
+    Accepts forms such as "candidate id 41924", "candidateId=41924",
+    and the typo "cadidate id 41924". Requires an "id"-style anchor
+    to avoid matching unrelated numbers in the query.
+    """
+    match = _CANDIDATE_ID_RE.search(query)
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
 
 
 def detect_tools(query: str) -> list[str]:

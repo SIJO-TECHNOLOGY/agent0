@@ -242,6 +242,12 @@ The global architecture is the system context for the Agent API implementation. 
 - [ADR-002 - MCP Client Wiring Review](../decisions/adr-002-mcp-client-wiring-review.md) protects the MCP client boundary and makes mock-vs-real configuration explicit.
 - [ADR-003 - Graceful MCP Degradation And Health Strategy](../decisions/adr-003-graceful-mcp-degradation-and-health-strategy.md) defines health, readiness, and search behavior when the MCP dependency is unavailable.
 - [ADR-004 - asyncio.CancelledError Escapes Graceful MCP Degradation](../decisions/adr-004-asyncio-cancelled-error-mcp-startup.md) records the async startup edge case discovered while validating graceful degradation.
+- [ADR-005 - Agent Planner Drift From LLM-Led Architecture](../decisions/adr-005-agent-planner-drift-from-llm-architecture.md) documents the correction from deterministic planner accretion back toward LLM-led tool planning.
+- [ADR-006 - User-Facing Search Streaming Strategy](../decisions/adr-006-user-facing-search-streaming-strategy.md) separates frontend progress streaming from internal MCP Streamable HTTP transport.
+- [ADR-007 - LLM Tool Plan Execution Semantics](../decisions/adr-007-llm-tool-plan-execution-semantics.md) records the ordering-vs-fan-out distinction and the candidate-producing tool allowlist that keep LLM plans honest at execution time.
+- [ADR-008 - MCP Result Envelope Normalization Boundary](../decisions/adr-008-mcp-result-envelope-normalization-boundary.md) places envelope normalization at the MCP client boundary so wrapper shapes like `{"candidates": [...], "meta": {...}}` reach the workflow as a clean record list.
+- [ADR-009 - Agent API Milestone 1 Boundary And Evidence Verification](../decisions/adr-009-agent-api-milestone-1-boundary.md) draws the line between Agent API orchestration delivery (done) and criterion-evidence verification (deferred to a later milestone).
+- [Milestone 001 - Agent API MCP Fuzzy Search](../milestones/milestone-001-agent-api-mcp-fuzzy-search.md) certifies the orchestration milestone with reproducible verification evidence.
 
 ## Implementation Notes For AI Coding Agents
 
