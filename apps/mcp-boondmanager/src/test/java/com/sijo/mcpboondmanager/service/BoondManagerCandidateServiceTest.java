@@ -103,28 +103,39 @@ class BoondManagerCandidateServiceTest {
         queryCaptor.getValue().accept(builder);
         assertThat(builder.build().getQueryParams())
                 .containsEntry("keywords", List.of("java"))
-                .containsEntry("state", List.of("1"))
-                .containsEntry("availabilityType", List.of("9"))
-                .containsEntry("availabilityDate", List.of("2026-06-01"))
-                .containsEntry("contractType", List.of("2"))
-                .containsEntry("experience", List.of("3"))
-                .containsEntry("training", List.of("bac5"))
-                .containsEntry("expertiseAreas", List.of("backend|microservices"))
-                .containsEntry("activityAreas", List.of("finance|industry"))
-                .containsEntry("mobilityArea", List.of("idf"))
-                .containsEntry("minSalary", List.of("40000.0"))
-                .containsEntry("maxSalary", List.of("60000.0"))
-                .containsEntry("minTjm", List.of("500.0"))
-                .containsEntry("maxTjm", List.of("700.0"))
+                .containsEntry("keywordsType", List.of("resumeTd"))
+                .containsEntry("candidateStates[]", List.of("2", "5"))
+                .containsEntry("availabilityTypes[]", List.of("9"))
+                .containsEntry("contractTypes[]", List.of("1"))
+                .containsEntry("experiences[]", List.of("3"))
+                .containsEntry("expertiseAreas[]", List.of("backend", "microservices"))
+                .containsEntry("activityAreas[]", List.of("profilsdeveloppeur"))
+                .containsEntry("mobilityAreas", List.of("idf"))
+                .containsEntry("languages[]", List.of("anglais|courant"))
+                .containsEntry("tools[]", List.of("JAVA"))
+                .containsEntry("evaluations[]", List.of("4"))
+                .containsEntry("sources[]", List.of("4"))
+                .containsEntry("shields[]", List.of("complete"))
+                .containsEntry("location", List.of("Paris"))
+                .containsEntry("geoDistance", List.of("50"))
+                .containsEntry("period", List.of("updated"))
+                .containsEntry("startDate", List.of("2026-01-01"))
+                .containsEntry("endDate", List.of("2026-06-01"))
                 .containsEntry("page", List.of("1"))
-                .containsEntry("numberPerPage", List.of("25"));
+                .containsEntry("maxResults", List.of("25"))
+                .containsEntry("sort[]", List.of("updateDate"))
+                .containsEntry("order", List.of("desc"))
+                .containsEntry("columns[]",
+                        List.of("name", "title", "state", "availability", "expertiseAreas", "experience"))
+                .doesNotContainKeys("candidateTypes[]", "coordinates", "periodDynamic");
     }
 
     @Test
     void givenSearchRequestWithNullFilters_whenSearchCandidates_thenOmitsNullParams() {
         CandidateSearchRequestDto request = new CandidateSearchRequestDto(
-                "java", null, null, null, null, null, null, null,
-                null, null, null, null, null, null, 1, 25
+                "java", null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null,
+                null, null, 1, 25, null, null, null
         );
         when(client.get(eq("/candidates"), any(Consumer.class), any(ParameterizedTypeReference.class)))
                 .thenReturn(searchEnvelope());
@@ -137,7 +148,7 @@ class BoondManagerCandidateServiceTest {
         UriComponentsBuilder builder = UriComponentsBuilder.newInstance();
         queryCaptor.getValue().accept(builder);
         assertThat(builder.build().getQueryParams().keySet())
-                .containsExactlyInAnyOrder("keywords", "page", "numberPerPage");
+                .containsExactlyInAnyOrder("keywords", "page", "maxResults");
     }
 
     @Test
@@ -158,12 +169,13 @@ class BoondManagerCandidateServiceTest {
 
     @Test
     void givenCandidateId_whenGetCandidateTechnicalDocument_thenCallsTechnicalDataPath() {
-        when(client.get(eq("/technical-datas/42"), any(ParameterizedTypeReference.class)))
+        when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
                 .thenReturn(technicalDocumentEnvelope());
 
         TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
 
-        assertThat(response.id()).isEqualTo(101);
+        assertThat(response.id()).isEqualTo(42);
+        assertThat(response.tdId()).isEqualTo("101");
         assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
         assertThat(response.tools())
                 .extracting(TechnicalDocumentDto.ToolProficiency::tool,
@@ -190,8 +202,8 @@ class BoondManagerCandidateServiceTest {
     @Test
     void givenTechnicalDocumentNotFound_whenGetCandidateTechnicalDocument_thenMapsToCandidateNotFoundException() {
         BoondApiException backend = new BoondApiException(
-                "missing", HttpStatus.NOT_FOUND, "/technical-datas/404", null);
-        when(client.get(eq("/technical-datas/404"), any(ParameterizedTypeReference.class)))
+                "missing", HttpStatus.NOT_FOUND, "/candidates/404/technical-data", null);
+        when(client.get(eq("/candidates/404/technical-data"), any(ParameterizedTypeReference.class)))
                 .thenThrow(backend);
 
         assertThatThrownBy(() -> service().getCandidateTechnicalDocument(404))
@@ -264,13 +276,12 @@ class BoondManagerCandidateServiceTest {
 
     private BoondSingleEnvelope<BoondTechnicalDocumentAttributes> technicalDocumentEnvelope() {
         BoondTechnicalDocumentAttributes attrs = new BoondTechnicalDocumentAttributes(
-                "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
+                "101", "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
                 3, "bac5",
                 List.of("Engineering school"), "Java, Spring, PostgreSQL",
                 List.of("backend"), List.of("finance"),
                 List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
-                List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")),
-                Boolean.FALSE, "2026-01-01");
-        return new BoondSingleEnvelope<>(new BoondData<>("101", "technicaldata", attrs));
+                List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")));
+        return new BoondSingleEnvelope<>(new BoondData<>("42", "candidate", attrs));
     }
 }

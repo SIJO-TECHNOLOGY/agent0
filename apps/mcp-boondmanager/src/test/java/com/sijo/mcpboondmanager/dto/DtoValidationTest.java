@@ -45,22 +45,9 @@ class DtoValidationTest {
     @Test
     void givenOptionalSearchRequestFieldsAreNull_whenValidated_thenNoViolations() {
         CandidateSearchRequestDto request = new CandidateSearchRequestDto(
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null
+                null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null
         );
 
         Set<ConstraintViolation<CandidateSearchRequestDto>> violations = validator.validate(request);
@@ -83,16 +70,16 @@ class DtoValidationTest {
 
         Set<ConstraintViolation<CandidateSearchRequestDto>> violations = validator.validate(request);
 
-        assertThat(propertyPaths(violations)).containsExactly("numberPerPage");
+        assertThat(propertyPaths(violations)).containsExactly("maxResults");
     }
 
     @Test
     void givenLimitAboveMaximum_whenValidated_thenLimitViolationIsReturned() {
-        CandidateSearchRequestDto request = searchRequestWithPageAndLimit(1, 101);
+        CandidateSearchRequestDto request = searchRequestWithPageAndLimit(1, 501);
 
         Set<ConstraintViolation<CandidateSearchRequestDto>> violations = validator.validate(request);
 
-        assertThat(propertyPaths(violations)).containsExactly("numberPerPage");
+        assertThat(propertyPaths(violations)).containsExactly("maxResults");
     }
 
     @Test
@@ -130,25 +117,36 @@ class DtoValidationTest {
         assertThat(validator.validate(TestFixtures.dictionary())).isEmpty();
     }
 
-    private CandidateSearchRequestDto searchRequestWithPageAndLimit(Integer page, Integer numberPerPage) {
+    private CandidateSearchRequestDto searchRequestWithPageAndLimit(Integer page, Integer maxResults) {
         CandidateSearchRequestDto request = TestFixtures.searchRequest();
         return new CandidateSearchRequestDto(
                 request.keywords(),
-                request.state(),
-                request.availabilityType(),
-                request.availabilityDate(),
-                request.contractType(),
-                request.experience(),
-                request.training(),
+                request.keywordsType(),
+                request.candidateStates(),
+                request.candidateTypes(),
+                request.availabilityTypes(),
+                request.contractTypes(),
+                request.experiences(),
                 request.expertiseAreas(),
                 request.activityAreas(),
-                request.mobilityArea(),
-                request.minSalary(),
-                request.maxSalary(),
-                request.minTjm(),
-                request.maxTjm(),
+                request.mobilityAreas(),
+                request.languages(),
+                request.tools(),
+                request.evaluations(),
+                request.sources(),
+                request.shields(),
+                request.location(),
+                request.coordinates(),
+                request.geoDistance(),
+                request.period(),
+                request.startDate(),
+                request.endDate(),
+                request.periodDynamic(),
                 page,
-                numberPerPage
+                maxResults,
+                request.sort(),
+                request.order(),
+                request.columns()
         );
     }
 

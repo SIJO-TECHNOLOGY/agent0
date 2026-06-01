@@ -21,21 +21,32 @@ public final class TestFixtures {
     public static CandidateSearchRequestDto searchRequest() {
         return new CandidateSearchRequestDto(
                 "java",
-                1,
-                9,
-                "2026-06-01",
-                2,
-                3,
-                "bac5",
-                "backend|microservices",
-                "finance|industry",
+                "resumeTd",
+                List.of(2, 5),
+                null,
+                List.of(9),
+                List.of(1),
+                List.of(3),
+                List.of("backend", "microservices"),
+                List.of("profilsdeveloppeur"),
                 "idf",
-                40_000.0,
-                60_000.0,
-                500.0,
-                700.0,
+                List.of("anglais|courant"),
+                List.of("JAVA"),
+                List.of("4"),
+                List.of("4"),
+                List.of("complete"),
+                "Paris",
+                null,
+                50,
+                "updated",
+                "2026-01-01",
+                "2026-06-01",
+                null,
                 1,
-                25
+                25,
+                List.of("updateDate"),
+                "desc",
+                List.of("name", "title", "state", "availability", "expertiseAreas", "experience")
         );
     }
 
@@ -106,7 +117,8 @@ public final class TestFixtures {
 
     public static TechnicalDocumentDto technicalDocument() {
         return new TechnicalDocumentDto(
-                101,
+                42,
+                "101",
                 "Senior Java Engineer",
                 "Detailed technical profile",
                 "Backend engineer",
@@ -117,9 +129,7 @@ public final class TestFixtures {
                 List.of("backend"),
                 List.of("finance"),
                 List.of(new TechnicalDocumentDto.ToolProficiency("IntelliJ", 5)),
-                List.of(new TechnicalDocumentDto.LanguageProficiency("en", "fluent")),
-                Boolean.FALSE,
-                "2026-01-01"
+                List.of(new TechnicalDocumentDto.LanguageProficiency("en", "fluent"))
         );
     }
 

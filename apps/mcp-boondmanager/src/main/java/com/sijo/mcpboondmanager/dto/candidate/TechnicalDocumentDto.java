@@ -4,9 +4,16 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
 
+/**
+ * Candidate technical document (CV / skills profile).
+ *
+ * <p>{@code id} is the id of the candidate the document belongs to (the endpoint is candidate
+ * scoped); {@code tdId} is the technical document's own identifier.
+ */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record TechnicalDocumentDto(
         Integer id,
+        String tdId,
         String title,
         String description,
         String summary,
@@ -17,9 +24,7 @@ public record TechnicalDocumentDto(
         List<String> expertiseAreas,
         List<String> activityAreas,
         List<ToolProficiency> tools,
-        List<LanguageProficiency> languages,
-        Boolean isReferent,
-        String updateDate
+        List<LanguageProficiency> languages
 ) {
 
     /**

@@ -34,7 +34,6 @@ public class BoondManagerCandidateService {
 
     static final String DICTIONARY_PATH = "/application/dictionary";
     static final String CANDIDATES_PATH = "/candidates";
-    static final String TECHNICAL_PATH = "/technical-datas";
 
     private static final ParameterizedTypeReference<BoondDictionaryEnvelope> DICTIONARY_TYPE =
             new ParameterizedTypeReference<>() {};
@@ -63,22 +62,33 @@ public class BoondManagerCandidateService {
 
     public CandidateSearchResponseDto searchCandidates(CandidateSearchRequestDto request) {
         Consumer<UriBuilder> queryParams = builder -> {
-            addIfPresent(builder, "keywords", request.keywords());
-            addIfPresent(builder, "state", request.state());
-            addIfPresent(builder, "availabilityType", request.availabilityType());
-            addIfPresent(builder, "availabilityDate", request.availabilityDate());
-            addIfPresent(builder, "contractType", request.contractType());
-            addIfPresent(builder, "experience", request.experience());
-            addIfPresent(builder, "training", request.training());
-            addIfPresent(builder, "expertiseAreas", request.expertiseAreas());
-            addIfPresent(builder, "activityAreas", request.activityAreas());
-            addIfPresent(builder, "mobilityArea", request.mobilityArea());
-            addIfPresent(builder, "minSalary", request.minSalary());
-            addIfPresent(builder, "maxSalary", request.maxSalary());
-            addIfPresent(builder, "minTjm", request.minTjm());
-            addIfPresent(builder, "maxTjm", request.maxTjm());
-            addIfPresent(builder, "page", request.page());
-            addIfPresent(builder, "numberPerPage", request.numberPerPage());
+            addScalar(builder, "keywords", request.keywords());
+            addScalar(builder, "keywordsType", request.keywordsType());
+            addList(builder, "candidateStates", request.candidateStates());
+            addList(builder, "candidateTypes", request.candidateTypes());
+            addList(builder, "availabilityTypes", request.availabilityTypes());
+            addList(builder, "contractTypes", request.contractTypes());
+            addList(builder, "experiences", request.experiences());
+            addList(builder, "expertiseAreas", request.expertiseAreas());
+            addList(builder, "activityAreas", request.activityAreas());
+            addScalar(builder, "mobilityAreas", request.mobilityAreas());
+            addList(builder, "languages", request.languages());
+            addList(builder, "tools", request.tools());
+            addList(builder, "evaluations", request.evaluations());
+            addList(builder, "sources", request.sources());
+            addList(builder, "shields", request.shields());
+            addScalar(builder, "location", request.location());
+            addScalar(builder, "coordinates", request.coordinates());
+            addScalar(builder, "geoDistance", request.geoDistance());
+            addScalar(builder, "period", request.period());
+            addScalar(builder, "startDate", request.startDate());
+            addScalar(builder, "endDate", request.endDate());
+            addScalar(builder, "periodDynamic", request.periodDynamic());
+            addScalar(builder, "page", request.page());
+            addScalar(builder, "maxResults", request.maxResults());
+            addList(builder, "sort", request.sort());
+            addScalar(builder, "order", request.order());
+            addList(builder, "columns", request.columns());
         };
         BoondListEnvelope<BoondCandidateSummaryAttributes> envelope =
                 client.get(CANDIDATES_PATH, queryParams, SEARCH_TYPE);
@@ -100,7 +110,7 @@ public class BoondManagerCandidateService {
     }
 
     public TechnicalDocumentDto getCandidateTechnicalDocument(Integer candidateId) {
-        String path = TECHNICAL_PATH + "/" + candidateId;
+        String path = CANDIDATES_PATH + "/" + candidateId + "/technical-data";
         try {
             BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope =
                     client.get(path, TD_TYPE);
@@ -113,9 +123,27 @@ public class BoondManagerCandidateService {
         }
     }
 
-    private static void addIfPresent(UriBuilder builder, String name, Object value) {
+    /**
+     * Appends a scalar query parameter ({@code name=value}); skips null values.
+     */
+    private static void addScalar(UriBuilder builder, String name, Object value) {
         if (value != null) {
             builder.queryParam(name, value);
+        }
+    }
+
+    /**
+     * Appends a repeatable query parameter as multiple {@code name[]=value} entries (BoondManager
+     * unions multiple values). Skips null/empty lists and null elements — never sends an empty list.
+     */
+    private static void addList(UriBuilder builder, String name, List<?> values) {
+        if (values == null || values.isEmpty()) {
+            return;
+        }
+        for (Object value : values) {
+            if (value != null) {
+                builder.queryParam(name + "[]", value);
+            }
         }
     }
 
@@ -217,6 +245,7 @@ public class BoondManagerCandidateService {
         BoondTechnicalDocumentAttributes a = data.attributes();
         return new TechnicalDocumentDto(
                 parseId(data.id()),
+                a.tdId(),
                 a.title(),
                 a.description(),
                 a.summary(),
@@ -227,9 +256,7 @@ public class BoondManagerCandidateService {
                 a.expertiseAreas(),
                 a.activityAreas(),
                 toToolProficiencies(a.tools()),
-                toLanguageProficiencies(a.languages()),
-                a.isReferent(),
-                a.updateDate()
+                toLanguageProficiencies(a.languages())
         );
     }
 

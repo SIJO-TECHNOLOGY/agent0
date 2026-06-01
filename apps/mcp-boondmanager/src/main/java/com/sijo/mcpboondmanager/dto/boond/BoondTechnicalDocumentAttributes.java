@@ -5,15 +5,22 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.List;
 
 /**
- * Attributes returned under {@code data.attributes} by {@code /technical-datas/{id}}.
+ * Attributes returned under {@code data.attributes} by the candidate-scoped endpoint
+ * {@code /candidates/{candidateId}/technical-data}.
+ *
+ * <p>This endpoint is keyed by the <strong>candidate</strong> id (so {@code data.id} is the
+ * candidate id) and returns that candidate's own technical document. The technical document's own
+ * identifier is carried in the {@code tdId} attribute. (Note: the sibling collection endpoint
+ * {@code /technical-datas/{id}} is keyed by the technical-document id instead, so it must not be
+ * called with a candidate id.)
  *
  * <p>BoondManager returns {@code diplomas}, {@code expertiseAreas} and {@code activityAreas} as JSON
  * arrays of strings, and {@code tools}/{@code languages} as arrays of objects (not delimited
- * strings), so they are modeled as typed lists. The endpoint does not expose a creation date or a
- * back-reference to the candidate id.
+ * strings), so they are modeled as typed lists.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record BoondTechnicalDocumentAttributes(
+        String tdId,
         String title,
         String description,
         String summary,
@@ -24,9 +31,7 @@ public record BoondTechnicalDocumentAttributes(
         List<String> expertiseAreas,
         List<String> activityAreas,
         List<Tool> tools,
-        List<Language> languages,
-        Boolean isReferent,
-        String updateDate
+        List<Language> languages
 ) {
 
     /**

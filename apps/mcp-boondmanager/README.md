@@ -25,16 +25,18 @@ Every interaction with BoondManager — authentication, query construction, DTO 
 The system is split into two layers with strict boundaries.
 
 ```
-┌────────────────────────────┐     ┌─────────────────────────────┐     ┌──────────────────────┐
+┌─────────────────────────────┐     ┌─────────────────────────────┐     ┌──────────────────────┐
 │      Python Backend         │     │       MCP Server            │     │   BoondManager APIs  │
 │   (FastAPI + LangGraph)     │     │  (Java 21 / Spring Boot)    │     │                      │
 │                             │ MCP │                             │HTTPS│                      │
-│  • AI orchestration         ├────►│  • MCP tool exposure        ├────►│  • /candidates       │
-│  • LangGraph workflows      │     │  • BoondManager abstraction │     │  • /candidates/{id}  │
-│  • Ranking & scoring        │◄────┤  • Streamable HTTP transport│◄────┤  • /application/...  │
-│  • Reasoning / BI           │     │  • Validation & DTO mapping │     │    dictionary        │
-│  • Conversation memory      │     │  • Correlation ID propagation│    │                      │
-└────────────────────────────┘     └─────────────────────────────┘     └──────────────────────┘
+│  • AI orchestration         ├────►│  • MCP tool exposure        ├────►│  • /application/     │
+│  • LangGraph workflows      │     │  • BoondManager abstraction │     │    dictionary        │
+│  • Ranking & scoring        │◄────┤  • Streamable HTTP transport│◄────┤  • /candidates       │
+│  • Reasoning / BI           │     │  • Validation & DTO mapping │     │  • /candidates/{id}/ │
+│  • Conversation memory      │     │  • Correlation ID propagation│    │    information       │
+│                             │     │                             │     │  • /candidates/{id}/ │
+│                             │     │                             │     │    technical-data    │
+└─────────────────────────────┘     └─────────────────────────────┘     └──────────────────────┘
 ```
 
 ### The MCP Server owns
@@ -78,36 +80,74 @@ getDictionary → searchCandidates → getCandidateDetail → getCandidateTechni
 | Tool | Class | Description |
 |---|---|---|
 | `getDictionary` | `BoondDictionaryTool` | Retrieves all BoondManager reference data (diploma levels, contract types, availability types, experience levels, expertise areas, activity sectors, tools, languages, candidate states). Must be called before `searchCandidates` to resolve human-readable values to their IDs. |
-| `searchCandidates` | `CandidateSearchTool` | Searches candidates with optional filters (keywords, state, availability, contract, experience, training, expertise/activity areas, mobility, salary/TJM ranges, pagination). Returns a paginated list of profiles. |
-| `getCandidateDetail` | `CandidateDetailTool` | Retrieves the complete profile of a candidate by ID: contact details, pipeline state, contract preferences, salary/TJM expectations, mobility, recruitment metadata. Call after `searchCandidates`. |
-| `getCandidateTechnicalDocument` | `CandidateTechnicalDocTool` | Retrieves the technical document (CV / skills profile) of a candidate: skills text, expertise domains, diplomas, experience level, tools with proficiency (1–5), languages with levels. Call after `getCandidateDetail` for deep skills analysis. |
+| `searchCandidates` | `CandidateSearchTool` | Searches candidates with a rich set of optional filters: keyword search (with `keywordsType`), candidate states/types, availability/contract/experience, expertise & activity areas, mobility, languages, tools, evaluations, sources, profile completeness (`shields`), geographic search (location/coordinates + radius), date-range filters, sorting, and response-column selection. Returns a paginated list of profiles. See the [parameters](#searchcandidates--parameters) below. |
+| `getCandidateDetail` | `CandidateDetailTool` | Retrieves the detailed information profile of a candidate by ID (`GET /candidates/{id}/information`): contact details, civility, date of birth, postal address, pipeline state, desired contract type, availability, mobility zones, sourcing origin, global evaluation, information notes, and creation/update metadata. Salary/TJM are not exposed by BoondManager. Call after `searchCandidates`. |
+| `getCandidateTechnicalDocument` | `CandidateTechnicalDocTool` | Retrieves the technical document (CV / skills profile) of a candidate (`GET /candidates/{id}/technical-data`): title, skills text, experience level, training/diploma level, diplomas, expertise domains, activity sectors, tools with proficiency level, languages with level, and summary. `id` is the candidate id, `tdId` the document id. Call after `getCandidateDetail` for deep skills analysis. |
 
-### `searchCandidates` — Filter Parameters
+### `searchCandidates` — Parameters
 
-All parameters are optional. Null parameters are never sent as query parameters to BoondManager.
+All parameters are optional. Repeatable parameters are typed as `List<…>` and serialized as multiple
+`name[]=value` query parameters (BoondManager **unions** the values); null values and empty lists are
+never sent.
+
+**Keyword search**
 
 | Parameter | Type | Description |
 |---|---|---|
-| `keywords` | `String` | Full-text search. Operators: `+term`, `"exact phrase"`. Covers CV, TD, name, title, email, phone. |
-| `state` | `Integer` | Candidate state ID — from `getDictionary: setting.state.candidate`. |
-| `availabilityType` | `Integer` | Availability type ID — from `getDictionary: setting.availability`. `9` = available after date. |
-| `availabilityDate` | `String` | ISO 8601 (`yyyy-MM-dd`). Used with `availabilityType = 9`. |
-| `contractType` | `Integer` | Contract type ID — from `getDictionary: setting.typeOf.contract`. |
-| `experience` | `Integer` | Experience level ID — from `getDictionary: setting.experience`. |
-| `training` | `String` | Diploma level ID — from `getDictionary: setting.training`. |
-| `expertiseAreas` | `String` | Pipe-separated expertise area IDs. Example: `"backend\|microservices"`. |
-| `activityAreas` | `String` | Pipe-separated activity sector IDs. Example: `"finance\|industry"`. |
-| `mobilityArea` | `String` | Mobility zone ID — from `getDictionary: setting.mobilityArea`. |
-| `minSalary` / `maxSalary` | `Double` | Salary range filter (€/year). |
-| `minTjm` / `maxTjm` | `Double` | Daily rate range filter (€/day). |
-| `page` / `numberPerPage` | `Integer` | Pagination. Default: `page=1`, `numberPerPage=25`, `max=100`. |
+| `keywords` | `String` | Full-text query. Operators: `+term`, `"exact phrase"`. The field searched is set by `keywordsType`. |
+| `keywordsType` | `String` | Field targeted by `keywords`: `resumeTd` (default), `lastName`, `firstName`, `fullName`, `strictFullName`, `emails`, `title`, `titleSkills`, `phones`, `resume`, `td`. |
+
+**Reference filters** (repeatable, values unioned)
+
+| Parameter | Type | Dictionary key |
+|---|---|---|
+| `candidateStates` | `List<Integer>` | `setting.state.candidate` |
+| `candidateTypes` | `List<Integer>` | `setting.typeOf.resource` |
+| `availabilityTypes` | `List<Integer>` | `setting.availability` |
+| `contractTypes` | `List<Integer>` | `setting.typeOf.contract` |
+| `experiences` | `List<Integer>` | `setting.experience` |
+| `expertiseAreas` | `List<String>` | `setting.expertiseArea` |
+| `activityAreas` | `List<String>` | nested option IDs under `setting.activityArea[].option` |
+| `mobilityAreas` | `String` | nested option ID under `setting.mobilityArea[].option` |
+| `languages` | `List<String>` | `"<spokenId>\|<levelId>"` from `setting.languageSpoken` + `setting.languageLevel` |
+| `tools` | `List<String>` | `setting.tool`. Add `"#AND#"` as the first element to require ALL listed tools |
+| `evaluations` | `List<String>` | `setting.evaluation` |
+| `sources` | `List<String>` | `setting.source` |
+| `shields` | `List<String>` | profile completeness: `uncomplete`, `minimum`, `complete` |
+
+**Geographic search**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `location` | `String` | Free-text address to geocode (e.g. `"Paris"`). Requires `geoDistance`. |
+| `coordinates` | `String` | `"latitude,longitude"` (e.g. `"48.8566,2.3522"`). Requires `geoDistance`. |
+| `geoDistance` | `Integer` | Search radius in km (5–200). Required with `location`/`coordinates`. |
+
+**Date filters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `period` | `String` | Date field to filter: `created`, `available`, `updated`, `noAction`, `withActions`. |
+| `startDate` | `String` | ISO date `yyyy-MM-dd`. Used with `period`. |
+| `endDate` | `String` | ISO date `yyyy-MM-dd`. Used with `period`. |
+| `periodDynamic` | `String` | Relative preset instead of start/end, e.g. `thisMonth`, `lastMonth`, `nextMonth`, `thisYear`. |
+
+**Pagination, sorting & response shaping**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `page` | `Integer` | Page number (1-based). Default: `1`. |
+| `maxResults` | `Integer` | Results per page (1–500). Default: `30`. |
+| `sort` | `List<String>` | Sort field(s): `lastName`, `firstName`, `title`, `availability`, `availabilityType`, `numberOfActivePositionings`, `mainManager.lastName`, `updateDate`, `state`, `experience`, `creationDate`, `evaluation`, `hrManager.lastName`, `source`, `distance`. |
+| `order` | `String` | Sort direction: `asc` or `desc`. |
+| `columns` | `List<String>` | Fields the API should include per candidate: `name`, `title`, `state`, `activePositionings`, `availability`, `mobilityAreas`, `details`, `updated`, `mainManager`, `resume`, `hrManager`, `expertiseAreas`, `creationDate`, `lastActionDate`, `source`, `diplomas`, `activityAreas`, `globalEvaluation`, `evaluations`, `experience`, `references`, `languages`, `tools`. |
 
 ## Package Structure
 
 ```
 com.sijo.mcpboondmanager
-├── client          ← WebClient beans (BoondManager + Python backend)
-├── config          ← @ConfigurationProperties, MCP server & WebClient config
+├── client          ← BoondManager HTTP client wrapper (BoondManagerClient)
+├── config          ← @ConfigurationProperties (BoondManagerProperties), MCP server & WebClient config
 ├── dto             ← explicit request/response records
 │   ├── boond       ← raw BoondManager API envelopes & attributes
 │   ├── candidate   ← normalized candidate / technical-document DTOs
@@ -173,20 +213,20 @@ The MCP server exposes the **Streamable HTTP** transport on the `/mcp` endpoint.
 ### Prerequisites
 
 * **Java 21** (JDK 21+)
-* **Maven** (or the bundled Maven Wrapper)
+* **Maven 3.9+**
 * A valid **BoondManager JWT client token**
 
 ### Build
 
 ```bash
-./mvnw clean package
+mvn clean package
 ```
 
 ### Run locally
 
 ```bash
 export BOONDMANAGER_JWT_CLIENT="<your-jwt-client-token>"
-./mvnw spring-boot:run
+mvn spring-boot:run
 ```
 
 The MCP endpoint is then available at `http://localhost:8080/mcp`.
@@ -207,7 +247,7 @@ Testing philosophy:
 * Do **not** write tests that depend on a live Python backend.
 
 ```bash
-./mvnw test
+mvn test
 ```
 
 ## Contributing / Implementation Rules
@@ -224,5 +264,4 @@ When working in this project, follow these rules:
 * **Correlation ID propagation** — propagate the correlation ID through all tool executions (see `infrastructure.CorrelationIdFilter` / `MdcKeys`).
 * **Deterministic & stateless tools** — delegate all non-deterministic AI reasoning, ranking, and orchestration to the Python backend.
 * **Configuration over hardcoding** — all external values via `application.yaml` + `@ConfigurationProperties`.
-```
 

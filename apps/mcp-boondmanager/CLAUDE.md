@@ -32,9 +32,12 @@ The AI assistant helps recruiters:
 ## Required Stack
 
 * Java 21
-* Spring Boot 4.x
-* Spring AI
-* Spring WebFlux (WebClient)
+* Spring Boot 4.0.6 (parent)
+* Spring AI 1.1.7 — MCP server via `spring-ai-starter-mcp-server-webmvc`, exposed over Streamable HTTP
+* Spring WebFlux `WebClient` — outbound HTTP to the BoondManager API
+* Spring Boot Validation (Jakarta Bean Validation) — config & DTO constraints
+* Lombok (compile-time only)
+* Build tool: Maven (Spring Boot parent). Tests: `spring-boot-starter-test`, `reactor-test`
 * Constructor injection only
 * Records and immutable objects preferred
 
@@ -106,32 +109,70 @@ Do not implement:
 | Tool | Class | Description |
 |---|---|---|
 | `getDictionary` | `BoondDictionaryTool` | Retrieves all BoondManager reference data (diploma levels, contract types, availability types, experience levels, expertise areas, activity sectors, tools, languages, candidate states). Must be called before `searchCandidates` to resolve human-readable values to their IDs. |
-| `searchCandidates` | `CandidateSearchTool` | Searches candidates with optional filters: keywords (full-text), state, availabilityType, availabilityDate, contractType, experience, training, expertiseAreas, activityAreas, mobilityArea, salary range, TJM range, pagination. Returns a paginated list of profiles. |
-| `getCandidateDetail` | `CandidateDetailTool` | Retrieves the complete profile of a candidate by ID: contact details, pipeline state, contract preferences, salary/TJM expectations, mobility, recruitment metadata. Call after `searchCandidates`. |
-| `getCandidateTechnicalDocument` | `CandidateTechnicalDocTool` | Retrieves the technical document (CV/skills profile) of a candidate: skills text, expertise domains, diplomas, experience level, tools with proficiency (1–5), languages with levels. Call after `getCandidateDetail` for deep skills analysis. |
+| `searchCandidates` | `CandidateSearchTool` | Searches candidates with a rich set of optional filters: keyword search (with `keywordsType`), candidate states/types, availability/contract/experience, expertise & activity areas, mobility, languages, tools, evaluations, sources, profile completeness (`shields`), geographic search (location/coordinates + radius), date-range filters, sorting, and response-column selection. Returns a paginated list of profiles. See the parameter table below. |
+| `getCandidateDetail` | `CandidateDetailTool` | Retrieves the detailed information profile of a candidate by ID (BoondManager `GET /candidates/{id}/information`): contact details (emails, phones, fax), civility, date of birth, postal address, pipeline state, desired contract type, availability, mobility zones, sourcing origin, global evaluation, information notes, and creation/update metadata. BoondManager does not expose salary/TJM on this endpoint. Call after `searchCandidates`. |
+| `getCandidateTechnicalDocument` | `CandidateTechnicalDocTool` | Retrieves the technical document (CV / skills profile) of a candidate (BoondManager `GET /candidates/{id}/technical-data`): title, skills text, experience level, training/diploma level, diplomas, expertise domains, activity sectors, tools with proficiency level, languages with level, and summary. The `id` field is the candidate id and `tdId` is the technical-document id. Call after `getCandidateDetail` for deep skills analysis. |
 
 **Call order enforced by descriptions:**
 `getDictionary` → `searchCandidates` → `getCandidateDetail` → `getCandidateTechnicalDocument`
 
-#### `searchCandidates` — Filter Parameters
+#### `searchCandidates` — Parameters
+
+All parameters are optional. Repeatable parameters are typed as `List<…>` and serialized as multiple
+`name[]=value` query params (BoondManager **unions** the values); null values and empty lists are never
+sent.
+
+**Keyword search**
 
 | Parameter | Type | Description |
 |---|---|---|
-| `keywords` | `String` | Full-text search. Operators: `+term`, `"exact phrase"`. Covers CV, TD, name, title, email, phone. |
-| `state` | `Integer` | Candidate state ID — from `getDictionary: setting.state.candidate` |
-| `availabilityType` | `Integer` | Availability type ID — from `getDictionary: setting.availability`. `9` = available after date. |
-| `availabilityDate` | `String` | ISO 8601 (`yyyy-MM-dd`). Used with `availabilityType = 9`. |
-| `contractType` | `Integer` | Contract type ID — from `getDictionary: setting.typeOf.contract` |
-| `experience` | `Integer` | Experience level ID — from `getDictionary: setting.experience` |
-| `training` | `String` | Diploma level ID — from `getDictionary: setting.training` |
-| `expertiseAreas` | `String` | Pipe-separated expertise area IDs. Example: `"backend\|microservices"` |
-| `activityAreas` | `String` | Pipe-separated activity sector IDs. Example: `"finance\|industry"` |
-| `mobilityArea` | `String` | Mobility zone ID — from `getDictionary: setting.mobilityArea` |
-| `minSalary` / `maxSalary` | `Double` | Salary range filter (€/year) |
-| `minTjm` / `maxTjm` | `Double` | Daily rate range filter (€/day) |
-| `page` / `numberPerPage` | `Integer` | Pagination. Default: page=1, numberPerPage=25, max=100 |
+| `keywords` | `String` | Full-text query. Operators: `+term`, `"exact phrase"`. The field searched is set by `keywordsType`. |
+| `keywordsType` | `String` | Field targeted by `keywords`: `resumeTd` (default), `lastName`, `firstName`, `fullName`, `strictFullName`, `emails`, `title`, `titleSkills`, `phones`, `resume`, `td`. |
 
-All parameters are optional. Null parameters are never sent as query params to BoondManager.
+**Reference filters** (repeatable, values unioned)
+
+| Parameter | Type | Dictionary key |
+|---|---|---|
+| `candidateStates` | `List<Integer>` | `setting.state.candidate` |
+| `candidateTypes` | `List<Integer>` | `setting.typeOf.resource` |
+| `availabilityTypes` | `List<Integer>` | `setting.availability` |
+| `contractTypes` | `List<Integer>` | `setting.typeOf.contract` |
+| `experiences` | `List<Integer>` | `setting.experience` |
+| `expertiseAreas` | `List<String>` | `setting.expertiseArea` |
+| `activityAreas` | `List<String>` | nested option IDs under `setting.activityArea[].option` |
+| `mobilityAreas` | `String` | nested option ID under `setting.mobilityArea[].option` |
+| `languages` | `List<String>` | `"<spokenId>\|<levelId>"` from `setting.languageSpoken` + `setting.languageLevel` |
+| `tools` | `List<String>` | `setting.tool`. Add `"#AND#"` as the first element to require ALL listed tools |
+| `evaluations` | `List<String>` | `setting.evaluation` |
+| `sources` | `List<String>` | `setting.source` |
+| `shields` | `List<String>` | profile completeness: `uncomplete`, `minimum`, `complete` |
+
+**Geographic search**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `location` | `String` | Free-text address to geocode (e.g. `"Paris"`). Requires `geoDistance`. |
+| `coordinates` | `String` | `"latitude,longitude"` (e.g. `"48.8566,2.3522"`). Requires `geoDistance`. |
+| `geoDistance` | `Integer` | Search radius in km (5–200). Required with `location`/`coordinates`. |
+
+**Date filters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `period` | `String` | Date field to filter: `created`, `available`, `updated`, `noAction`, `withActions`. |
+| `startDate` | `String` | ISO date `yyyy-MM-dd`. Used with `period`. |
+| `endDate` | `String` | ISO date `yyyy-MM-dd`. Used with `period`. |
+| `periodDynamic` | `String` | Relative preset instead of start/end, e.g. `thisMonth`, `lastMonth`, `nextMonth`, `thisYear`. |
+
+**Pagination, sorting & response shaping**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `page` | `Integer` | Page number (1-based). Default: `1`. |
+| `maxResults` | `Integer` | Results per page (1–500). Default: `30`. |
+| `sort` | `List<String>` | Sort field(s): `lastName`, `firstName`, `title`, `availability`, `availabilityType`, `numberOfActivePositionings`, `mainManager.lastName`, `updateDate`, `state`, `experience`, `creationDate`, `evaluation`, `hrManager.lastName`, `source`, `distance`. |
+| `order` | `String` | Sort direction: `asc` or `desc`. |
+| `columns` | `List<String>` | Fields the API should include per candidate: `name`, `title`, `state`, `activePositionings`, `availability`, `mobilityAreas`, `details`, `updated`, `mainManager`, `resume`, `hrManager`, `expertiseAreas`, `creationDate`, `lastActionDate`, `source`, `diplomas`, `activityAreas`, `globalEvaluation`, `evaluations`, `experience`, `references`, `languages`, `tools`. |
 
 ---
 ## Implementation Rules
@@ -154,13 +195,17 @@ All parameters are optional. Null parameters are never sent as query params to B
 
 ```
 com.sijo.mcpboondmanager
-├── client         ← WebClient beans (BoondManager + Python backend)
-├── config         ← @ConfigurationProperties, Spring config
+├── client         ← BoondManager HTTP client wrapper (BoondManagerClient)
+├── config         ← @ConfigurationProperties (BoondManagerProperties), WebClient & MCP server config
 ├── dto            ← explicit request/response records
-├── exception      ← typed exceptions, global handler
-├── infrastructure ← low-level HTTP adapters
+│   ├── boond      ← raw BoondManager API envelopes & attributes
+│   ├── candidate  ← normalized candidate / technical-document DTOs
+│   ├── common     ← shared DTOs (pagination metadata)
+│   └── dictionary ← reference-data DTOs
+├── exception      ← typed exceptions (Boond API, candidate-not-found, dictionary, external service)
+├── infrastructure ← low-level HTTP adapters (correlation ID filter, MDC keys)
 ├── service        ← BoondManager service layer
-└── tools          ← @Tool-annotated classes
+└── tools          ← @Tool-annotated classes (MCP tool exposure)
 ```
 
 ---
