@@ -2,6 +2,8 @@ package com.sijo.mcpboondmanager.dto.candidate;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import java.util.List;
+
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record CandidateSummaryDto(
         Integer id,
@@ -9,16 +11,18 @@ public record CandidateSummaryDto(
         String lastName,
         String email,
         Integer state,
-        Integer availabilityType,
-        String availabilityDate,
+        String availability,
         Integer contractType,
-        String mobilityArea,
+        List<String> mobilityAreas,
         String city,
         String country,
-        Double minSalary,
-        Double maxSalary,
-        Double minTjm,
-        Double maxTjm,
-        TechnicalDocumentSummaryDto technicalDocument
+        String title,
+        Integer experience,
+        String skills,
+        List<String> diplomas,
+        List<String> expertiseAreas,
+        List<String> activityAreas,
+        List<TechnicalDocumentDto.ToolProficiency> tools,
+        List<TechnicalDocumentDto.LanguageProficiency> languages
 ) {
 }

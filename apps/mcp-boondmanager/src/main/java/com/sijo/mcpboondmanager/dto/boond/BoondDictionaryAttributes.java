@@ -15,7 +15,7 @@ public record BoondDictionaryAttributes(
         List<DictionaryEntryDto> experience,
         List<DictionaryEntryDto> training,
         List<DictionaryEntryDto> expertiseArea,
-        List<DictionaryEntryDto> activityArea,
+        List<DictionaryOptionEntryDto> activityArea,
         List<DictionaryEntryDto> tool,
         List<DictionaryEntryDto> languageSpoken,
         List<DictionaryEntryDto> languageLevel,

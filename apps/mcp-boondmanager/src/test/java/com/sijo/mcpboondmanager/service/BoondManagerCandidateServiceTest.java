@@ -11,7 +11,6 @@ import com.sijo.mcpboondmanager.dto.boond.BoondListEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondMeta;
 import com.sijo.mcpboondmanager.dto.boond.BoondSingleEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondTechnicalDocumentAttributes;
-import com.sijo.mcpboondmanager.dto.boond.BoondTechnicalDocumentSummaryAttributes;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateDetailDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchResponseDto;
@@ -143,7 +142,7 @@ class BoondManagerCandidateServiceTest {
 
     @Test
     void givenCandidateId_whenGetCandidateDetail_thenMapsEnvelopeToMcpDetail() {
-        when(client.get(eq("/candidates/42"), any(ParameterizedTypeReference.class)))
+        when(client.get(eq("/candidates/42/information"), any(ParameterizedTypeReference.class)))
                 .thenReturn(detailEnvelope());
 
         CandidateDetailDto response = service().getCandidateDetail(42);
@@ -151,32 +150,39 @@ class BoondManagerCandidateServiceTest {
         assertThat(response.id()).isEqualTo(42);
         assertThat(response.firstName()).isEqualTo("Ada");
         assertThat(response.email()).isEqualTo("ada@example.test");
-        assertThat(response.technicalDocumentId()).isEqualTo(101);
+        assertThat(response.contractType()).isEqualTo(2);
+        assertThat(response.city()).isEqualTo("Paris");
+        assertThat(response.sourceType()).isEqualTo(1);
+        assertThat(response.sourceDetail()).isEqualTo("LinkedIn");
     }
 
     @Test
     void givenCandidateId_whenGetCandidateTechnicalDocument_thenCallsTechnicalDataPath() {
-        when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
+        when(client.get(eq("/technical-datas/42"), any(ParameterizedTypeReference.class)))
                 .thenReturn(technicalDocumentEnvelope());
 
         TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
 
         assertThat(response.id()).isEqualTo(101);
         assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
-        assertThat(response.candidateId()).isEqualTo(42);
+        assertThat(response.tools())
+                .extracting(TechnicalDocumentDto.ToolProficiency::tool,
+                        TechnicalDocumentDto.ToolProficiency::level)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("IntelliJ", 5));
+        assertThat(response.diplomas()).containsExactly("Engineering school");
     }
 
     @Test
     void givenCandidateNotFound_whenGetCandidateDetail_thenMapsToCandidateNotFoundException() {
         BoondApiException backend = new BoondApiException(
-                "missing", HttpStatus.NOT_FOUND, "/candidates/404", null);
-        when(client.get(eq("/candidates/404"), any(ParameterizedTypeReference.class)))
+                "missing", HttpStatus.NOT_FOUND, "/candidates/404/information", null);
+        when(client.get(eq("/candidates/404/information"), any(ParameterizedTypeReference.class)))
                 .thenThrow(backend);
 
         assertThatThrownBy(() -> service().getCandidateDetail(404))
                 .isInstanceOfSatisfying(CandidateNotFoundException.class, ex -> {
                     assertThat(ex.candidateId()).isEqualTo(404);
-                    assertThat(ex.path()).isEqualTo("/candidates/404");
+                    assertThat(ex.path()).isEqualTo("/candidates/404/information");
                     assertThat(ex.getCause()).isSameAs(backend);
                 });
     }
@@ -184,8 +190,8 @@ class BoondManagerCandidateServiceTest {
     @Test
     void givenTechnicalDocumentNotFound_whenGetCandidateTechnicalDocument_thenMapsToCandidateNotFoundException() {
         BoondApiException backend = new BoondApiException(
-                "missing", HttpStatus.NOT_FOUND, "/candidates/404/technical-data", null);
-        when(client.get(eq("/candidates/404/technical-data"), any(ParameterizedTypeReference.class)))
+                "missing", HttpStatus.NOT_FOUND, "/technical-datas/404", null);
+        when(client.get(eq("/technical-datas/404"), any(ParameterizedTypeReference.class)))
                 .thenThrow(backend);
 
         assertThatThrownBy(() -> service().getCandidateTechnicalDocument(404))
@@ -196,8 +202,8 @@ class BoondManagerCandidateServiceTest {
     @Test
     void givenNon404BoondApiException_whenGetCandidateDetail_thenPropagatesOriginalException() {
         BoondApiException backend = new BoondApiException(
-                "boom", HttpStatus.INTERNAL_SERVER_ERROR, "/candidates/42", null);
-        when(client.get(eq("/candidates/42"), any(ParameterizedTypeReference.class)))
+                "boom", HttpStatus.INTERNAL_SERVER_ERROR, "/candidates/42/information", null);
+        when(client.get(eq("/candidates/42/information"), any(ParameterizedTypeReference.class)))
                 .thenThrow(backend);
 
         assertThatThrownBy(() -> service().getCandidateDetail(42))
@@ -218,7 +224,8 @@ class BoondManagerCandidateServiceTest {
                 List.of(new DictionaryEntryDto("3", "Senior")),
                 List.of(new DictionaryEntryDto("bac5", "Bac+5")),
                 List.of(new DictionaryEntryDto("backend", "Backend")),
-                List.of(new DictionaryEntryDto("finance", "Finance")),
+                List.of(new DictionaryOptionEntryDto(
+                        List.of(new DictionaryOptionEntryDto.OptionId("finance", "Finance")), "Sectors")),
                 List.of(new DictionaryEntryDto("java", "Java")),
                 List.of(new DictionaryEntryDto("fr", "French")),
                 List.of(new DictionaryEntryDto("5", "Native")),
@@ -231,13 +238,12 @@ class BoondManagerCandidateServiceTest {
     private BoondListEnvelope<BoondCandidateSummaryAttributes> searchEnvelope() {
         BoondCandidateSummaryAttributes attrs = new BoondCandidateSummaryAttributes(
                 "Ada", "Lovelace", "ada@example.test",
-                1, 9, "2026-06-01", 2,
-                "idf", "Paris", "FR",
-                40_000.0, 60_000.0, 500.0, 700.0,
-                new BoondTechnicalDocumentSummaryAttributes(
-                        "Senior Java Engineer", 3, "bac5", "Engineering school",
-                        "Java, Spring, React", "backend", "finance",
-                        "IntelliJ:5", "fr:5|en:4"));
+                1, "9", 2,
+                List.of("idf"), "Paris", "FR",
+                "Senior Java Engineer", 3, "Java, Spring, React",
+                List.of("Engineering school"), List.of("backend"), List.of("finance"),
+                List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
+                List.of(new BoondTechnicalDocumentAttributes.Language("fr", "native")));
         return new BoondListEnvelope<>(
                 List.of(new BoondData<>("42", "candidate", attrs)),
                 new BoondMeta(new BoondMeta.Totals(1), 1));
@@ -246,24 +252,25 @@ class BoondManagerCandidateServiceTest {
     private BoondSingleEnvelope<BoondCandidateDetailAttributes> detailEnvelope() {
         BoondCandidateDetailAttributes attrs = new BoondCandidateDetailAttributes(
                 "Ada", "Lovelace", "ada@example.test", null, null,
-                "+33100000000", null, null, 1, "1990-01-01", "FR",
-                "1 rue de test", "75001", "Paris", "FR",
-                1, 4, 9, "2026-06-01", 2, "idf",
-                55_000.0, 60_000.0, 70_000.0,
-                600.0, 650.0, 750.0,
-                1, "LinkedIn", "Strong backend profile",
-                "2025-01-01", "2026-01-01", "2026-02-01",
-                101, 7, 8);
+                "+33100000000", null, null, null,
+                1, "1990-01-01", "1 rue de test", "75001", "Paris", "FR", null,
+                "STAGIAIRE", "A. L.", 1, 2, "9",
+                List.of("idf"),
+                new BoondCandidateDetailAttributes.Source(1, "LinkedIn"),
+                "4", "Strong backend profile",
+                "2025-01-01", "2026-02-01", "manual");
         return new BoondSingleEnvelope<>(new BoondData<>("42", "candidate", attrs));
     }
 
     private BoondSingleEnvelope<BoondTechnicalDocumentAttributes> technicalDocumentEnvelope() {
         BoondTechnicalDocumentAttributes attrs = new BoondTechnicalDocumentAttributes(
                 "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
-                3, "bac5", "Engineering school",
-                "Java, Spring, PostgreSQL", "backend", "finance",
-                "IntelliJ:5", "fr:5|en:4",
-                Boolean.FALSE, "2025-01-01", "2026-01-01", 42);
+                3, "bac5",
+                List.of("Engineering school"), "Java, Spring, PostgreSQL",
+                List.of("backend"), List.of("finance"),
+                List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
+                List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")),
+                Boolean.FALSE, "2026-01-01");
         return new BoondSingleEnvelope<>(new BoondData<>("101", "technicaldata", attrs));
     }
 }

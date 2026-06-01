@@ -9,8 +9,9 @@ import java.util.List;
 /**
  * The {@code setting} business object returned under {@code data.setting} by
  * {@code /application/dictionary}. Each reference list is deserialized into the reusable
- * {@link DictionaryEntryDto} ({@code id} + {@code label}), except {@code mobilityArea} whose
- * entries expose a list of sub-options under an {@code option} array ({@link DictionaryOptionEntryDto}).
+ * {@link DictionaryEntryDto} ({@code id} + {@code label}), except {@code mobilityArea} and
+ * {@code activityArea} whose entries are hierarchical groups exposing a list of sub-options under
+ * an {@code option} array ({@link DictionaryOptionEntryDto}).
  *
  * <p>{@code state} and {@code typeOf} are nested objects (e.g. {@code state.candidate},
  * {@code typeOf.contract}) rather than flat arrays, so they get dedicated nested records.
@@ -24,7 +25,7 @@ public record BoondDictionarySetting(
         List<DictionaryEntryDto> experience,
         List<DictionaryEntryDto> training,
         List<DictionaryEntryDto> expertiseArea,
-        List<DictionaryEntryDto> activityArea,
+        List<DictionaryOptionEntryDto> activityArea,
         List<DictionaryEntryDto> tool,
         List<DictionaryEntryDto> languageSpoken,
         List<DictionaryEntryDto> languageLevel,

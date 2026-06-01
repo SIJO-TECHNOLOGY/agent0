@@ -130,7 +130,7 @@ class BoondManagerClientTest {
 
     @Test
     void givenCandidateDetailEndpoint_whenGet_thenDeserializesSingleEnvelope() {
-        respondJson("/candidates/42", 200, """
+        respondJson("/candidates/42/information", 200, """
                 {
                   "data": {
                     "id": "42",
@@ -138,19 +138,19 @@ class BoondManagerClientTest {
                     "attributes": {
                       "firstName": "Ada",
                       "lastName": "Lovelace",
-                      "email": "ada@example.test",
-                      "technicalDocumentId": 101
+                      "email1": "ada@example.test",
+                      "typeOf": 2
                     }
                   }
                 }
                 """);
 
         BoondSingleEnvelope<BoondCandidateDetailAttributes> response = client(Duration.ofSeconds(2))
-                .get("/candidates/42", DETAIL_TYPE);
+                .get("/candidates/42/information", DETAIL_TYPE);
 
         assertThat(response.data().id()).isEqualTo("42");
-        assertThat(response.data().attributes().email()).isEqualTo("ada@example.test");
-        assertThat(response.data().attributes().technicalDocumentId()).isEqualTo(101);
+        assertThat(response.data().attributes().email1()).isEqualTo("ada@example.test");
+        assertThat(response.data().attributes().typeOf()).isEqualTo(2);
     }
 
     @Test

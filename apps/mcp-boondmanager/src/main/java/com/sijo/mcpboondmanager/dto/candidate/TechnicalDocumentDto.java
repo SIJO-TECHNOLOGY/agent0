@@ -2,6 +2,8 @@ package com.sijo.mcpboondmanager.dto.candidate;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import java.util.List;
+
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record TechnicalDocumentDto(
         Integer id,
@@ -10,15 +12,27 @@ public record TechnicalDocumentDto(
         String summary,
         Integer experience,
         String training,
-        String diplomas,
+        List<String> diplomas,
         String skills,
-        String expertiseAreas,
-        String activityAreas,
-        String tools,
-        String languages,
+        List<String> expertiseAreas,
+        List<String> activityAreas,
+        List<ToolProficiency> tools,
+        List<LanguageProficiency> languages,
         Boolean isReferent,
-        String creationDate,
-        String updateDate,
-        Integer candidateId
+        String updateDate
 ) {
+
+    /**
+     * A tool/technology mastered by the candidate with its numeric proficiency level.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ToolProficiency(String tool, Integer level) {
+    }
+
+    /**
+     * A spoken language with its level.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record LanguageProficiency(String language, String level) {
+    }
 }

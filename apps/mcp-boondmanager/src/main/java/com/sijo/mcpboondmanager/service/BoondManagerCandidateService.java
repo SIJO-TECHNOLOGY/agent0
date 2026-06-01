@@ -10,13 +10,11 @@ import com.sijo.mcpboondmanager.dto.boond.BoondListEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondMeta;
 import com.sijo.mcpboondmanager.dto.boond.BoondSingleEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondTechnicalDocumentAttributes;
-import com.sijo.mcpboondmanager.dto.boond.BoondTechnicalDocumentSummaryAttributes;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateDetailDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchResponseDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSummaryDto;
 import com.sijo.mcpboondmanager.dto.candidate.TechnicalDocumentDto;
-import com.sijo.mcpboondmanager.dto.candidate.TechnicalDocumentSummaryDto;
 import com.sijo.mcpboondmanager.dto.common.PaginationMetaDto;
 import com.sijo.mcpboondmanager.dto.dictionary.DictionaryResponseDto;
 import com.sijo.mcpboondmanager.dto.dictionary.DictionarySettingDto;
@@ -36,6 +34,7 @@ public class BoondManagerCandidateService {
 
     static final String DICTIONARY_PATH = "/application/dictionary";
     static final String CANDIDATES_PATH = "/candidates";
+    static final String TECHNICAL_PATH = "/technical-datas";
 
     private static final ParameterizedTypeReference<BoondDictionaryEnvelope> DICTIONARY_TYPE =
             new ParameterizedTypeReference<>() {};
@@ -87,7 +86,7 @@ public class BoondManagerCandidateService {
     }
 
     public CandidateDetailDto getCandidateDetail(Integer candidateId) {
-        String path = CANDIDATES_PATH + "/" + candidateId;
+        String path = CANDIDATES_PATH + "/" + candidateId + "/information";
         try {
             BoondSingleEnvelope<BoondCandidateDetailAttributes> envelope =
                     client.get(path, DETAIL_TYPE);
@@ -101,7 +100,7 @@ public class BoondManagerCandidateService {
     }
 
     public TechnicalDocumentDto getCandidateTechnicalDocument(Integer candidateId) {
-        String path = CANDIDATES_PATH + "/" + candidateId + "/technical-data";
+        String path = TECHNICAL_PATH + "/" + candidateId;
         try {
             BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope =
                     client.get(path, TD_TYPE);
@@ -149,35 +148,25 @@ public class BoondManagerCandidateService {
 
     private static CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data) {
         BoondCandidateSummaryAttributes attrs = data.attributes();
-        BoondTechnicalDocumentSummaryAttributes td = attrs.technicalDocument();
-        TechnicalDocumentSummaryDto technicalDocument = td == null ? null : new TechnicalDocumentSummaryDto(
-                td.title(),
-                td.experience(),
-                td.training(),
-                td.diplomas(),
-                td.skills(),
-                td.expertiseAreas(),
-                td.activityAreas(),
-                td.tools(),
-                td.languages()
-        );
         return new CandidateSummaryDto(
                 parseId(data.id()),
                 attrs.firstName(),
                 attrs.lastName(),
-                attrs.email(),
+                attrs.email1(),
                 attrs.state(),
-                attrs.availabilityType(),
-                attrs.availabilityDate(),
-                attrs.contractType(),
-                attrs.mobilityArea(),
-                attrs.city(),
+                attrs.availability(),
+                attrs.typeOf(),
+                attrs.mobilityAreas(),
+                attrs.town(),
                 attrs.country(),
-                attrs.minSalary(),
-                attrs.maxSalary(),
-                attrs.minTjm(),
-                attrs.maxTjm(),
-                technicalDocument
+                attrs.title(),
+                attrs.experience(),
+                attrs.skills(),
+                attrs.diplomas(),
+                attrs.expertiseAreas(),
+                attrs.activityAreas(),
+                toToolProficiencies(attrs.tools()),
+                toLanguageProficiencies(attrs.languages())
         );
     }
 
@@ -185,44 +174,40 @@ public class BoondManagerCandidateService {
             BoondSingleEnvelope<BoondCandidateDetailAttributes> envelope) {
         BoondData<BoondCandidateDetailAttributes> data = envelope.data();
         BoondCandidateDetailAttributes a = data.attributes();
+        BoondCandidateDetailAttributes.Source source = a.source();
+        Integer sourceType = source == null ? null : source.typeOf();
+        String sourceDetail = source == null ? null : source.detail();
         return new CandidateDetailDto(
                 parseId(data.id()),
                 a.firstName(),
                 a.lastName(),
-                a.email(),
+                a.email1(),
                 a.email2(),
                 a.email3(),
                 a.phone1(),
                 a.phone2(),
                 a.phone3(),
+                a.fax(),
                 a.civility(),
-                a.birthDate(),
-                a.nationality(),
+                a.dateOfBirth(),
                 a.address(),
-                a.postCode(),
-                a.city(),
+                a.postcode(),
+                a.town(),
                 a.country(),
+                a.subDivision(),
+                a.title(),
+                a.initials(),
                 a.state(),
-                a.evaluation(),
-                a.availabilityType(),
-                a.availabilityDate(),
-                a.contractType(),
-                a.mobilityArea(),
-                a.currentSalary(),
-                a.minSalary(),
-                a.maxSalary(),
-                a.actualTjm(),
-                a.minTjm(),
-                a.maxTjm(),
-                a.sourceType(),
-                a.sourceDetail(),
-                a.informationComment(),
+                a.typeOf(),
+                a.availability(),
+                a.mobilityAreas(),
+                sourceType,
+                sourceDetail,
+                a.globalEvaluation(),
+                a.informationComments(),
                 a.creationDate(),
-                a.lastActivityDate(),
                 a.updateDate(),
-                a.technicalDocumentId(),
-                a.managerId(),
-                a.hrManagerId()
+                a.creationSource()
         );
     }
 
@@ -241,13 +226,32 @@ public class BoondManagerCandidateService {
                 a.skills(),
                 a.expertiseAreas(),
                 a.activityAreas(),
-                a.tools(),
-                a.languages(),
+                toToolProficiencies(a.tools()),
+                toLanguageProficiencies(a.languages()),
                 a.isReferent(),
-                a.creationDate(),
-                a.updateDate(),
-                a.candidateId()
+                a.updateDate()
         );
+    }
+
+    private static List<TechnicalDocumentDto.ToolProficiency> toToolProficiencies(
+            List<BoondTechnicalDocumentAttributes.Tool> tools) {
+        if (tools == null) {
+            return null;
+        }
+        return tools.stream()
+                .map(tool -> new TechnicalDocumentDto.ToolProficiency(tool.tool(), tool.level()))
+                .toList();
+    }
+
+    private static List<TechnicalDocumentDto.LanguageProficiency> toLanguageProficiencies(
+            List<BoondTechnicalDocumentAttributes.Language> languages) {
+        if (languages == null) {
+            return null;
+        }
+        return languages.stream()
+                .map(language -> new TechnicalDocumentDto.LanguageProficiency(
+                        language.language(), language.level()))
+                .toList();
     }
 
     private static PaginationMetaDto toPaginationMeta(BoondMeta meta) {
