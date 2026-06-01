@@ -773,18 +773,45 @@ def _record_to_result(record: dict[str, object], source_tool: str) -> SearchResu
     attrs_view: dict[str, object] = (
         attributes if isinstance(attributes, dict) else {}
     )
+    technical = record.get("technicalDocument")
+    technical_data: dict[str, object] = (
+        technical if isinstance(technical, dict) else {}
+    )
 
     resolved_id = record.get("id") or attrs_view.get("id")
-    raw_title = record.get("title") or attrs_view.get("title")
+    full_name = " ".join(
+        str(part)
+        for part in (
+            record.get("firstName") or attrs_view.get("firstName"),
+            record.get("lastName") or attrs_view.get("lastName"),
+        )
+        if part
+    ).strip()
+    raw_title = (
+        record.get("title")
+        or attrs_view.get("title")
+        or technical_data.get("title")
+        or full_name
+        or record.get("email")
+        or attrs_view.get("email")
+    )
     if not isinstance(raw_title, str) or not raw_title:
         raw_title = str(resolved_id) if resolved_id not in (None, "") else ""
+
+    raw_snippet = (
+        record.get("snippet")
+        or attrs_view.get("snippet")
+        or technical_data.get("skills")
+        or technical_data.get("tools")
+        or ""
+    )
 
     well_known = {"id", "type", "title", "snippet", "score"}
     return SearchResult(
         id=str(resolved_id) if resolved_id not in (None, "") else "",
-        type=str(record.get("type", "unknown")),
+        type=str(record.get("type") or attrs_view.get("type") or "consultant"),
         title=str(raw_title),
-        snippet=str(record.get("snippet", "")),
+        snippet=str(raw_snippet),
         score=score,
         source_tool=source_tool,
         data={k: v for k, v in record.items() if k not in well_known},
@@ -1064,7 +1091,7 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
 
     enrich_with_tech_docs = (
         TECHNICAL_DOCUMENT_TOOL in tools_by_name
-        and _technical_query(state.interpreted_intent)
+        and (ctx.llm_planner is not None or _technical_query(state.interpreted_intent))
     )
     tech_doc_schema: dict[str, object] = (
         tools_by_name[TECHNICAL_DOCUMENT_TOOL].input_schema
@@ -1075,7 +1102,9 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     tool_calls = list(state.tool_calls)
     enriched_results = list(state.results)
 
-    for result in eligible[: ctx.max_enrichments]:
+    enrichment_limit = len(eligible) if ctx.llm_planner is not None else ctx.max_enrichments
+
+    for result in eligible[:enrichment_limit]:
         # Find the result's slot in enriched_results by identity so we
         # don't accidentally update a stale copy after model_copy().
         position = next(
@@ -1087,19 +1116,20 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
 
         merged_data = dict(result.data)
 
-        detail_inputs = _candidate_id_inputs(result.id, detail_tool.input_schema)
-        detail_call, detail_raw = await _execute_single_tool(
-            ctx, CANDIDATE_DETAIL_TOOL, detail_inputs
-        )
-        tool_calls.append(detail_call)
-        if (
-            detail_call.status is ToolCallStatus.SUCCESS
-            and detail_raw
-            and isinstance(detail_raw[0], dict)
-        ):
-            _merge_detail_into_result_data(merged_data, detail_raw[0])
+        if ctx.llm_planner is None and ENRICHMENT_DETAIL_KEY not in merged_data:
+            detail_inputs = _candidate_id_inputs(result.id, detail_tool.input_schema)
+            detail_call, detail_raw = await _execute_single_tool(
+                ctx, CANDIDATE_DETAIL_TOOL, detail_inputs
+            )
+            tool_calls.append(detail_call)
+            if (
+                detail_call.status is ToolCallStatus.SUCCESS
+                and detail_raw
+                and isinstance(detail_raw[0], dict)
+            ):
+                _merge_detail_into_result_data(merged_data, detail_raw[0])
 
-        if enrich_with_tech_docs:
+        if enrich_with_tech_docs and ENRICHMENT_TECH_DOC_KEY not in merged_data:
             doc_inputs = _candidate_id_inputs(result.id, tech_doc_schema)
             doc_call, doc_raw = await _execute_single_tool(
                 ctx, TECHNICAL_DOCUMENT_TOOL, doc_inputs

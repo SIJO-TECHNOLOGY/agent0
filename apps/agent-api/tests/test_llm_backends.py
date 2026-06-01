@@ -81,8 +81,15 @@ class _StubResponses:
 class _StubAsyncOpenAI:
     instances: list["_StubAsyncOpenAI"] = []
 
-    def __init__(self, *, api_key: str, output_text: str | None = "hi") -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        timeout: float,
+        output_text: str | None = "hi",
+    ) -> None:
         self.api_key = api_key
+        self.timeout = timeout
         self.responses = _StubResponses(output_text=output_text)
         _StubAsyncOpenAI.instances.append(self)
 
@@ -94,8 +101,12 @@ def _install_stub_openai(
 
     _StubAsyncOpenAI.instances.clear()
 
-    def _factory(*, api_key: str) -> _StubAsyncOpenAI:
-        return _StubAsyncOpenAI(api_key=api_key, output_text=output_text)
+    def _factory(*, api_key: str, timeout: float) -> _StubAsyncOpenAI:
+        return _StubAsyncOpenAI(
+            api_key=api_key,
+            timeout=timeout,
+            output_text=output_text,
+        )
 
     module = types.ModuleType("openai")
     module.AsyncOpenAI = _factory  # type: ignore[attr-defined]
@@ -114,6 +125,7 @@ async def test_openai_backend_uses_responses_api_with_planner_arguments(
         model="gpt-5.2",
         api_key="sk-fake",
         temperature=0.3,
+        timeout_seconds=42.0,
     )
     assert callable(chat_fn)
 
@@ -123,6 +135,7 @@ async def test_openai_backend_uses_responses_api_with_planner_arguments(
     assert len(_StubAsyncOpenAI.instances) == 1
     client = _StubAsyncOpenAI.instances[0]
     assert client.api_key == "sk-fake"
+    assert client.timeout == 42.0
     assert client.responses.last_call_kwargs == {
         "model": "gpt-5.2",
         "instructions": "SYSTEM-PROMPT",

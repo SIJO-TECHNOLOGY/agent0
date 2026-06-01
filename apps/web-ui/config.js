@@ -1,5 +1,6 @@
-export const API_URL = "http://localhost:8000";
-export const DEV_MODE = false;
+export const API_URL = "http://127.0.0.1:8001";
+export const DEV_MODE = true;
+export const DEV_API_MOCKS = false;
 
 export const APP_NAME = "SIJO Assistant";
 
@@ -10,6 +11,8 @@ export const API_ENDPOINTS = {
   conversation_detail: "/api/conversations/:id",
   candidates_detail: "/api/candidates/:id",
 };
+
+export const CHAT_TIMEOUT_MS = null;
 
 export const FEATURES = {
   auth: true,

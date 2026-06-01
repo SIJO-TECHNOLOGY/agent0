@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import timedelta
 from typing import Any
 
@@ -62,6 +62,7 @@ class RemoteMcpClient(McpClient):
         self._timeout_seconds = timeout_seconds
         self._session: ClientSession | None = None
         self._exit_stack: AsyncExitStack | None = None
+        self._ready = False
 
     @property
     def url(self) -> str:
@@ -72,6 +73,54 @@ class RemoteMcpClient(McpClient):
 
         Idempotent: a second call while already connected is a no-op.
         """
+        if self._session is not None or self._ready:
+            return
+
+        async with self._open_session():
+            pass
+        self._ready = True
+        logger.info("remote_mcp.connected", extra={"url": self._url})
+
+    @asynccontextmanager
+    async def _open_session(self):
+        """Open a short-lived MCP session in the current async task.
+
+        The MCP SDK's Streamable HTTP transport owns anyio cancel scopes
+        that must be closed by the same task that opened them. Keeping a
+        transport alive across FastAPI request tasks can leave the app in
+        a half-shutdown state when Spring terminates an MCP session, so
+        normal operations use operation-scoped sessions.
+        """
+        stack = AsyncExitStack()
+        try:
+            transport = await stack.enter_async_context(
+                streamablehttp_client(self._url, timeout=self._timeout_seconds)
+            )
+            read_stream, write_stream, *_ = transport
+            session = await stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
+            await session.initialize()
+        except asyncio.CancelledError as exc:
+            await _best_effort_close(stack)
+            raise McpTransientError(
+                f"MCP session initialization was cancelled for {self._url}: {exc}"
+            ) from exc
+        except _TRANSIENT_EXC as exc:
+            await _best_effort_close(stack)
+            raise McpTransientError(
+                f"failed to connect to MCP server at {self._url}: {exc}"
+            ) from exc
+        except Exception:
+            await _best_effort_close(stack)
+            raise
+
+        try:
+            yield session
+        finally:
+            await _best_effort_close(stack)
+
+    async def _connect_persistent(self) -> None:
         if self._session is not None:
             return
 
@@ -112,16 +161,21 @@ class RemoteMcpClient(McpClient):
     async def aclose(self) -> None:
         """Close the MCP session and underlying transport."""
         if self._exit_stack is None:
+            self._ready = False
             return
         stack = self._exit_stack
         self._exit_stack = None
         self._session = None
+        self._ready = False
         try:
             await stack.aclose()
         except Exception:  # noqa: BLE001 — shutdown best-effort
             logger.exception("remote_mcp.close_error")
 
     async def discover_tools(self) -> list[McpTool]:
+        if self._session is None:
+            return await self._discover_tools_once()
+
         session = await self._require_session()
         try:
             result = await session.list_tools()
@@ -130,6 +184,18 @@ class RemoteMcpClient(McpClient):
                 f"list_tools transport failure: {exc}"
             ) from exc
         except McpError as exc:
+            if _is_session_terminated(exc):
+                await self._reset_session()
+                session = await self._require_session()
+                try:
+                    result = await session.list_tools()
+                except _TRANSIENT_EXC as retry_exc:
+                    raise McpTransientError(
+                        f"list_tools transport failure after reconnect: {retry_exc}"
+                    ) from retry_exc
+                except McpError as retry_exc:
+                    raise McpToolError(f"list_tools failed: {retry_exc}") from retry_exc
+                return [_tool_to_model(tool) for tool in result.tools]
             raise McpToolError(f"list_tools failed: {exc}") from exc
 
         return [_tool_to_model(tool) for tool in result.tools]
@@ -137,6 +203,9 @@ class RemoteMcpClient(McpClient):
     async def call_tool(
         self, tool: str, inputs: dict[str, object]
     ) -> list[dict[str, object]]:
+        if self._session is None:
+            return await self._call_tool_once(tool, inputs)
+
         session = await self._require_session()
 
         arguments: dict[str, Any] = dict(inputs)
@@ -152,9 +221,101 @@ class RemoteMcpClient(McpClient):
                 f"call_tool {tool!r} transport failure: {exc}", tool=tool
             ) from exc
         except McpError as exc:
-            raise McpToolError(
-                f"call_tool {tool!r} failed: {exc}", tool=tool
+            if not _is_session_terminated(exc):
+                raise McpToolError(
+                    f"call_tool {tool!r} failed: {exc}", tool=tool
+                ) from exc
+            await self._reset_session()
+            session = await self._require_session()
+            try:
+                result = await session.call_tool(
+                    tool,
+                    arguments=arguments,
+                    read_timeout_seconds=read_timeout,
+                )
+            except _TRANSIENT_EXC as retry_exc:
+                raise McpTransientError(
+                    f"call_tool {tool!r} transport failure after reconnect: {retry_exc}",
+                    tool=tool,
+                ) from retry_exc
+            except McpError as retry_exc:
+                raise McpToolError(
+                    f"call_tool {tool!r} failed: {retry_exc}", tool=tool
+                ) from retry_exc
+
+        if result.isError:
+            raise McpToolError(_extract_error_message(result), tool=tool)
+
+        return _normalize_result(result, tool=tool)
+
+    async def _discover_tools_once(self) -> list[McpTool]:
+        try:
+            async with self._open_session() as session:
+                result = await session.list_tools()
+        except _TRANSIENT_EXC as exc:
+            raise McpTransientError(
+                f"list_tools transport failure: {exc}"
             ) from exc
+        except McpError as exc:
+            if not _is_session_terminated(exc):
+                raise McpToolError(f"list_tools failed: {exc}") from exc
+            logger.info(
+                "remote_mcp.session_terminated_retry",
+                extra={"url": self._url},
+            )
+            try:
+                async with self._open_session() as session:
+                    result = await session.list_tools()
+            except _TRANSIENT_EXC as retry_exc:
+                raise McpTransientError(
+                    f"list_tools transport failure after reconnect: {retry_exc}"
+                ) from retry_exc
+            except McpError as retry_exc:
+                raise McpToolError(f"list_tools failed: {retry_exc}") from retry_exc
+
+        return [_tool_to_model(tool) for tool in result.tools]
+
+    async def _call_tool_once(
+        self, tool: str, inputs: dict[str, object]
+    ) -> list[dict[str, object]]:
+        arguments: dict[str, Any] = dict(inputs)
+        read_timeout = timedelta(seconds=self._timeout_seconds)
+        try:
+            async with self._open_session() as session:
+                result = await session.call_tool(
+                    tool,
+                    arguments=arguments,
+                    read_timeout_seconds=read_timeout,
+                )
+        except _TRANSIENT_EXC as exc:
+            raise McpTransientError(
+                f"call_tool {tool!r} transport failure: {exc}", tool=tool
+            ) from exc
+        except McpError as exc:
+            if not _is_session_terminated(exc):
+                raise McpToolError(
+                    f"call_tool {tool!r} failed: {exc}", tool=tool
+                ) from exc
+            logger.info(
+                "remote_mcp.session_terminated_retry",
+                extra={"url": self._url},
+            )
+            try:
+                async with self._open_session() as session:
+                    result = await session.call_tool(
+                        tool,
+                        arguments=arguments,
+                        read_timeout_seconds=read_timeout,
+                    )
+            except _TRANSIENT_EXC as retry_exc:
+                raise McpTransientError(
+                    f"call_tool {tool!r} transport failure after reconnect: {retry_exc}",
+                    tool=tool,
+                ) from retry_exc
+            except McpError as retry_exc:
+                raise McpToolError(
+                    f"call_tool {tool!r} failed: {retry_exc}", tool=tool
+                ) from retry_exc
 
         if result.isError:
             raise McpToolError(_extract_error_message(result), tool=tool)
@@ -163,10 +324,18 @@ class RemoteMcpClient(McpClient):
 
     async def _require_session(self) -> ClientSession:
         if self._session is None:
-            await self.connect()
+            await self._connect_persistent()
         if self._session is None:  # pragma: no cover — connect() raises on failure
             raise McpTransientError("MCP session is not initialized")
         return self._session
+
+    async def _reset_session(self) -> None:
+        logger.info(
+            "remote_mcp.session_terminated_reconnect",
+            extra={"url": self._url},
+        )
+        await self.aclose()
+        await self.connect()
 
 
 def _tool_to_model(tool: Tool) -> McpTool:
@@ -176,6 +345,10 @@ def _tool_to_model(tool: Tool) -> McpTool:
         description=tool.description or "",
         input_schema=dict(schema),
     )
+
+
+def _is_session_terminated(exc: McpError) -> bool:
+    return "session terminated" in str(exc).lower()
 
 
 def _normalize_result(

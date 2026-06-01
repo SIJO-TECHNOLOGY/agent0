@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     )
     llm_provider: str = Field(
         default="anthropic",
-        description="LLM backend identifier (only 'anthropic' is supported).",
+        description="LLM backend identifier ('anthropic' or 'openai').",
     )
     llm_model: str = Field(
         default="claude-sonnet-4-6",
@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(
         default=0.0, ge=0.0, le=1.0,
         description="Temperature passed to the LLM. Default 0 for determinism.",
+    )
+    llm_timeout_seconds: float = Field(
+        default=60.0, ge=1.0,
+        description="Maximum time to wait for one LLM planner response.",
     )
     llm_max_plan_steps: int = Field(
         default=6, ge=1, le=20,

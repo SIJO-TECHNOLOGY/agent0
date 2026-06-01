@@ -100,5 +100,13 @@ def test_extract_keywords_filters_noise_in_long_candidate_search() -> None:
     assert not (noise & set(keywords))
 
 
+def test_extract_keywords_filters_french_request_noise() -> None:
+    assert extract_keywords("trouve moi des profils java") == ["java"]
+
+
+def test_detect_tools_accepts_accented_french_consultant_hint() -> None:
+    assert "search_consultants" in detect_tools("cherche un développeur java")
+
+
 def test_detect_tools_picks_consultant_hint_for_dev() -> None:
     assert "search_consultants" in detect_tools("search a dev with java")

@@ -67,7 +67,7 @@ flowchart TD
 | `execute_mcp_tools` | Execute selected MCP tools asynchronously, collect outputs, and normalize failures. |
 | `evaluate_results` | Assess result quality, coverage, duplicates, confidence, and missing information. |
 | `replan_if_needed` | Decide whether to re-enter planning with bounded retries or proceed to final response. |
-| `generate_final_response` | Aggregate, rank, summarize, and produce the API response payload. |
+| `generate_final_response` | Aggregate, rank, summarize, normalize MCP results, and produce the UI-oriented API response payload. |
 
 ## State Schema Proposal
 
@@ -88,6 +88,7 @@ The graph state should be represented with typed Pydantic models or typed dictio
 | `warnings` | User-safe warnings about partial results, ambiguity, or degraded execution. |
 | `errors` | Internal structured errors for workflow control. |
 | `replan_count` | Number of replanning attempts already used. |
+| `ui_response` | Final frontend response containing `conversation_id`, `message`, and `ui`. |
 
 ## Transitions
 
@@ -126,3 +127,60 @@ Do not replan when:
 - Return user-safe errors and warnings in API responses.
 - Surface partial results when useful and safe.
 - Never expose secrets, raw credentials, or provider stack traces.
+- Do not expose raw BoondManager MCP payloads to the frontend.
+
+## Final Response Contract
+
+The final API response should be UI-oriented:
+
+```json
+{
+  "conversation_id": "conv_123",
+  "message": "I found 5 candidates matching your search.",
+  "ui": {
+    "type": "candidate_cards",
+    "candidates": []
+  }
+}
+```
+
+For candidate search results, `generate_final_response` maps MCP output to `ui.type = "candidate_cards"`.
+
+Candidate card fields:
+
+- `id`
+- `full_name`
+- `title`
+- `experience_years`
+- `location`
+- `availability`
+- `skills`
+- `match_score`
+- `summary`
+- `boond_url`
+
+The card values must be adapted from BoondManager MCP results. Missing scalar or numeric fields should be `null`; missing list fields should be `[]`. Do not invent candidate data. LLM-generated summaries are allowed only when grounded in MCP result fields.
+
+## Internal Metadata
+
+The graph may keep these values internally:
+
+- `interpreted_intent`
+- `execution_plan`
+- `tool_calls`
+- `confidence`
+- `warnings`
+
+They may be logged or exposed only in optional debug mode. They should not be the default frontend response.
+
+## Future UI Types
+
+Additional UI response types may be introduced later, such as:
+
+- `mission_cards`
+- `client_cards`
+- `table`
+- `clarification_request`
+- `error_message`
+
+Do not emit future UI types until the frontend supports them.
