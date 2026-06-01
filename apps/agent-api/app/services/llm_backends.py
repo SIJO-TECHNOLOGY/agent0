@@ -7,6 +7,7 @@ fake ``ChatFn`` never reach this code.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -25,10 +26,11 @@ def build_chat_fn(
     model: str,
     api_key: str | None,
     temperature: float,
+    timeout_seconds: float = 60.0,
 ) -> ChatFn:
     """Construct a ``ChatFn`` for the named provider.
 
-    Currently only ``anthropic`` is supported. Failure modes:
+    Currently ``anthropic`` and ``openai`` are supported. Failure modes:
     - unknown provider → ``LlmBackendError``
     - missing api_key → ``LlmBackendError``
     - SDK not installed → ``LlmBackendError``
@@ -41,18 +43,24 @@ def build_chat_fn(
     normalized = provider.strip().lower()
     if normalized == "anthropic":
         return _build_anthropic_chat_fn(
-            model=model, api_key=api_key, temperature=temperature
+            model=model,
+            api_key=api_key,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
         )
     if normalized == "openai":
         return _build_openai_chat_fn(
-            model=model, api_key=api_key, temperature=temperature
+            model=model,
+            api_key=api_key,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
         )
 
     raise LlmBackendError(f"Unknown LLM provider {provider!r}.")
 
 
 def _build_anthropic_chat_fn(
-    *, model: str, api_key: str, temperature: float
+    *, model: str, api_key: str, temperature: float, timeout_seconds: float
 ) -> ChatFn:
     try:
         from anthropic import AsyncAnthropic  # type: ignore[import-not-found]
@@ -62,15 +70,19 @@ def _build_anthropic_chat_fn(
             "USE_LLM_PLANNER=false."
         ) from exc
 
-    client = AsyncAnthropic(api_key=api_key)
+    client = AsyncAnthropic(api_key=api_key, timeout=timeout_seconds)
 
     async def chat_fn(system_prompt: str, user_prompt: str) -> str:
-        response = await client.messages.create(
-            model=model,
-            max_tokens=2048,
-            temperature=temperature,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+        response = await _with_timeout(
+            client.messages.create(
+                model=model,
+                max_tokens=2048,
+                temperature=temperature,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            ),
+            timeout_seconds=timeout_seconds,
+            provider="Anthropic",
         )
         # Concatenate any text blocks returned by the API.
         parts: list[str] = []
@@ -88,7 +100,7 @@ def _build_anthropic_chat_fn(
 
 
 def _build_openai_chat_fn(
-    *, model: str, api_key: str, temperature: float
+    *, model: str, api_key: str, temperature: float, timeout_seconds: float
 ) -> ChatFn:
     try:
         from openai import AsyncOpenAI  # type: ignore[import-not-found]
@@ -98,14 +110,18 @@ def _build_openai_chat_fn(
             "USE_LLM_PLANNER=false."
         ) from exc
 
-    client = AsyncOpenAI(api_key=api_key)
+    client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
 
     async def chat_fn(system_prompt: str, user_prompt: str) -> str:
-        response = await client.responses.create(
-            model=model,
-            instructions=system_prompt,
-            input=user_prompt,
-            temperature=temperature,
+        response = await _with_timeout(
+            client.responses.create(
+                model=model,
+                instructions=system_prompt,
+                input=user_prompt,
+                temperature=temperature,
+            ),
+            timeout_seconds=timeout_seconds,
+            provider="OpenAI",
         )
         text = getattr(response, "output_text", None)
         if not isinstance(text, str) or not text.strip():
@@ -115,3 +131,14 @@ def _build_openai_chat_fn(
         return text
 
     return chat_fn
+
+
+async def _with_timeout(
+    awaitable: Awaitable[object], *, timeout_seconds: float, provider: str
+) -> object:
+    try:
+        return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+    except TimeoutError as exc:
+        raise LlmBackendError(
+            f"{provider} response timed out after {timeout_seconds:g}s."
+        ) from exc

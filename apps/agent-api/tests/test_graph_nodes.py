@@ -375,6 +375,83 @@ async def test_select_tools_warns_on_unavailable_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_select_tools_resolves_real_mcp_candidate_tool_alias() -> None:
+    client = MockMcpClient(
+        tools=[
+            McpTool(
+                name="searchCandidates",
+                description="Search candidates",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "keywords": {"type": "string"},
+                        "page": {"type": "integer"},
+                        "numberPerPage": {"type": "integer"},
+                    },
+                },
+            )
+        ]
+    )
+    state = GraphState(
+        original_query="consultants java",
+        execution_plan=[
+            PlanStep(
+                step=1,
+                description="x",
+                expected_tool="searchCandidates",
+                inputs={"keywords": ["java"]},
+            )
+        ],
+    )
+
+    result = await select_tools(state, _ctx(client))
+
+    assert result.selected_tools == ["searchCandidates"]
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tools_adapts_candidate_tool_inputs_and_output() -> None:
+    async def search_candidates(inputs: dict[str, object]) -> list[dict[str, object]]:
+        assert inputs["keywords"] == "java senior"
+        return [
+            {
+                "id": 42,
+                "firstName": "Ada",
+                "lastName": "Lovelace",
+                "city": "Paris",
+                "technicalDocument": {
+                    "title": "Backend Java Engineer",
+                    "skills": "Java, Spring",
+                },
+            }
+        ]
+
+    client = MockMcpClient(
+        tools=[McpTool(name="searchCandidates", description="", input_schema={})],
+        handlers={"searchCandidates": search_candidates},
+    )
+    state = GraphState(
+        original_query="consultants java senior",
+        execution_plan=[
+            PlanStep(
+                step=1,
+                description="x",
+                expected_tool="searchCandidates",
+                inputs={"keywords": "java senior"},
+            )
+        ],
+        selected_tools=["searchCandidates"],
+    )
+
+    result = await execute_mcp_tools(state, _ctx(client))
+
+    assert result.tool_calls[0].tool == "searchCandidates"
+    assert result.results[0].id == "42"
+    assert result.results[0].title == "Backend Java Engineer"
+    assert result.results[0].snippet == "Java, Spring"
+
+
+@pytest.mark.asyncio
 async def test_execute_mcp_tools_records_failed_call_without_raising() -> None:
     client = MockMcpClient(
         failures={"search_consultants": McpToolError("bad", tool="search_consultants")}

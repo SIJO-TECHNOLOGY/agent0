@@ -116,6 +116,17 @@ async def test_call_tool_unwraps_results_key_from_structured_dict() -> None:
 
 
 @pytest.mark.asyncio
+async def test_call_tool_unwraps_candidates_key_from_structured_dict() -> None:
+    structured = {"candidates": [{"id": "c1"}, {"id": "c2"}]}
+    result = CallToolResult(content=[], structuredContent=structured, isError=False)
+    client = _client_with_session(_FakeSession(call_tool_result=result))
+
+    records = await client.call_tool("searchCandidates", {})
+
+    assert records == [{"id": "c1"}, {"id": "c2"}]
+
+
+@pytest.mark.asyncio
 async def test_call_tool_parses_json_text_array() -> None:
     result = _text_result('[{"id":"x"},{"id":"y"}]')
     client = _client_with_session(_FakeSession(call_tool_result=result))

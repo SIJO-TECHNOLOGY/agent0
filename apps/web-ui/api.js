@@ -1,7 +1,13 @@
-import { API_ENDPOINTS, API_URL, DEV_MODE, UI_CONFIG } from "./config.js";
+import {
+  API_ENDPOINTS,
+  API_URL,
+  CHAT_TIMEOUT_MS,
+  DEV_API_MOCKS,
+  DEV_MODE,
+  UI_CONFIG,
+} from "./config.js";
 import { getAccessToken } from "./auth.js";
 
-const CHAT_TIMEOUT_MS = 15000;
 const SUPPORTED_UI_TYPES = new Set([
   "text",
   "candidate_cards",
@@ -47,12 +53,14 @@ async function authHeaders() {
 }
 
 async function request(path, options = {}) {
-  if (DEV_MODE) {
+  if (DEV_MODE && DEV_API_MOCKS) {
     return devRequest(path, options);
   }
 
   const headers = {
-    ...(options.auth === false ? {} : await authHeaders()),
+    ...(DEV_MODE || options.auth === false
+      ? { "Content-Type": "application/json" }
+      : await authHeaders()),
     ...(options.headers || {}),
   };
 
@@ -219,6 +227,8 @@ function matchesEndpoint(path, name) {
 }
 
 function getDevCandidates() {
+  return [];
+
   return [
     {
       id: "dev_candidate_1",

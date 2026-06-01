@@ -2,9 +2,9 @@
 
 ## Goal
 
-Build the MVP Python backend for natural-language BoondManager search orchestration.
+Build the MVP Python backend for natural-language candidate search orchestration.
 
-The Agent API receives a search request, interprets the user intent, plans tool usage, calls MCP tools, evaluates results, optionally replans once, and returns structured results plus an AI summary.
+The Agent API receives a search request, interprets the user intent, plans tool usage, calls MCP tools, evaluates results, optionally replans once, and returns a UI-oriented response for the frontend.
 
 ## MVP Scope
 
@@ -13,6 +13,7 @@ The Agent API receives a search request, interprets the user intent, plans tool 
 - LangGraph workflow with explicit nodes.
 - MCP client abstraction for BoondManager tools.
 - Typed Pydantic models for API and workflow boundaries.
+- UI-oriented response models normalized from MCP results.
 - Structured logging.
 - pytest coverage with mocked MCP responses.
 
@@ -38,7 +39,8 @@ The Agent API receives a search request, interprets the user intent, plans tool 
 
 - Centralize settings for LLM provider, MCP server URL, timeouts, logging, and environment.
 - Use dotenv or pydantic-settings for local configuration.
-- Define request, response, graph state, tool call, warning, and error schemas with Pydantic.
+- Define request, UI response, candidate card, graph state, tool call, warning, and error schemas with Pydantic.
+- Keep internal workflow metadata separate from the default frontend response.
 
 ### Phase 3: FastAPI Boundary
 
@@ -46,6 +48,7 @@ The Agent API receives a search request, interprets the user intent, plans tool 
 - Keep route handlers thin.
 - Validate input and serialize output at the API layer.
 - Delegate orchestration to an application service that invokes the LangGraph workflow.
+- Return `conversation_id`, `message`, and `ui` by default.
 
 ### Phase 4: LangGraph Workflow
 
@@ -66,27 +69,35 @@ The Agent API receives a search request, interprets the user intent, plans tool 
 - Do not hard-code BoondManager API calls.
 - Normalize MCP client errors into Agent API error and warning models.
 - Use timeouts and bounded retries for transient failures.
+- Normalize BoondManager MCP candidate results into frontend candidate card fields.
+- Do not return raw MCP payloads to the frontend.
 
 ### Phase 6: Evaluation And Replanning
 
 - Evaluate result quality after tool execution.
 - Replan only when results are empty, clearly insufficient, or tool selection failed.
 - Bound replanning with a small retry count.
-- Add warnings when the final response has partial or low-confidence results.
+- Keep warnings and confidence in internal state or optional debug output.
+- Do not include internal metadata in the default frontend response.
 
 ### Phase 7: Tests And Observability
 
 - Add pytest tests for API validation, graph nodes, workflow execution, MCP client behavior, and error handling.
 - Mock MCP tools for MVP tests.
 - Add structured logs for request ID, interpreted intent, selected tools, result counts, warnings, and errors.
+- Test that `/api/search` returns the UI-oriented contract and does not leak raw MCP payloads.
 
 ## Acceptance Criteria
 
-- `POST /api/search` returns the documented response shape.
+- `POST /api/search` returns the documented UI-oriented response shape.
 - The Agent API only accesses BoondManager data through MCP tools.
+- BoondManager MCP results are normalized into candidate card models.
+- Missing scalar or numeric fields become `null`.
+- Missing list fields become `[]`.
+- Candidate summaries are grounded in MCP result fields and do not invent data.
 - LangGraph owns workflow state and node transitions.
 - FastAPI remains a thin HTTP layer.
-- Results include a summary, confidence score, and warnings array.
+- Internal metadata such as interpreted intent, execution plan, tool calls, confidence, and warnings is not returned by default.
 - Tests cover successful search, no results, MCP failure, invalid request, and replanning.
 
 ## Architecture Inputs
