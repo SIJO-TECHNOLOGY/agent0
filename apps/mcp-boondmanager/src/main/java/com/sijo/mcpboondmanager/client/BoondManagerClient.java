@@ -57,8 +57,14 @@ public class BoondManagerClient {
             throw new ExternalServiceException(
                     "Unable to reach BoondManager on GET " + path, path, ex);
         } catch (RuntimeException ex) {
+            String causeMessage = ex.getMessage();
+            String detail = causeMessage == null || causeMessage.isBlank()
+                    ? ex.getClass().getSimpleName()
+                    : ex.getClass().getSimpleName() + ": " + causeMessage;
             throw new ExternalServiceException(
-                    "Unexpected error while calling BoondManager on GET " + path, path, ex);
+                    "Unexpected error while calling BoondManager on GET " + path + " (" + detail + ")",
+                    path,
+                    ex);
         }
     }
 }

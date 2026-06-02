@@ -9,6 +9,7 @@ interface.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Final
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.\-]{1,}")
@@ -43,12 +44,28 @@ _TYPE_HINTS: Final[dict[str, str]] = {
     "engineers": "search_consultants",
     "profile": "search_consultants",
     "profiles": "search_consultants",
+    "candidat": "search_consultants",
+    "candidats": "search_consultants",
+    "profil": "search_consultants",
+    "profils": "search_consultants",
+    "développeur": "search_consultants",
+    "developpeur": "search_consultants",
+    "développeurs": "search_consultants",
+    "developpeurs": "search_consultants",
+    "ingénieur": "search_consultants",
+    "ingenieur": "search_consultants",
+    "ingénieurs": "search_consultants",
+    "ingenieurs": "search_consultants",
+    "ressource": "search_consultants",
+    "ressources": "search_consultants",
     "project": "search_projects",
     "projects": "search_projects",
     "mission": "search_projects",
     "missions": "search_projects",
     "opportunity": "search_opportunities",
     "opportunities": "search_opportunities",
+    "opportunite": "search_opportunities",
+    "opportunites": "search_opportunities",
     "deal": "search_opportunities",
     "deals": "search_opportunities",
 }
@@ -157,6 +174,71 @@ _STOPWORDS: Final[frozenset[str]] = frozenset(
         "want",
         "wanted",
         "wanting",
+        # French request framing
+        "trouve",
+        "trouver",
+        "cherche",
+        "chercher",
+        "recherche",
+        "rechercher",
+        "donne",
+        "donner",
+        "montre",
+        "montrer",
+        "affiche",
+        "afficher",
+        "liste",
+        "lister",
+        "moi",
+        "me",
+        "mon",
+        "ma",
+        "mes",
+        "nous",
+        "vous",
+        "votre",
+        "vos",
+        "un",
+        "une",
+        "des",
+        "de",
+        "du",
+        "d",
+        "le",
+        "la",
+        "les",
+        "et",
+        "ou",
+        "avec",
+        "pour",
+        "sur",
+        "dans",
+        "en",
+        "au",
+        "aux",
+        "ce",
+        "ces",
+        "cet",
+        "cette",
+        "qui",
+        "quoi",
+        "quand",
+        "comment",
+        "sont",
+        "est",
+        "etre",
+        "avoir",
+        "besoin",
+        "veux",
+        "voudrais",
+        "peux",
+        "peut",
+        "peuvent",
+        "disponible",
+        "disponibles",
+        "expérience",
+        "experience",
+        "ans",
     }
 )
 
@@ -169,7 +251,9 @@ _YEARS_EXPERIENCE_RE: Final[re.Pattern[str]] = re.compile(
 
 def tokenize(query: str) -> list[str]:
     """Return lowercase tokens from a query."""
-    return [match.group(0).lower() for match in WORD_RE.finditer(query)]
+    normalized = unicodedata.normalize("NFKD", query)
+    without_accents = "".join(char for char in normalized if not unicodedata.combining(char))
+    return [match.group(0).lower() for match in WORD_RE.finditer(without_accents)]
 
 
 def extract_keywords(query: str) -> list[str]:

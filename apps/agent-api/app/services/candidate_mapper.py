@@ -71,9 +71,51 @@ _TOOLS_FIELDS: Final[tuple[str, ...]] = ("tools", "technologies")
 # Split a free-text skills string into discrete skills (delimiters only —
 # never spaces, so multi-word skills like "machine learning" survive).
 _SKILL_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"[,;/|\n·•]+")
-_MAX_SKILLS: Final[int] = 40
+_SKILL_TEXT_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "jobTitle",
+    "headline",
+    "position",
+    "role",
+    "snippet",
+    "summary",
+    "description",
+)
+_KNOWN_SKILL_PATTERNS: Final[tuple[tuple[str, str], ...]] = (
+    (r"\bjava\b", "Java"),
+    (r"\bj2ee\b", "J2EE"),
+    (r"\bspring\b", "Spring"),
+    (r"\bspring\s*boot\b", "Spring Boot"),
+    (r"\bjsp\b", "JSP"),
+    (r"\bjsf\b", "JSF"),
+    (r"\bstruts\b", "Struts"),
+    (r"\bangular\b", "Angular"),
+    (r"\breact\b", "React"),
+    (r"\bvue\b", "Vue.js"),
+    (r"\bnode(?:\.js)?\b", "Node.js"),
+    (r"\bpython\b", "Python"),
+    (r"\bphp\b", "PHP"),
+    (r"\b\.net\b", ".NET"),
+    (r"\bc#\b", "C#"),
+    (r"\bsql\b", "SQL"),
+    (r"\bdevops\b", "DevOps"),
+    (r"\bfront[-\s]?end\b", "Front-end"),
+    (r"\bback[-\s]?end\b|\bback\b", "Back-end"),
+)
+_SKILL_NOISE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:\d+\+?\s*(?:yrs?|years?|ans?)|[+-]?\d+(?:\.\d+)?)$",
+    re.IGNORECASE,
+)
+_SKILL_NOISE_LABELS: Final[frozenset[str]] = frozenset(
+    {"inconnu", "unknown", "n/a", "na", "none", "null"}
+)
+_MAX_SKILLS: Final[int] = 12
 
 _BOOND_URL_FIELDS: Final[tuple[str, ...]] = ("boondUrl", "boond_url", "url", "link")
+_ENRICHMENT_FIELDS: Final[tuple[str, ...]] = (
+    "_enrichment_detail",
+    "_enrichment_technical_document",
+)
 
 # Internal data keys we never surface in candidate cards.
 _INTERNAL_DATA_PREFIXES: Final[tuple[str, ...]] = ("_",)
@@ -94,6 +136,17 @@ def _flatten_record(data: dict[str, object]) -> dict[str, object]:
         nested = data.get(nested_key)
         if isinstance(nested, dict):
             for key, value in nested.items():
+                flat.setdefault(key, value)
+    technical_document = flat.get("technicalDocument")
+    if isinstance(technical_document, dict):
+        for key, value in technical_document.items():
+            flat.setdefault(key, value)
+        if "experience" in technical_document:
+            flat.setdefault("experienceYears", technical_document["experience"])
+    for enrichment_key in _ENRICHMENT_FIELDS:
+        enrichment = flat.get(enrichment_key)
+        if isinstance(enrichment, dict):
+            for key, value in enrichment.items():
                 flat.setdefault(key, value)
     return flat
 
@@ -190,16 +243,21 @@ def _extract_skills(data: dict[str, object]) -> list[str]:
     """Collect candidate skills from BoondManager summary + technical doc.
 
     Handles the real shapes: a free-text ``skills`` STRING (split on
-    delimiters), list skills, and the ``tools`` proficiency list of
-    ``{tool, level}`` dicts. De-duplicated, order-preserving, capped.
+    delimiters), list skills, the ``tools`` proficiency list of
+    ``{tool, level}`` dicts, and a conservative text fallback.
+    De-duplicated, order-preserving, capped.
     """
     out: list[str] = []
     seen: set[str] = set()
 
     def _add(value: str) -> None:
         text = value.strip()
+        if not text:
+            return
         key = text.lower()
-        if text and key not in seen and len(out) < _MAX_SKILLS:
+        if key in _SKILL_NOISE_LABELS or _SKILL_NOISE_RE.match(text):
+            return
+        if key not in seen and len(out) < _MAX_SKILLS:
             seen.add(key)
             out.append(text)
 
@@ -230,7 +288,26 @@ def _extract_skills(data: dict[str, object]) -> list[str]:
                     if name:
                         _add(name)
 
-    return out
+    if out:
+        return out
+    return _infer_skills_from_text(data)
+
+
+def _infer_skills_from_text(data: dict[str, object]) -> list[str]:
+    """Extract visible skill tags from Boond-returned text fields only."""
+    haystack = " ".join(
+        value.strip()
+        for key in _SKILL_TEXT_FIELDS
+        if isinstance((value := data.get(key)), str) and value.strip()
+    )
+    if not haystack:
+        return []
+
+    skills: list[str] = []
+    for pattern, label in _KNOWN_SKILL_PATTERNS:
+        if re.search(pattern, haystack, flags=re.IGNORECASE) and label not in skills:
+            skills.append(label)
+    return skills[:_MAX_SKILLS]
 
 
 def _build_boond_url(data: dict[str, object]) -> str | None:
@@ -260,7 +337,7 @@ def _build_summary(
     if snippet:
         return snippet
     if full_name and title:
-        return f"{full_name} — {title}."
+        return f"{full_name} - {title}."
     if full_name:
         return f"Candidate profile for {full_name}."
     if title:
@@ -279,7 +356,10 @@ def candidate_card_from_result(result: SearchResult) -> CandidateCard | None:
     safe_data = {
         k: v
         for k, v in result.data.items()
-        if not (isinstance(k, str) and k.startswith(_INTERNAL_DATA_PREFIXES))
+        if (
+            (isinstance(k, str) and k in _ENRICHMENT_FIELDS)
+            or not (isinstance(k, str) and k.startswith(_INTERNAL_DATA_PREFIXES))
+        )
     }
     merged: dict[str, object] = _flatten_record(safe_data)
 

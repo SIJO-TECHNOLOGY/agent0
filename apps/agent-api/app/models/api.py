@@ -73,6 +73,63 @@ class SearchResponse(BaseModel):
     ui: CandidateCardsUI
 
 
+class ChatRequest(BaseModel):
+    """Incoming chat request from the web UI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str | None = None
+    conversation_id: str | None = None
+    interaction: dict[str, object] | None = None
+
+    @field_validator("message")
+    @classmethod
+    def _message_not_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("message must be non-empty when provided")
+        return stripped
+
+
+class ChatResponse(BaseModel):
+    """Outgoing chat response expected by the web UI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str
+    message: str
+    ui: dict[str, object]
+    candidates: list[dict[str, object]] = Field(default_factory=list)
+    debug: dict[str, object] = Field(default_factory=dict)
+
+
+class ConversationCreateRequest(BaseModel):
+    """Create a lightweight frontend conversation shell."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = "Nouvelle conversation"
+
+
+class ConversationSummary(BaseModel):
+    """Conversation list item consumed by the frontend sidebar."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class ConversationDetail(ConversationSummary):
+    """Conversation detail payload consumed by the frontend."""
+
+    messages: list[dict[str, object]] = Field(default_factory=list)
+
+
 class ErrorPayload(BaseModel):
     """Stable error body matching the documented contract."""
 

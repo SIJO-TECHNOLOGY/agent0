@@ -11,9 +11,11 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api import (
+    chat_router,
     health_router,
     mcp_debug_router,
     mcp_tools_router,
@@ -93,7 +95,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     await _close_client(client)
                 except Exception:  # noqa: BLE001
                     logger.exception("mcp.close_after_failed_connect_failed")
-                client = None
                 status_value = "unavailable"
                 error = _sanitize_connect_error(exc)
 
@@ -115,6 +116,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 model=settings.llm_model,
                 api_key=settings.llm_api_key,
                 temperature=settings.llm_temperature,
+                timeout_seconds=settings.llm_timeout_seconds,
             )
         except LlmBackendError:
             logger.exception("llm_planner.init_failed")
@@ -135,7 +137,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         bound = getattr(app.state, "mcp_client", None)
         if bound is not None:
-            await _close_client(bound)
+            try:
+                await _close_client(bound)
+            except Exception:  # noqa: BLE001
+                logger.exception("mcp.close_failed")
         app.state.mcp_client = None
         app.state.mcp_status = None
         app.state.llm_planner = None
@@ -161,6 +166,18 @@ def create_app() -> FastAPI:
     # when ENABLE_MCP_DEBUG_ENDPOINTS is false so its existence stays
     # invisible in production.
     app.include_router(mcp_debug_router)
+    app.include_router(chat_router)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:5500",
+            "http://127.0.0.1:5500",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.exception_handler(RequestValidationError)
     async def _validation_handler(

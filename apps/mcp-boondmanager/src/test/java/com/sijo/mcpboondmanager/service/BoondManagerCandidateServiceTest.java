@@ -21,6 +21,7 @@ import com.sijo.mcpboondmanager.dto.dictionary.DictionaryResponseDto;
 import com.sijo.mcpboondmanager.exception.BoondApiException;
 import com.sijo.mcpboondmanager.exception.CandidateNotFoundException;
 import com.sijo.mcpboondmanager.exception.DictionaryResolutionException;
+import com.sijo.mcpboondmanager.exception.ExternalServiceException;
 import com.sijo.mcpboondmanager.support.TestFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -185,6 +186,37 @@ class BoondManagerCandidateServiceTest {
     }
 
     @Test
+    void givenTechnicalDataPathFails_whenGetCandidateTechnicalDocument_thenTriesPluralFallbackPath() {
+        BoondApiException backend = new BoondApiException(
+                "boom", HttpStatus.INTERNAL_SERVER_ERROR, "/candidates/42/technical-data", null);
+        when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
+                .thenThrow(backend);
+        when(client.get(eq("/candidates/42/technical-datas"), any(ParameterizedTypeReference.class)))
+                .thenReturn(technicalDocumentEnvelope());
+
+        TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
+
+        assertThat(response.id()).isEqualTo(101);
+        assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
+        assertThat(response.candidateId()).isEqualTo(42);
+    }
+
+    @Test
+    void givenTechnicalDataReturnsListEnvelope_whenGetCandidateTechnicalDocument_thenMapsFirstRecord() {
+        ExternalServiceException parseAsSingleFailure = new ExternalServiceException(
+                "single envelope parse failed", "/candidates/42/technical-data", null);
+        when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
+                .thenThrow(parseAsSingleFailure)
+                .thenReturn(technicalDocumentListEnvelope());
+
+        TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
+
+        assertThat(response.id()).isEqualTo(101);
+        assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
+        assertThat(response.candidateId()).isEqualTo(42);
+    }
+
+    @Test
     void givenCandidateNotFound_whenGetCandidateDetail_thenMapsToCandidateNotFoundException() {
         BoondApiException backend = new BoondApiException(
                 "missing", HttpStatus.NOT_FOUND, "/candidates/404/information", null);
@@ -203,8 +235,12 @@ class BoondManagerCandidateServiceTest {
     void givenTechnicalDocumentNotFound_whenGetCandidateTechnicalDocument_thenMapsToCandidateNotFoundException() {
         BoondApiException backend = new BoondApiException(
                 "missing", HttpStatus.NOT_FOUND, "/candidates/404/technical-data", null);
+        BoondApiException fallbackBackend = new BoondApiException(
+                "missing", HttpStatus.NOT_FOUND, "/candidates/404/technical-datas", null);
         when(client.get(eq("/candidates/404/technical-data"), any(ParameterizedTypeReference.class)))
                 .thenThrow(backend);
+        when(client.get(eq("/candidates/404/technical-datas"), any(ParameterizedTypeReference.class)))
+                .thenThrow(fallbackBackend);
 
         assertThatThrownBy(() -> service().getCandidateTechnicalDocument(404))
                 .isInstanceOfSatisfying(CandidateNotFoundException.class, ex ->
@@ -283,5 +319,17 @@ class BoondManagerCandidateServiceTest {
                 List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
                 List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")));
         return new BoondSingleEnvelope<>(new BoondData<>("42", "candidate", attrs));
+    }
+
+    private BoondListEnvelope<BoondTechnicalDocumentAttributes> technicalDocumentListEnvelope() {
+        BoondTechnicalDocumentAttributes attrs = new BoondTechnicalDocumentAttributes(
+                "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
+                3, "bac5", "Engineering school",
+                "Java, Spring, PostgreSQL", "backend", "finance",
+                "IntelliJ:5", "fr:5|en:4",
+                Boolean.FALSE, "2025-01-01", "2026-01-01", 42);
+        return new BoondListEnvelope<>(
+                List.of(new BoondData<>("101", "technicaldata", attrs)),
+                new BoondMeta(new BoondMeta.Totals(1), 1));
     }
 }

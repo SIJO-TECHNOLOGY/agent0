@@ -1,36 +1,53 @@
 # API Contract
 
-## Endpoint
+## Endpoints
 
 ```text
 POST /api/search
+POST /api/chat
 ```
 
-Executes a natural-language search workflow through the Agent API and
-returns a frontend-oriented response. The frontend never sees raw MCP
-or BoondManager payloads.
+`/api/search` executes a natural-language search workflow through the Agent API
+and returns a frontend-oriented response. `/api/chat` is the compatibility
+endpoint consumed by the current web UI; it delegates to the same search
+workflow and returns `{ conversation_id, message, ui, candidates }`.
 
-## Request Body
+The frontend never consumes raw MCP or BoondManager payloads by default.
+
+## Search Request
 
 ```json
 {
-  "query": "Find the candidate information with candidate id 41924",
+  "query": "Find Java candidates in Paris",
   "filters": {}
 }
 ```
 
-## Request Fields
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `query` | string | yes | Natural-language candidate search request. |
+| `filters` | object | no | Optional structured filters from the UI. Defaults to an empty object. |
+
+## Chat Request
+
+```json
+{
+  "message": "Find Java candidates in Paris",
+  "conversation_id": "conv_123"
+}
+```
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `query` | string | yes | Natural-language search request. |
-| `filters` | object | no | Optional structured filters from the UI. Defaults to an empty object. |
+| `message` | string | yes, unless `interaction` is provided | User message from the chat UI. |
+| `conversation_id` | string | no | Existing conversation id. A new one is created when omitted. |
+| `interaction` | object | no | Structured UI interaction, such as clarification values. |
 
 ## Response Body
 
 ```json
 {
-  "conversation_id": "conv_1ac0fe6cade44a688bad5658f44e3971",
+  "conversation_id": "conv_123",
   "message": "Found 1 candidate matching your search: Sarah Martin.",
   "ui": {
     "type": "candidate_cards",
@@ -43,14 +60,17 @@ or BoondManager payloads.
         "location": "Paris, France",
         "availability": "Available immediately",
         "skills": ["Java", "Spring", "Kafka"],
-        "match_score": null,
-        "summary": "Sarah Martin — Backend Java Engineer.",
+        "match_score": 0.86,
+        "summary": "Sarah Martin - Backend Java Engineer.",
         "boond_url": null
       }
     ]
   }
 }
 ```
+
+The values above are examples only. Real values must be adapted from
+BoondManager MCP server results.
 
 ## Response Fields
 
@@ -60,48 +80,46 @@ or BoondManager payloads.
 | `message` | string | Short user-facing reply grounded in the candidate list. |
 | `ui` | object | UI block describing how the frontend should render the answer. |
 
-### `ui` object
+### `ui` Object
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `type` | string | Always `"candidate_cards"` for now. |
+| `type` | string | `"candidate_cards"` for candidate search responses. |
 | `candidates` | array | List of candidate cards. Empty array when no candidates match. |
 
-### Candidate card
+### Candidate Card
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | string | Stable identifier for the candidate. |
 | `full_name` | string \| null | Derived from name fields when present. |
-| `title` | string \| null | Job title / headline if available. |
+| `title` | string \| null | Job title or headline if available. |
 | `experience_years` | number \| null | Years of experience when available. |
-| `location` | string \| null | Readable location derived from city/country/address. |
-| `availability` | string \| null | Readable availability label or "Available from <date>". |
+| `location` | string \| null | Readable location derived from city, country, or address fields. |
+| `availability` | string \| null | Readable availability label or availability date. |
 | `skills` | array of strings | Empty array when unknown. |
-| `match_score` | number \| null | Relevance score (search tools only). `null` for detail lookups. |
-| `summary` | string \| null | Short, MCP-grounded summary. |
+| `match_score` | number \| null | Relevance score when available. |
+| `summary` | string \| null | Short MCP-grounded summary. |
 | `boond_url` | string \| null | External link when the MCP result provides one. |
 
 ## Normalization Rules
 
-- Raw MCP and BoondManager payloads are never exposed to the frontend.
-- Unknown scalar/numeric fields are `null`.
+- Raw MCP and BoondManager payloads are not exposed to the frontend by default.
+- Unknown scalar or numeric fields are `null`.
 - Unknown list fields are `[]`.
-- `full_name` is derived from `firstName`/`lastName` when present, or from
-  a single available name part.
-- `location` is derived from `city`/`country`/`address`-style fields.
-- `availability` prefers an explicit label and falls back to an
-  availability date.
-- `match_score` is only surfaced for search-style tools (e.g.
-  `searchCandidates`). Detail-style tools (e.g. `getCandidateDetail`)
-  emit `null`.
-- `boond_url` is `null` unless the MCP record provides an `http(s)://` URL.
+- `full_name` is derived from `firstName` and `lastName` when present.
+- `location` is derived from `city`, `country`, or address-style fields.
+- `availability` prefers an explicit label and falls back to a date.
+- `summary` may be generated by the backend, but it must be grounded in MCP data.
+- `boond_url` is `null` unless the MCP record provides a safe `http(s)://` URL.
 
 ## Validation Rules
 
-- `query` must be non-empty after trimming.
+- `query` and `message` must be non-empty after trimming when provided.
 - `filters` must be an object when provided.
-- Validation failures return structured `4xx` responses (see error envelope below).
+- Unknown filter keys may be accepted for forward compatibility, but must not be blindly passed to MCP tools.
+- Validation failures return structured `4xx` responses.
+- Successful search responses are deterministic in shape, even when no candidates are found.
 
 ## Error Response Shape
 
@@ -116,8 +134,8 @@ or BoondManager payloads.
 }
 ```
 
-When the MCP client is unbound (startup failure or real MCP server
-unreachable), `/api/search` returns the structured 503 envelope:
+When the MCP client is unbound or unavailable, search and chat requests return a
+structured 503 envelope:
 
 ```json
 {
@@ -125,25 +143,47 @@ unreachable), `/api/search` returns the structured 503 envelope:
     "code": "mcp_client_unavailable",
     "message": "The MCP client is not initialized. The Agent API cannot serve search requests until an MCP client is bound.",
     "details": {}
-  },
-  "warnings": []
+  }
+}
+```
+
+For successful requests with no matching candidates, prefer a `200` response:
+
+```json
+{
+  "conversation_id": "conv_123",
+  "message": "I could not find candidates matching your search.",
+  "ui": {
+    "type": "candidate_cards",
+    "candidates": []
+  }
 }
 ```
 
 ## API Conventions
 
-- FastAPI owns request validation and response serialization only.
-- The service layer adapts orchestration output (LangGraph + MCP tools)
-  into the candidate-card response shape.
-- Responses are deterministic in shape even when no candidates match
-  (empty `candidates` list).
-- Secrets, raw MCP errors, and provider stack traces must not be returned.
+- FastAPI owns request validation and response serialization.
+- Route handlers delegate workflow execution to services.
+- The service layer adapts LangGraph and MCP output into candidate-card responses.
+- Tool errors may be logged internally or surfaced as safe messages, but raw MCP errors and stack traces must not be returned to the frontend.
+- Secrets must never be returned.
+
+## Future UI Types
+
+Other UI types may be added later, for example:
+
+- `mission_cards`
+- `client_cards`
+- `table`
+- `clarification_request`
+- `error_message`
+
+Do not add them to the default contract until the frontend supports them.
 
 ## Future Streaming Compatibility
 
-The MVP response is synchronous JSON.
-
-Design internal workflow events so future SSE or WebSocket support can stream:
+The MVP response is synchronous JSON. Internal workflow events may support future
+SSE or WebSocket streaming for:
 
 - Intent interpretation.
 - Plan creation.

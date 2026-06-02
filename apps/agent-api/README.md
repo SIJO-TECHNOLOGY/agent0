@@ -2,7 +2,7 @@
 
 Python backend for the Sijo AI Agent platform.
 
-The Agent API receives natural-language search requests from the web UI, orchestrates a LangGraph workflow, calls MCP tools exposed by the BoondManager MCP server, ranks and aggregates results, and returns a structured response with an AI-generated summary.
+The Agent API receives natural-language search requests from the web UI, orchestrates a LangGraph workflow, calls MCP tools exposed by the BoondManager MCP server, ranks and aggregates results, and returns a UI-oriented response for the frontend.
 
 ## Status
 
@@ -30,7 +30,8 @@ No application source code, framework boilerplate, or `pyproject.toml` has been 
 - Select MCP tools.
 - Orchestrate LangGraph nodes.
 - Aggregate, deduplicate, rank, and summarize results.
-- Return structured responses to the web UI.
+- Normalize BoondManager MCP results into UI-friendly response models.
+- Return `conversation_id`, `message`, and `ui` to the web UI by default.
 
 ## Non-Goals
 
@@ -46,6 +47,37 @@ POST /api/search
 ```
 
 The endpoint accepts a natural-language query and optional filters, then returns interpreted intent, execution plan, tool calls, results, summary, confidence, and warnings.
+The endpoint accepts a natural-language query and optional filters, then returns a UI-oriented response.
+
+Example:
+
+```json
+{
+  "conversation_id": "conv_123",
+  "message": "I found 5 candidates matching your search.",
+  "ui": {
+    "type": "candidate_cards",
+    "candidates": [
+      {
+        "id": "candidate_1",
+        "full_name": "Sarah Martin",
+        "title": "Backend Java Engineer",
+        "experience_years": 7,
+        "location": "Paris",
+        "availability": "Available immediately",
+        "skills": ["Java", "Spring", "Kafka"],
+        "match_score": 0.86,
+        "summary": "Confirmed backend profile.",
+        "boond_url": "https://ui.boondmanager.com/"
+      }
+    ]
+  }
+}
+```
+
+The values above are examples only. Real candidate values must be adapted from BoondManager MCP server results.
+
+Internal metadata such as interpreted intent, execution plan, tool calls, confidence, and warnings may exist in graph state or debug mode, but should not be the default frontend response.
 
 ## System Context
 

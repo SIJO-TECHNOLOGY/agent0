@@ -232,6 +232,27 @@ def test_json_api_style_record_resolves_id_and_name() -> None:
     assert card.skills == ["Java", "Spring"]
 
 
+def test_nested_technical_document_feeds_card_fields() -> None:
+    card = candidate_card_from_result(
+        _result(
+            id="41924",
+            data={
+                "firstName": "Sarah",
+                "lastName": "Martin",
+                "technicalDocument": {
+                    "title": "Senior Java Backend",
+                    "experience": 7,
+                    "skills": "Java, Spring; Kafka\nDocker",
+                },
+            },
+        )
+    )
+    assert card is not None
+    assert card.title == "Senior Java Backend"
+    assert card.experience_years == 7.0
+    assert card.skills == ["Java", "Spring", "Kafka", "Docker"]
+
+
 def test_card_dropped_when_record_has_no_resolvable_id() -> None:
     card = candidate_card_from_result(_result(id="", data={"firstName": "X"}))
     assert card is None
