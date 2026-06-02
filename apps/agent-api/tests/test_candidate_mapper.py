@@ -121,6 +121,54 @@ def test_experience_years_not_filled_from_boond_level_id() -> None:
         _result(source_tool="searchCandidates", data={"experience": 3})
     )
     assert card.experience_years is None
+    assert card.experience_open_ended is None
+
+
+def test_experience_from_resolved_min_years_open_ended() -> None:
+    # 40706-style: id 10 → "> à 10 ans" → minYears 10, openEnded true.
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "experience": 10,
+                "experienceMinYears": 10,
+                "experienceOpenEnded": True,
+                "experienceSpecified": True,
+            },
+        )
+    )
+    assert card.experience_years == 10.0
+    assert card.experience_open_ended is True
+
+
+def test_experience_from_resolved_min_years_exact_bucket() -> None:
+    # 8538-style: id 11 → "4 ans" → minYears 4 (NOT 11), not open-ended.
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"experience": 11, "experienceMinYears": 4, "experienceOpenEnded": False},
+        )
+    )
+    assert card.experience_years == 4.0
+    assert card.experience_open_ended is False
+
+
+def test_experience_null_when_not_specified() -> None:
+    # 8378-style: id -1 → minYears null, specified false.
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "experience": -1,
+                "experienceMinYears": None,
+                "experienceSpecified": False,
+                "experienceOpenEnded": False,
+            },
+        )
+    )
+    assert card.experience_years is None
+    # Open-ended is meaningless without a value.
+    assert card.experience_open_ended is None
 
 
 def test_skills_extracted_from_tools_proficiency_list() -> None:
@@ -241,7 +289,11 @@ def test_nested_technical_document_feeds_card_fields() -> None:
                 "lastName": "Martin",
                 "technicalDocument": {
                     "title": "Senior Java Backend",
+                    # Raw `experience` is a level id and must NOT be shown as
+                    # years; the resolved experienceMinYears is what surfaces.
                     "experience": 7,
+                    "experienceMinYears": 10,
+                    "experienceOpenEnded": True,
                     "skills": "Java, Spring; Kafka\nDocker",
                 },
             },
@@ -249,13 +301,35 @@ def test_nested_technical_document_feeds_card_fields() -> None:
     )
     assert card is not None
     assert card.title == "Senior Java Backend"
-    assert card.experience_years == 7.0
+    assert card.experience_years == 10.0
+    assert card.experience_open_ended is True
     assert card.skills == ["Java", "Spring", "Kafka", "Docker"]
 
 
 def test_card_dropped_when_record_has_no_resolvable_id() -> None:
     card = candidate_card_from_result(_result(id="", data={"firstName": "X"}))
     assert card is None
+
+
+def test_card_surfaces_is_full_match_and_unmet_criteria() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            is_full_match=False,
+            unmet_criteria=["cib", "10+ years"],
+            data={"firstName": "A", "lastName": "B"},
+        )
+    )
+    assert card.is_full_match is False
+    assert card.unmet_criteria == ["cib", "10+ years"]
+
+
+def test_card_is_full_match_defaults_to_none() -> None:
+    card = candidate_card_from_result(
+        _result(source_tool="searchCandidates", data={"firstName": "A", "lastName": "B"})
+    )
+    assert card.is_full_match is None
+    assert card.unmet_criteria == []
 
 
 def test_card_filtered_out_in_batch_when_no_id() -> None:

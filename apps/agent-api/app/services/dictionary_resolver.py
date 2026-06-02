@@ -76,7 +76,11 @@ def _id_of(entry: dict[str, object]) -> object | None:
 
 
 def _extract_lower_threshold(label: str) -> int | None:
-    """Return the lower numeric bound implied by an open-ended label."""
+    """Return the lower numeric bound implied by an OPEN-ENDED label.
+
+    Used by the search-filter resolver, which must NOT match closed ranges
+    (a "5-10 years" bucket should not satisfy a "10+ years" filter).
+    """
     for pattern in (_PLUS_THRESHOLD_RE, _GTE_THRESHOLD_RE, _AND_MORE_RE):
         match = pattern.search(label)
         if match:
@@ -143,30 +147,6 @@ def resolve_tool_ids(
             seen.add(entry_id)
             matched.append(entry_id)
     return matched
-
-
-def experience_years_for_id(
-    entries: Iterable[object], exp_id: object
-) -> int | None:
-    """Reverse lookup: a candidate's experience level id → years threshold.
-
-    Finds the dictionary entry whose id matches ``exp_id`` and parses the
-    open-ended lower bound from its label (e.g. ``"10+ years"`` → ``10``).
-    Returns ``None`` when the id is unknown or its label carries no
-    open-ended numeric threshold (e.g. a closed range like ``"1-3 years"``).
-    """
-    if exp_id in (None, ""):
-        return None
-    target = str(exp_id)
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        entry_id = _id_of(entry)
-        if entry_id is None or str(entry_id) != target:
-            continue
-        label = _label_of(entry)
-        return _extract_lower_threshold(label) if label else None
-    return None
 
 
 def resolve_experience_id(

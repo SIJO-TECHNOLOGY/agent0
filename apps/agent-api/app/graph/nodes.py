@@ -34,7 +34,6 @@ from app.services.candidate_mapper import (
 )
 from app.services.dictionary_resolver import (
     dictionary_section_entries,
-    experience_years_for_id,
     resolve_experience_id,
     resolve_tool_ids,
 )
@@ -1251,9 +1250,105 @@ def _techdoc_haystack(result: SearchResult) -> str:
     return " ".join(parts).lower()
 
 
-def _stored_years(result: SearchResult) -> int | None:
-    value = result.data.get(EXPERIENCE_MIN_YEARS_KEY)
-    return value if isinstance(value, int) else None
+def _min_years_in(source: object) -> int | None:
+    """Read an ``experienceMinYears`` value from a record/dict, if present."""
+    if not isinstance(source, dict):
+        return None
+    for key in ("experienceMinYears", "experience_min_years"):
+        value = source.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                continue
+    return None
+
+
+def _record_experience_min_years(result: SearchResult) -> int | None:
+    """MCP-resolved minimum years of experience for the candidate (or None).
+
+    BoondManager (via the MCP server) resolves the experience level id to a
+    canonical ``experienceMinYears`` on both the search summary and the
+    technical document; ``None`` means "not specified".
+    """
+    for source in (
+        result.data,
+        result.data.get("attributes"),
+        result.data.get(ENRICHMENT_TECH_DOC_KEY),
+    ):
+        years = _min_years_in(source)
+        if years is not None:
+            return years
+    return None
+
+
+def _techdoc_min_years(result: SearchResult) -> int | None:
+    """experienceMinYears from the technical-document enrichment payload only."""
+    return _min_years_in(result.data.get(ENRICHMENT_TECH_DOC_KEY))
+
+
+# Free-text business-context fields. Domain evidence is matched against
+# these high-signal surfaces (title/job-title, summary, description) rather
+# than the raw skills/tools blob, so an incidental business word in a long
+# skills list does not earn domain credit.
+_DOMAIN_TEXT_FIELDS: Final[tuple[str, ...]] = ("summary", "description")
+_DOMAIN_SURFACE_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "jobTitle",
+    "headline",
+    "position",
+    "summary",
+    "description",
+)
+
+
+def _flatten_for_domain(data: dict[str, object]) -> dict[str, object]:
+    """Hoist JSON:API ``attributes`` so title/summary lookups don't miss them."""
+    flat = dict(data)
+    attributes = data.get("attributes")
+    if isinstance(attributes, dict):
+        for key, value in attributes.items():
+            flat.setdefault(key, value)
+    return flat
+
+
+def _summary_domain_text(result: SearchResult) -> str:
+    """High-signal SUMMARY domain surface: title/job-title + summary/description."""
+    parts: list[str] = []
+    if result.title:
+        parts.append(result.title)
+    if result.snippet:
+        parts.append(result.snippet)
+    flat = _flatten_for_domain(result.data)
+    for field in _DOMAIN_SURFACE_FIELDS:
+        value = flat.get(field)
+        if isinstance(value, str):
+            parts.append(value)
+    return " ".join(parts).lower()
+
+
+def _techdoc_domain_text(result: SearchResult) -> str:
+    """Technical-document free-text (summary/description) for domain evidence."""
+    payload = result.data.get(ENRICHMENT_TECH_DOC_KEY)
+    if not isinstance(payload, dict):
+        return ""
+    parts = [
+        str(payload[field])
+        for field in _DOMAIN_TEXT_FIELDS
+        if isinstance(payload.get(field), str)
+    ]
+    return " ".join(parts).lower()
+
+
+def _domain_haystack(result: SearchResult) -> str:
+    """High-signal domain surface for scoring: summary text + tech-doc text."""
+    summary = _summary_domain_text(result)
+    techdoc = _techdoc_domain_text(result)
+    return f"{summary} {techdoc}".strip()
 
 
 def _criteria_status(
@@ -1279,13 +1374,17 @@ def _criteria_status(
             continue
         techdoc = _techdoc_haystack(result)
         if techdoc:
+            td_years = _techdoc_min_years(result)
             _, td_hits = evidence_score(
                 techdoc,
                 skills=skills,
                 domains=domains,
                 role=role,
-                candidate_min_years=parse_years(techdoc),
+                candidate_min_years=(
+                    td_years if td_years is not None else parse_years(techdoc)
+                ),
                 required_min_years=required_years,
+                domain_haystack=_techdoc_domain_text(result),
             )
             verified |= td_hits
         summary = _summary_haystack(result)
@@ -1294,8 +1393,9 @@ def _criteria_status(
             skills=skills,
             domains=domains,
             role=role,
-            candidate_min_years=_stored_years(result),
+            candidate_min_years=_record_experience_min_years(result),
             required_min_years=required_years,
+            domain_haystack=_summary_domain_text(result),
         )
         visible |= sm_hits
 
@@ -1316,6 +1416,34 @@ def _criteria_status(
     if required_years is not None:
         _classify("seniority", f"{required_years}+ years")
     return missing, visible_only
+
+
+def _evaluate_match(
+    hits: set[str],
+    *,
+    skills: tuple[str, ...],
+    domains: tuple[str, ...],
+    role: str | None,
+    required_years: int | None,
+) -> tuple[bool, list[str]]:
+    """Strict per-candidate match from its evidence ``hits``.
+
+    Full match iff EVERY requested criterion is evidenced for the candidate
+    (unknown counts as not evidenced). Returns ``(is_full_match, unmet)`` with
+    human labels (original casing / verbatim domain term) for the criteria
+    not evidenced — same labels as the aggregate status.
+    """
+    unmet: list[str] = []
+    for skill in skills:
+        if f"skill:{skill.lower()}" not in hits:
+            unmet.append(skill)
+    if domains and "domain" not in hits:
+        unmet.append(", ".join(domains))
+    if role and "role" not in hits:
+        unmet.append(role)
+    if required_years is not None and "seniority" not in hits:
+        unmet.append(f"{required_years}+ years")
+    return (not unmet), unmet
 
 
 async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
@@ -1352,18 +1480,34 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             re_ranked.append(result)
             continue
         haystack = _evidence_haystack(result)
-        score, _ = evidence_score(
+        score, hits = evidence_score(
             haystack,
             skills=skills,
             domains=domains,
             role=role,
             candidate_min_years=_candidate_min_years(result, haystack),
             required_min_years=required_years,
+            domain_haystack=_domain_haystack(result),
         )
         # Tiny tie-break for candidates we actually enriched with evidence.
         if score > 0.0 and ENRICHMENT_TECH_DOC_KEY in result.data:
             score = min(1.0, score + 0.03)
-        re_ranked.append(result.model_copy(update={"score": round(score, 4)}))
+        is_full_match, unmet = _evaluate_match(
+            hits,
+            skills=skills,
+            domains=domains,
+            role=role,
+            required_years=required_years,
+        )
+        re_ranked.append(
+            result.model_copy(
+                update={
+                    "score": round(score, 4),
+                    "is_full_match": is_full_match,
+                    "unmet_criteria": unmet,
+                }
+            )
+        )
 
     re_ranked.sort(key=lambda r: r.score, reverse=True)
 
@@ -1849,11 +1993,6 @@ def _experience_unmapped_warning() -> Warning:
 
 _MAX_SEARCH_PASSES: Final[int] = 5
 
-# Internal (mapper-dropped) key holding a candidate's resolved minimum
-# years of experience, parsed from the dictionary level label.
-EXPERIENCE_MIN_YEARS_KEY: Final[str] = "_experience_min_years"
-
-
 def _int_or_none(value: object) -> int | None:
     if value is None:
         return None
@@ -1863,20 +2002,13 @@ def _int_or_none(value: object) -> int | None:
         return None
 
 
-def _candidate_experience_id(result: SearchResult) -> object | None:
-    """The candidate's experience LEVEL id (a dictionary id, not years)."""
-    value = result.data.get("experience")
-    if value is None:
-        attributes = result.data.get("attributes")
-        if isinstance(attributes, dict):
-            value = attributes.get("experience")
-    return value
-
-
 def _candidate_min_years(result: SearchResult, haystack: str) -> int | None:
-    """Best-known minimum years for a candidate (resolved level or free text)."""
-    stored = result.data.get(EXPERIENCE_MIN_YEARS_KEY)
-    resolved = stored if isinstance(stored, int) else None
+    """Best-known minimum years for a candidate.
+
+    Prefers the MCP-resolved ``experienceMinYears``; falls back to a years
+    figure parsed from the candidate's CV free-text.
+    """
+    resolved = _record_experience_min_years(result)
     parsed = parse_years(haystack)
     known = [y for y in (resolved, parsed) if y is not None]
     return max(known) if known else None
@@ -1888,30 +2020,17 @@ def _prerank_search_results(
     anchors_skills: tuple[str, ...],
     anchors_domains: tuple[str, ...],
     anchors_role: str | None,
-    exp_entries: list[dict[str, object]],
     required_years: int | None,
 ) -> None:
-    """Annotate seniority + reorder search summaries by visible evidence.
+    """Reorder search summaries by visible evidence.
 
     Enrichment is bounded, so it must spend its budget on the candidates
     whose SUMMARY already shows the most evidence (skill/role/domain/
-    seniority) — not the first N in BoondManager order. Mutates ``results``
-    in place so the downstream fan-out picks the best candidates.
+    seniority) — not the first N in BoondManager order. Seniority comes
+    from the MCP-resolved ``experienceMinYears`` on each summary. Mutates
+    ``results`` in place so the downstream fan-out picks the best candidates.
     """
-    annotated: list[SearchResult] = []
-    for result in results:
-        if not result.source_tool.startswith("search"):
-            annotated.append(result)
-            continue
-        years = (
-            experience_years_for_id(exp_entries, _candidate_experience_id(result))
-            if exp_entries
-            else None
-        )
-        if years is not None:
-            merged = {**result.data, EXPERIENCE_MIN_YEARS_KEY: years}
-            result = result.model_copy(update={"data": merged})
-        annotated.append(result)
+    annotated = list(results)
 
     def _key(result: SearchResult) -> float:
         if not result.source_tool.startswith("search"):
@@ -1924,6 +2043,7 @@ def _prerank_search_results(
             role=anchors_role,
             candidate_min_years=_candidate_min_years(result, haystack),
             required_min_years=required_years,
+            domain_haystack=_domain_haystack(result),
         )
         return score
 
@@ -1962,7 +2082,6 @@ async def _execute_search_ladder(
 
     raw = await _fetch_dictionary(ctx, available_by_name)
     tool_entries = dictionary_section_entries(raw, "tool") if raw else []
-    exp_entries = dictionary_section_entries(raw, "experience") if raw else []
 
     # An entity is a concrete (server-filterable) skill iff it resolves to a
     # tool dictionary id. This is generic across technologies.
@@ -2019,7 +2138,6 @@ async def _execute_search_ladder(
             anchors_skills=anchors.skills,
             anchors_domains=anchors.domains,
             anchors_role=anchors.role,
-            exp_entries=exp_entries,
             required_years=required_years,
         )
         if used_relaxed:

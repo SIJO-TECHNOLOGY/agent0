@@ -17,3 +17,7 @@ class SearchResult(BaseModel):
     score: float = Field(ge=0.0, le=1.0, default=0.0)
     source_tool: str
     data: dict[str, object] = Field(default_factory=dict)
+    # Per-candidate strict-match signal (set by rank_candidates). ``None``
+    # means "not evaluated" (no parsed criteria, or a non-search result).
+    is_full_match: bool | None = None
+    unmet_criteria: list[str] = Field(default_factory=list)

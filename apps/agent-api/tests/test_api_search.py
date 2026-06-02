@@ -12,10 +12,13 @@ REQUIRED_CANDIDATE_KEYS = {
     "full_name",
     "title",
     "experience_years",
+    "experience_open_ended",
     "location",
     "availability",
     "skills",
     "match_score",
+    "is_full_match",
+    "unmet_criteria",
     "summary",
     "boond_url",
 }

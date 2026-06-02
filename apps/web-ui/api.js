@@ -4,9 +4,9 @@ import {
   CHAT_TIMEOUT_MS,
   DEV_API_MOCKS,
   DEV_MODE,
-  UI_CONFIG,
 } from "./config.js";
 import { getAccessToken } from "./auth.js";
+import { getLanguage, t } from "./i18n.js";
 
 const SUPPORTED_UI_TYPES = new Set([
   "text",
@@ -43,7 +43,7 @@ async function authHeaders() {
   const token = await getAccessToken();
 
   if (!token) {
-    throw new ApiError("Utilisateur non authentifié.", "auth");
+    throw new ApiError(t("errors.unauthenticated"), "auth");
   }
 
   return {
@@ -61,6 +61,7 @@ async function request(path, options = {}) {
     ...(DEV_MODE || options.auth === false
       ? { "Content-Type": "application/json" }
       : await authHeaders()),
+    "Accept-Language": getLanguage(),
     ...(options.headers || {}),
   };
 
@@ -78,16 +79,16 @@ async function request(path, options = {}) {
     });
   } catch (error) {
     if (error.name === "AbortError") {
-      throw new ApiError(UI_CONFIG.timeout_error_message, "timeout");
+      throw new ApiError(t("errors.timeout"), "timeout");
     }
 
-    throw new ApiError(UI_CONFIG.network_error_message, "network");
+    throw new ApiError(t("errors.network"), "network");
   } finally {
     if (timeoutId) window.clearTimeout(timeoutId);
   }
 
   if (!response.ok) {
-    throw new ApiError(UI_CONFIG.generic_error_message, "backend", response.status);
+    throw new ApiError(t("errors.generic"), "backend", response.status);
   }
 
   if (response.status === 204) {
@@ -97,7 +98,7 @@ async function request(path, options = {}) {
   try {
     return await response.json();
   } catch (error) {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response", response.status);
+    throw new ApiError(t("errors.malformed"), "malformed_response", response.status);
   }
 }
 
@@ -119,7 +120,7 @@ async function devRequest(path, options = {}) {
 
     return {
       id: `dev_${Date.now()}`,
-      title: body.title || UI_CONFIG.default_conversation_title,
+      title: body.title || t("conversations.default_title"),
       created_at: now,
       updated_at: now,
     };
@@ -215,7 +216,38 @@ async function devRequest(path, options = {}) {
     };
   }
 
-  throw new ApiError(UI_CONFIG.generic_error_message, "backend");
+  throw new ApiError(t("errors.generic"), "backend");
+}
+
+async function devStreamSearch(query, onEvent, { signal } = {}) {
+  await getAccessToken();
+
+  const conversationId = `dev_${Date.now()}`;
+  const candidates = getDevCandidates();
+  const frames = [
+    { type: "search_started", data: { conversation_id: conversationId, query, planner_mode: "dev" } },
+    { type: "plan_created", data: { plan: [] } },
+    { type: "tool_call_started", data: { tool: "searchCandidates", inputs: {} } },
+    { type: "results_normalized", data: { candidate_count: candidates.length } },
+    {
+      type: "final_response",
+      data: {
+        conversation_id: conversationId,
+        message: candidates.length
+          ? `J’ai trouvé ${candidates.length} candidat(s) (mode mock).`
+          : "Aucun candidat trouvé (mode mock).",
+        ui: { type: "candidate_cards", candidates },
+      },
+    },
+  ];
+
+  for (const frame of frames) {
+    if (signal?.aborted) {
+      throw new ApiError(t("errors.aborted"), "abort");
+    }
+    await delay(200);
+    onEvent(frame);
+  }
 }
 
 function matchesEndpoint(path, name) {
@@ -352,7 +384,7 @@ function delay(ms) {
 
 function normalizeChatResponse(response) {
   if (!response || typeof response !== "object" || Array.isArray(response)) {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+    throw new ApiError(t("errors.malformed"), "malformed_response");
   }
 
   const message = typeof response.message === "string"
@@ -367,11 +399,11 @@ function normalizeChatResponse(response) {
   const candidate = normalizeCandidate(ui);
 
   if (ui.type === "clarification" && !Array.isArray(ui.questions)) {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+    throw new ApiError(t("errors.malformed"), "malformed_response");
   }
 
   if (!message && candidates.length === 0 && !candidate && ui.type !== "technical_summary" && ui.type !== "loading") {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+    throw new ApiError(t("errors.malformed"), "malformed_response");
   }
 
   const normalized = {
@@ -393,11 +425,11 @@ function normalizeUi(ui, fallbackCandidates = []) {
   }
 
   if (!ui || typeof ui !== "object" || Array.isArray(ui)) {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+    throw new ApiError(t("errors.malformed"), "malformed_response");
   }
 
   if (!SUPPORTED_UI_TYPES.has(ui.type)) {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+    throw new ApiError(t("errors.malformed"), "malformed_response");
   }
 
   return ui;
@@ -405,11 +437,11 @@ function normalizeUi(ui, fallbackCandidates = []) {
 
 function normalizeCandidates(response, ui) {
   if (response.candidates !== undefined && !Array.isArray(response.candidates)) {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+    throw new ApiError(t("errors.malformed"), "malformed_response");
   }
 
   if (ui.candidates !== undefined && !Array.isArray(ui.candidates)) {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+    throw new ApiError(t("errors.malformed"), "malformed_response");
   }
 
   return Array.isArray(ui.candidates)
@@ -423,7 +455,7 @@ function normalizeCandidate(ui) {
   if (ui.candidate === undefined) return null;
 
   if (!ui.candidate || typeof ui.candidate !== "object" || Array.isArray(ui.candidate)) {
-    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+    throw new ApiError(t("errors.malformed"), "malformed_response");
   }
 
   return ui.candidate;
@@ -460,6 +492,135 @@ export async function sendMessage(message, conversationId = null) {
   return normalizeChatResponse(response);
 }
 
+function createSseParser() {
+  let buffer = "";
+  const frameSeparator = /\r?\n\r?\n/;
+
+  function parseFrame(frame) {
+    let eventType = "message";
+    const dataLines = [];
+
+    for (const rawLine of frame.split("\n")) {
+      const line = rawLine.replace(/\r$/, "");
+      if (line === "" || line.startsWith(":")) continue;
+
+      const idx = line.indexOf(":");
+      const field = idx === -1 ? line : line.slice(0, idx);
+      let value = idx === -1 ? "" : line.slice(idx + 1);
+      if (value.startsWith(" ")) value = value.slice(1);
+
+      if (field === "event") eventType = value;
+      else if (field === "data") dataLines.push(value);
+    }
+
+    if (dataLines.length === 0) return null;
+
+    try {
+      return { event: eventType, data: JSON.parse(dataLines.join("\n")) };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  return {
+    push(textChunk) {
+      buffer += textChunk;
+      const events = [];
+
+      let match;
+      while ((match = frameSeparator.exec(buffer)) !== null) {
+        const frame = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
+        const parsed = parseFrame(frame);
+        if (parsed) events.push(parsed);
+      }
+
+      return events;
+    },
+    flush() {
+      const remaining = buffer.trim();
+      buffer = "";
+      if (!remaining) return [];
+      const parsed = parseFrame(remaining);
+      return parsed ? [parsed] : [];
+    },
+  };
+}
+
+function emitSseEvent(parsed, onEvent) {
+  // The backend puts the event type on the SSE `event:` line and the payload
+  // directly on the `data:` line (it is NOT wrapped as {type, data}).
+  const type = parsed.event || parsed.data?.type;
+  const data = parsed.data ?? {};
+  onEvent({ type, data });
+}
+
+export async function streamSearch(query, onEvent, { signal } = {}) {
+  if (DEV_MODE && DEV_API_MOCKS) {
+    return devStreamSearch(query, onEvent, { signal });
+  }
+
+  const headers = {
+    ...(DEV_MODE ? { "Content-Type": "application/json" } : await authHeaders()),
+    Accept: "text/event-stream",
+    "Accept-Language": getLanguage(),
+  };
+
+  let response;
+  try {
+    response = await fetch(`${API_URL}${buildEndpoint("search_stream")}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query, filters: {} }),
+      signal,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new ApiError(t("errors.aborted"), "abort");
+    }
+    throw new ApiError(t("errors.network"), "network");
+  }
+
+  if (!response.ok) {
+    throw new ApiError(t("errors.generic"), "backend", response.status);
+  }
+
+  if (!response.body) {
+    throw new ApiError(t("errors.network"), "network");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  const parser = createSseParser();
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      for (const evt of parser.push(decoder.decode(value, { stream: true }))) {
+        emitSseEvent(evt, onEvent);
+      }
+    }
+
+    const tail = decoder.decode();
+    if (tail) {
+      for (const evt of parser.push(tail)) emitSseEvent(evt, onEvent);
+    }
+    for (const evt of parser.flush()) emitSseEvent(evt, onEvent);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new ApiError(t("errors.aborted"), "abort");
+    }
+    throw new ApiError(t("errors.network"), "network");
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch (error) {
+      /* noop */
+    }
+  }
+}
+
 export async function sendClarification(interaction, conversationId = null) {
   const response = await request(buildEndpoint("chat"), {
     method: "POST",
@@ -486,7 +647,7 @@ export async function getConversation(conversationId) {
   });
 }
 
-export async function createConversation(title = UI_CONFIG.default_conversation_title) {
+export async function createConversation(title = t("conversations.default_title")) {
   return request(buildEndpoint("conversations"), {
     method: "POST",
     body: JSON.stringify({ title }),

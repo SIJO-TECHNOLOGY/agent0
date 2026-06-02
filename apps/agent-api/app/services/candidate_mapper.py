@@ -35,14 +35,20 @@ _TITLE_FIELDS: Final[tuple[str, ...]] = (
     "role",
 )
 
-# Genuine years-of-experience fields ONLY. The bare BoondManager
-# `experience` field is a dictionary LEVEL id (e.g. 3 = a seniority
-# bucket), NOT a count of years, so it must never be shown as literal
-# years. We surface experience_years only when a real year count exists.
+# Years-of-experience fields. `experienceMinYears` is the MCP server's
+# resolved minimum years for the candidate's experience band (null when
+# not specified). The bare `experience` field is a dictionary LEVEL id —
+# NEVER a count of years — and is intentionally absent here.
 _EXPERIENCE_FIELDS: Final[tuple[str, ...]] = (
+    "experienceMinYears",
+    "experience_min_years",
     "experienceYears",
     "yearsOfExperience",
     "experience_years",
+)
+_EXPERIENCE_OPEN_ENDED_FIELDS: Final[tuple[str, ...]] = (
+    "experienceOpenEnded",
+    "experience_open_ended",
 )
 
 _CITY_FIELDS: Final[tuple[str, ...]] = ("city", "town", "locality")
@@ -109,6 +115,12 @@ _SKILL_NOISE_RE: Final[re.Pattern[str]] = re.compile(
 _SKILL_NOISE_LABELS: Final[frozenset[str]] = frozenset(
     {"inconnu", "unknown", "n/a", "na", "none", "null"}
 )
+# Conservative non-skill phrases (verbs/HR/generic words that are clearly
+# not technologies). Matched on the whole, lower-cased label only.
+_SKILL_NOISE_PHRASE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:hire\b|recruit\b|gestion\b|coding|documentation|internet)\b.*$",
+    re.IGNORECASE,
+)
 _MAX_SKILLS: Final[int] = 12
 
 _BOOND_URL_FIELDS: Final[tuple[str, ...]] = ("boondUrl", "boond_url", "url", "link")
@@ -141,8 +153,6 @@ def _flatten_record(data: dict[str, object]) -> dict[str, object]:
     if isinstance(technical_document, dict):
         for key, value in technical_document.items():
             flat.setdefault(key, value)
-        if "experience" in technical_document:
-            flat.setdefault("experienceYears", technical_document["experience"])
     for enrichment_key in _ENRICHMENT_FIELDS:
         enrichment = flat.get(enrichment_key)
         if isinstance(enrichment, dict):
@@ -208,6 +218,16 @@ def _first_number(data: dict[str, object], keys: Iterable[str]) -> float | None:
     return None
 
 
+def _first_bool(data: dict[str, object], keys: Iterable[str]) -> bool | None:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            return value.strip().lower() == "true"
+    return None
+
+
 def _build_full_name(data: dict[str, object]) -> str | None:
     full = _first_non_empty_str(data, _NAME_FIELDS_FULL)
     if full:
@@ -255,7 +275,11 @@ def _extract_skills(data: dict[str, object]) -> list[str]:
         if not text:
             return
         key = text.lower()
-        if key in _SKILL_NOISE_LABELS or _SKILL_NOISE_RE.match(text):
+        if (
+            key in _SKILL_NOISE_LABELS
+            or _SKILL_NOISE_RE.match(text)
+            or _SKILL_NOISE_PHRASE_RE.match(text)
+        ):
             return
         if key not in seen and len(out) < _MAX_SKILLS:
             seen.add(key)
@@ -380,15 +404,25 @@ def candidate_card_from_result(result: SearchResult) -> CandidateCard | None:
     if title and title.strip() == resolved_id.strip():
         title = None
 
+    experience_years = _first_number(merged, _EXPERIENCE_FIELDS)
+    open_ended = (
+        _first_bool(merged, _EXPERIENCE_OPEN_ENDED_FIELDS)
+        if experience_years is not None
+        else None
+    )
+
     return CandidateCard(
         id=resolved_id,
         full_name=full_name,
         title=title,
-        experience_years=_first_number(merged, _EXPERIENCE_FIELDS),
+        experience_years=experience_years,
+        experience_open_ended=open_ended,
         location=_build_location(merged),
         availability=_build_availability(merged),
         skills=_extract_skills(merged),
         match_score=_match_score(result),
+        is_full_match=result.is_full_match,
+        unmet_criteria=list(result.unmet_criteria),
         summary=_build_summary(full_name, title, merged),
         boond_url=_build_boond_url(merged),
     )

@@ -89,6 +89,59 @@ def test_evidence_score_domain_substring_matches_sgcib() -> None:
     assert score == 1.0
 
 
+def test_skill_multiword_matches_when_all_tokens_present() -> None:
+    # A multi-word term (e.g. a domain phrase that leaked into entities, or
+    # a real multi-word skill) matches when all tokens are present — tolerant
+    # to "&"/"and" and word order.
+    _, hits = evidence_score(
+        "software engineer at corporate and investment banking sgcib",
+        skills=("java", "corporate & investment banking"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:corporate & investment banking" in hits
+    assert "skill:java" not in hits  # java genuinely absent here
+
+
+def test_skill_single_word_substring_still_matches() -> None:
+    _, hits = evidence_score(
+        "javafx developer",
+        skills=("java",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:java" in hits
+
+
+def test_domain_dimension_is_scoped_to_high_signal_text() -> None:
+    # Domain word only in the noisy full haystack (skills blob) -> no credit.
+    _, hits = evidence_score(
+        "java investment banking spring kafka",
+        skills=("java",),
+        domains=("banking",),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+        domain_haystack="java developer",
+    )
+    assert "domain" not in hits
+    # Present in the high-signal domain surface -> credit.
+    _, hits2 = evidence_score(
+        "java developer",
+        skills=("java",),
+        domains=("banking",),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+        domain_haystack="software engineer in banking",
+    )
+    assert "domain" in hits2
+
+
 def test_evidence_score_seniority_below_required_earns_nothing() -> None:
     below, hits = evidence_score(
         "java",

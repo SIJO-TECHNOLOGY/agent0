@@ -40,11 +40,20 @@ class CandidateCard(BaseModel):
     id: str
     full_name: str | None = None
     title: str | None = None
+    # Minimum years of experience (from BoondManager's resolved
+    # experienceMinYears); null when not specified. With
+    # experience_open_ended the frontend localizes "10+ years" vs "10 years".
     experience_years: float | None = None
+    experience_open_ended: bool | None = None
     location: str | None = None
     availability: str | None = None
     skills: list[str] = Field(default_factory=list)
     match_score: float | None = None
+    # Strict per-candidate match: True only when EVERY requested criterion
+    # (skill/seniority/domain/role) is evidenced. None = not evaluated.
+    # `unmet_criteria` lists the human labels of criteria not evidenced.
+    is_full_match: bool | None = None
+    unmet_criteria: list[str] = Field(default_factory=list)
     summary: str | None = None
     boond_url: str | None = None
 

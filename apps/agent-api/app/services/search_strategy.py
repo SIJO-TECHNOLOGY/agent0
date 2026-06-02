@@ -330,6 +330,25 @@ def domain_match_tokens(domains: tuple[str, ...] | list[str]) -> set[str]:
     return tokens
 
 
+def _term_present(term: str, haystack: str) -> bool:
+    """True if ``term`` is a substring, or (multi-word) all its tokens appear.
+
+    Single-word skills match as substrings (``"java"`` in ``"javafx"`` etc.);
+    multi-word terms (e.g. ``"machine learning"`` or a domain phrase that
+    leaked into the skill set) match only when EVERY token is present, which
+    is tolerant to ``&``/``and`` and word order.
+    """
+    term = term.strip().lower()
+    if not term:
+        return False
+    if term in haystack:
+        return True
+    tokens = [t for t in _TOKEN_SPLIT_RE.split(term) if t]
+    if len(tokens) <= 1:
+        return False
+    return all(token in haystack for token in tokens)
+
+
 def evidence_score(
     haystack: str,
     *,
@@ -338,6 +357,7 @@ def evidence_score(
     role: str | None,
     candidate_min_years: int | None,
     required_min_years: int | None,
+    domain_haystack: str | None = None,
     weights: EvidenceWeights = _WEIGHTS,
 ) -> tuple[float, set[str]]:
     """Weighted multi-criteria evidence score in ``[0, 1]`` plus matched keys.
@@ -349,14 +369,19 @@ def evidence_score(
     tie a 10+-year one for a "10+ years" query). The returned key set
     (e.g. ``{"skill:java", "domain", "seniority"}``) lets callers report
     which criteria were never evidenced on any candidate.
+
+    ``domain_haystack`` (when given) restricts the domain dimension to a
+    high-signal surface (title + technical-document summary) so an incidental
+    business word buried in a noisy skills blob does not earn domain credit.
     """
     hay = haystack.lower()
+    domain_hay = (domain_haystack if domain_haystack is not None else haystack).lower()
     dims: list[tuple[float, float]] = []
     hits: set[str] = set()
 
     norm_skills = [s.lower() for s in skills if s and s.strip()]
     if norm_skills:
-        found = [s for s in norm_skills if s in hay]
+        found = [s for s in norm_skills if _term_present(s, hay)]
         for skill in found:
             hits.add(f"skill:{skill}")
         dims.append((weights.skill, len(found) / len(norm_skills)))
@@ -365,9 +390,10 @@ def evidence_score(
     if norm_domains:
         # Match ANY distinctive token of the (possibly verbose/ambiguous)
         # domain term — so "cib (corporate & investment banking)" is
-        # evidenced by "SGCIB", "corporate", "investment", or "banking".
+        # evidenced by "SGCIB", "corporate", "investment", or "banking" —
+        # but only within the high-signal domain surface.
         tokens = domain_match_tokens(norm_domains)
-        domain_found = any(token in hay for token in tokens)
+        domain_found = any(token in domain_hay for token in tokens)
         if domain_found:
             hits.add("domain")
         dims.append((weights.domain, 1.0 if domain_found else 0.0))
