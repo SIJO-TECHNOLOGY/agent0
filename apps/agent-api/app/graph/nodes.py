@@ -422,7 +422,7 @@ async def _try_resolve_experience_filter(
         except (McpTransientError, McpToolError):
             logger.warning(
                 "graph.dictionary_call_failed",
-                extra={"args": args},
+                extra={"dictionary_args": args},
             )
             continue
         resolved = resolve_experience_id(entries or [], min_years)
@@ -1776,7 +1776,10 @@ async def _fetch_dictionary(
         try:
             raw = await ctx.mcp_client.call_tool(DICTIONARY_TOOL, args)
         except (McpTransientError, McpToolError):
-            logger.warning("graph.llm_dictionary_call_failed", extra={"args": args})
+            logger.warning(
+                "graph.llm_dictionary_call_failed",
+                extra={"dictionary_args": args},
+            )
             continue
         if raw:
             return [r for r in raw if isinstance(r, dict)]
