@@ -6,6 +6,7 @@ import pytest
 
 from app.graph.nodes import (
     NodeContext,
+    _record_to_result,
     analyze_intent,
     build_plan,
     evaluate_results,
@@ -429,6 +430,24 @@ async def test_execute_mcp_tools_retries_transient_failures() -> None:
     assert call.status is ToolCallStatus.SUCCESS
     assert call.attempts == 2
     assert result.results
+
+
+def test_record_to_result_search_tool_without_score_baselines_to_zero() -> None:
+    # Search candidates have UNKNOWN relevance until ranked; they must not
+    # be presented as full-confidence (1.0) matches.
+    result = _record_to_result({"id": 7, "jobTitle": "Dev"}, "searchCandidates")
+    assert result.score == 0.0
+
+
+def test_record_to_result_detail_tool_without_score_is_full_confidence() -> None:
+    # Detail-by-id lookups are authoritative — full confidence is correct.
+    result = _record_to_result({"id": 7}, "getCandidateDetail")
+    assert result.score == 1.0
+
+
+def test_record_to_result_preserves_explicit_server_score() -> None:
+    result = _record_to_result({"id": 7, "score": 0.8}, "searchCandidates")
+    assert result.score == 0.8
 
 
 @pytest.mark.asyncio

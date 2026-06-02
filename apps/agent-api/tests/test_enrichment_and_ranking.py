@@ -7,6 +7,7 @@ import pytest
 from app.graph.nodes import (
     ENRICHMENT_DETAIL_KEY,
     ENRICHMENT_TECH_DOC_KEY,
+    EXPERIENCE_MIN_YEARS_KEY,
     NodeContext,
     enrich_candidates,
     rank_candidates,
@@ -239,6 +240,197 @@ async def test_rank_promotes_candidates_with_matching_evidence() -> None:
     # Evidence-rich candidate must end up first.
     assert result.results[0].id == "2"
     assert result.results[0].score > result.results[1].score
+
+
+@pytest.mark.asyncio
+async def test_rank_scores_by_evidence_fraction_and_nulls_zero_evidence() -> None:
+    state = GraphState(
+        original_query="java cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find_consultants", entities=["java", "cib"]
+        ),
+        results=[
+            # Only Java evidence -> half the criteria -> 0.5.
+            _result(candidate_id="1", data={"jobTitle": "Java Engineer"}),
+            # Both Java and CIB evidenced -> full coverage -> 1.0.
+            _result(
+                candidate_id="2",
+                data={"jobTitle": "Java Dev", "skills": ["CIB"]},
+            ),
+            # Visibly contradicts the request, no evidence -> 0.0.
+            _result(candidate_id="3", data={"jobTitle": "C# Developer"}),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    by_id = {r.id: r.score for r in result.results}
+    assert by_id["2"] == 1.0
+    assert by_id["1"] == 0.5
+    assert by_id["3"] == 0.0
+    # Best-evidenced first, contradicting candidate last.
+    assert [r.id for r in result.results] == ["2", "1", "3"]
+
+
+@pytest.mark.asyncio
+async def test_rank_flags_unverifiable_criteria_as_warning() -> None:
+    state = GraphState(
+        original_query="java cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find_consultants", entities=["java", "cib"]
+        ),
+        results=[
+            _result(
+                candidate_id="1",
+                data={"jobTitle": "Java Engineer", "skills": ["Java", "Spring"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # 'cib' was never evidenced on any candidate -> recorded as unverified.
+    warn = next(w for w in result.warnings if w.code == "criteria_unverified")
+    assert "cib" in warn.message
+    # 'java' WAS evidenced, so it must not be flagged as unverified.
+    assert "java" not in warn.message
+    # Partial coverage never reads as a full-confidence match.
+    assert result.results[0].score == 0.5
+
+
+@pytest.mark.asyncio
+async def test_rank_marks_domain_visible_not_unverified_when_in_title() -> None:
+    state = GraphState(
+        original_query="java dev in cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            # Verbose, ambiguous business-domain term.
+            constraints={"domain": "cib (corporate & investment banking)"},
+        ),
+        results=[
+            # Java + CIB both VISIBLE in the title, but no technical document.
+            _result(
+                candidate_id="vis",
+                data={"jobTitle": "Java Developer at SGCIB"},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # Visible-but-unconfirmed — NOT a global "could not verify".
+    assert any(w.code == "criteria_visible" for w in result.warnings)
+    assert not any(w.code == "criteria_unverified" for w in result.warnings)
+    visible = next(w for w in result.warnings if w.code == "criteria_visible")
+    # The original acronym is preserved in the message.
+    assert "cib" in visible.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_rank_marks_criteria_verified_when_in_technical_document() -> None:
+    state = GraphState(
+        original_query="java dev in cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"domain": "cib (corporate & investment banking)"},
+        ),
+        results=[
+            _result(
+                candidate_id="ver",
+                data={
+                    "jobTitle": "Java Developer",
+                    ENRICHMENT_TECH_DOC_KEY: {
+                        "summary": "10 years on java platforms at SGCIB.",
+                    },
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # Both java and the domain are confirmed in the technical document.
+    assert not any(
+        w.code in ("criteria_unverified", "criteria_visible")
+        for w in result.warnings
+    )
+
+
+@pytest.mark.asyncio
+async def test_rank_prefers_senior_domain_match_over_junior_skill_only() -> None:
+    state = GraphState(
+        original_query="java dev 10 years cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"domain": "cib", "min_experience_years": "10"},
+        ),
+        results=[
+            # Java, but only 3 years and no domain signal.
+            _result(
+                candidate_id="junior",
+                data={"jobTitle": "Java Developer", EXPERIENCE_MIN_YEARS_KEY: 3},
+            ),
+            # Java + 11 years + CIB (via SGCIB in the title).
+            _result(
+                candidate_id="senior",
+                data={
+                    "jobTitle": "Java Developer at SGCIB",
+                    EXPERIENCE_MIN_YEARS_KEY: 11,
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    by_id = {r.id: r.score for r in result.results}
+    assert result.results[0].id == "senior"
+    # The 3-year skill-only profile must rank strictly below.
+    assert by_id["senior"] > by_id["junior"]
+
+
+@pytest.mark.asyncio
+async def test_rank_does_not_warn_when_all_criteria_evidenced() -> None:
+    state = GraphState(
+        original_query="java",
+        interpreted_intent=InterpretedIntent(
+            objective="find_consultants", entities=["java"]
+        ),
+        results=[_result(candidate_id="1", data={"jobTitle": "Java Engineer"})],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    assert not any(w.code == "criteria_unverified" for w in result.warnings)
+    assert result.results[0].score == 1.0
+
+
+@pytest.mark.asyncio
+async def test_rank_enrichment_bump_never_rescues_zero_evidence() -> None:
+    state = GraphState(
+        original_query="java",
+        interpreted_intent=InterpretedIntent(
+            objective="find_consultants", entities=["java"]
+        ),
+        results=[
+            _result(
+                candidate_id="1",
+                data={
+                    "jobTitle": "C# Developer",
+                    ENRICHMENT_DETAIL_KEY: {"note": "bar"},
+                    ENRICHMENT_TECH_DOC_KEY: {"note": "qux"},
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # Enriched but no 'java' evidence anywhere -> must stay 0.0.
+    assert result.results[0].score == 0.0
 
 
 @pytest.mark.asyncio

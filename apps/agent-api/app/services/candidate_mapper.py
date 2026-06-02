@@ -11,6 +11,7 @@ BoondManager API logic, no direct provider calls.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Final
 
@@ -34,11 +35,14 @@ _TITLE_FIELDS: Final[tuple[str, ...]] = (
     "role",
 )
 
+# Genuine years-of-experience fields ONLY. The bare BoondManager
+# `experience` field is a dictionary LEVEL id (e.g. 3 = a seniority
+# bucket), NOT a count of years, so it must never be shown as literal
+# years. We surface experience_years only when a real year count exists.
 _EXPERIENCE_FIELDS: Final[tuple[str, ...]] = (
     "experienceYears",
     "yearsOfExperience",
     "experience_years",
-    "experience",
 )
 
 _CITY_FIELDS: Final[tuple[str, ...]] = ("city", "town", "locality")
@@ -62,6 +66,12 @@ _SKILLS_FIELDS: Final[tuple[str, ...]] = (
     "technical_skills",
     "tags",
 )
+# Fields holding tool/technology proficiency entries (list of {tool, level}).
+_TOOLS_FIELDS: Final[tuple[str, ...]] = ("tools", "technologies")
+# Split a free-text skills string into discrete skills (delimiters only —
+# never spaces, so multi-word skills like "machine learning" survive).
+_SKILL_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"[,;/|\n·•]+")
+_MAX_SKILLS: Final[int] = 40
 
 _BOOND_URL_FIELDS: Final[tuple[str, ...]] = ("boondUrl", "boond_url", "url", "link")
 
@@ -177,20 +187,50 @@ def _build_availability(data: dict[str, object]) -> str | None:
 
 
 def _extract_skills(data: dict[str, object]) -> list[str]:
-    for key in _SKILLS_FIELDS:
+    """Collect candidate skills from BoondManager summary + technical doc.
+
+    Handles the real shapes: a free-text ``skills`` STRING (split on
+    delimiters), list skills, and the ``tools`` proficiency list of
+    ``{tool, level}`` dicts. De-duplicated, order-preserving, capped.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str) -> None:
+        text = value.strip()
+        key = text.lower()
+        if text and key not in seen and len(out) < _MAX_SKILLS:
+            seen.add(key)
+            out.append(text)
+
+    # Structured tool/technology proficiency first (most reliable).
+    for key in _TOOLS_FIELDS:
         value = data.get(key)
         if isinstance(value, list):
-            skills: list[str] = []
             for item in value:
-                if isinstance(item, str) and item.strip():
-                    skills.append(item.strip())
+                if isinstance(item, str):
+                    _add(item)
                 elif isinstance(item, dict):
-                    name = _first_non_empty_str(item, ("name", "label", "skill"))
+                    name = _first_non_empty_str(item, ("tool", "name", "label", "skill"))
                     if name:
-                        skills.append(name)
-            if skills:
-                return skills
-    return []
+                        _add(name)
+
+    # Skills text / list fields.
+    for key in _SKILLS_FIELDS:
+        value = data.get(key)
+        if isinstance(value, str):
+            for part in _SKILL_SPLIT_RE.split(value):
+                _add(part)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    _add(item)
+                elif isinstance(item, dict):
+                    name = _first_non_empty_str(item, ("name", "label", "skill", "tool"))
+                    if name:
+                        _add(name)
+
+    return out
 
 
 def _build_boond_url(data: dict[str, object]) -> str | None:

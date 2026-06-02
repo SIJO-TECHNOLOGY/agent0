@@ -87,6 +87,88 @@ def _extract_lower_threshold(label: str) -> int | None:
     return None
 
 
+def dictionary_section_entries(
+    raw_records: Iterable[object], section: str
+) -> list[dict[str, object]]:
+    """Collect dictionary entries for a named section (e.g. ``"tool"``).
+
+    The real ``getDictionary`` returns a single record shaped like
+    ``{"setting": {"experience": [...], "tool": [...]}}``; older/mock
+    shapes may expose ``{section: [...]}`` directly or already be a flat
+    list of entries. This normalizes all three so callers always get a
+    flat ``list[dict]`` for the requested section.
+    """
+    out: list[dict[str, object]] = []
+    for record in raw_records:
+        if not isinstance(record, dict):
+            continue
+        direct = record.get(section)
+        if isinstance(direct, list):
+            out.extend(e for e in direct if isinstance(e, dict))
+        setting = record.get("setting")
+        if isinstance(setting, dict):
+            nested = setting.get(section)
+            if isinstance(nested, list):
+                out.extend(e for e in nested if isinstance(e, dict))
+    return out
+
+
+def resolve_tool_ids(
+    entries: Iterable[object], wanted_labels: Iterable[str]
+) -> list[object]:
+    """Best-effort: map tool/skill names to their dictionary ids.
+
+    Case-insensitive exact label match against the ``setting.tool``
+    dictionary. Returns the matched ids (de-duplicated, in dictionary
+    order). Never invents an id — labels with no match are omitted, so a
+    non-tool entity (e.g. a company name) simply contributes nothing.
+    """
+    wanted = {
+        label.strip().lower()
+        for label in wanted_labels
+        if isinstance(label, str) and label.strip()
+    }
+    if not wanted:
+        return []
+    matched: list[object] = []
+    seen: set[object] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        label = _label_of(entry)
+        if label is None or label.strip().lower() not in wanted:
+            continue
+        entry_id = _id_of(entry)
+        if entry_id is not None and entry_id not in seen:
+            seen.add(entry_id)
+            matched.append(entry_id)
+    return matched
+
+
+def experience_years_for_id(
+    entries: Iterable[object], exp_id: object
+) -> int | None:
+    """Reverse lookup: a candidate's experience level id → years threshold.
+
+    Finds the dictionary entry whose id matches ``exp_id`` and parses the
+    open-ended lower bound from its label (e.g. ``"10+ years"`` → ``10``).
+    Returns ``None`` when the id is unknown or its label carries no
+    open-ended numeric threshold (e.g. a closed range like ``"1-3 years"``).
+    """
+    if exp_id in (None, ""):
+        return None
+    target = str(exp_id)
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_id = _id_of(entry)
+        if entry_id is None or str(entry_id) != target:
+            continue
+        label = _label_of(entry)
+        return _extract_lower_threshold(label) if label else None
+    return None
+
+
 def resolve_experience_id(
     entries: Iterable[object], min_years: int
 ) -> object | None:

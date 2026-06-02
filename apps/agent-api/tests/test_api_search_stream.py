@@ -619,21 +619,25 @@ async def test_dictionary_before_search_still_runs_search_candidates(
 
 
 @pytest.mark.asyncio
-async def test_dictionary_before_search_fans_out_detail_from_candidates_only(
+async def test_dictionary_before_search_fans_out_tech_doc_from_candidates_only(
     dictionary_before_search_client: AsyncClient,
 ) -> None:
     await _collect(dictionary_before_search_client, QUERY)
-    detail_calls = [
+    tech_calls = [
         args
         for name, args in _dictionary_plan_calls
-        if name == "getCandidateDetail"
+        if name == "getCandidateTechnicalDocument"
     ]
     # Fan-out must use ids from searchCandidates, not dictionary entries.
-    assert detail_calls, "expected at least one getCandidateDetail call"
-    detail_ids = {
-        int(args.get("candidateId") or args.get("id") or 0) for args in detail_calls
+    assert tech_calls, "expected at least one getCandidateTechnicalDocument call"
+    tech_ids = {
+        int(args.get("candidateId") or args.get("id") or 0) for args in tech_calls
     }
-    assert detail_ids == {41924}  # the id from _SEARCH_RECORDS
+    assert tech_ids == {41924}  # the id from _SEARCH_RECORDS
+    # getCandidateDetail is not used for criteria enrichment.
+    assert not any(
+        name == "getCandidateDetail" for name, _ in _dictionary_plan_calls
+    )
 
 
 @pytest.mark.asyncio
@@ -890,16 +894,16 @@ async def _real_shape_search_handler(
     return _REAL_SHAPE_SEARCH_PAYLOAD
 
 
-async def _wrapper_detail_handler(
+async def _wrapper_tech_doc_handler(
     inputs: dict[str, object],
 ) -> list[dict[str, object]]:
-    _wrapper_calls.append(("getCandidateDetail", dict(inputs)))
+    _wrapper_calls.append(("getCandidateTechnicalDocument", dict(inputs)))
     cid = int(inputs.get("candidateId") or inputs.get("id") or 0)
     return [
         {
-            "id": str(cid),
-            "type": "candidate",
-            "attributes": {"firstName": "Sarah", "experienceYears": 12},
+            "candidateId": cid,
+            "skills": "Java, Spring",
+            "summary": "Senior backend engineer.",
         }
     ]
 
@@ -912,7 +916,7 @@ def _real_shape_search_plan() -> LlmToolPlan:
                 inputs={"keywords": "java", "page": 1, "numberPerPage": 10},
             ),
             PlannedToolCall(
-                tool_name="getCandidateDetail",
+                tool_name="getCandidateTechnicalDocument",
                 inputs={},
                 depends_on="searchCandidates",
                 result_selector="candidate_ids",
@@ -926,10 +930,10 @@ async def real_shape_search_client() -> AsyncIterator[AsyncClient]:
     _wrapper_calls.clear()
     app = _make_app(
         planner=FakeLlmPlanner(canned_plan=_real_shape_search_plan()),
-        mcp_tools=[SEARCH_TOOL, DETAIL_TOOL],
+        mcp_tools=[SEARCH_TOOL, TECH_DOC_TOOL],
         handlers={
             "searchCandidates": _real_shape_search_handler,
-            "getCandidateDetail": _wrapper_detail_handler,
+            "getCandidateTechnicalDocument": _wrapper_tech_doc_handler,
         },
     )
     transport = ASGITransport(app=app)
@@ -975,16 +979,16 @@ async def test_wrapper_envelope_emits_candidate_cards_partial(
 
 
 @pytest.mark.asyncio
-async def test_wrapper_envelope_fans_out_detail_over_unwrapped_ids(
+async def test_wrapper_envelope_fans_out_tech_doc_over_unwrapped_ids(
     real_shape_search_client: AsyncClient,
 ) -> None:
     await _collect(real_shape_search_client, QUERY)
-    detail_ids = {
+    tech_ids = {
         int(args.get("candidateId") or args.get("id") or 0)
         for name, args in _wrapper_calls
-        if name == "getCandidateDetail"
+        if name == "getCandidateTechnicalDocument"
     }
-    assert detail_ids == {41924, 41925}
+    assert tech_ids == {41924, 41925}
 
 
 @pytest.mark.asyncio

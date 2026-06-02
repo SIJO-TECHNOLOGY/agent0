@@ -372,9 +372,10 @@ async def test_llm_flow_calls_tools_in_planned_order(
     assert response.status_code == 200
 
     tool_sequence = [name for name, _ in _calls]
-    # searchCandidates first, then enrichment calls.
+    # searchCandidates first, then evidence enrichment via the technical
+    # document. getCandidateDetail is no longer used for criteria enrichment.
     assert tool_sequence[0] == "searchCandidates"
-    assert "getCandidateDetail" in tool_sequence
+    assert "getCandidateDetail" not in tool_sequence
     assert "getCandidateTechnicalDocument" in tool_sequence
 
 
@@ -394,18 +395,20 @@ async def test_llm_flow_passes_string_keywords_to_search(
 
 
 @pytest.mark.asyncio
-async def test_llm_flow_fans_out_detail_calls_per_candidate(
+async def test_llm_flow_fans_out_tech_doc_calls_per_candidate(
     candidate_search_client: AsyncClient,
 ) -> None:
     await candidate_search_client.post(
         "/api/search", json={"query": QUERY_FUZZY, "filters": {}}
     )
-    detail_ids = {
+    tech_ids = {
         int(args.get("candidateId") or args.get("id") or 0)
         for name, args in _calls
-        if name == "getCandidateDetail"
+        if name == "getCandidateTechnicalDocument"
     }
-    assert detail_ids == {41924, 41925}
+    assert tech_ids == {41924, 41925}
+    # getCandidateDetail is not used for criteria enrichment.
+    assert not any(name == "getCandidateDetail" for name, _ in _calls)
 
 
 @pytest.mark.asyncio
@@ -415,10 +418,13 @@ async def test_llm_flow_respects_max_enrichments_cap(
     await candidate_search_client.post(
         "/api/search", json={"query": QUERY_FUZZY, "filters": {}}
     )
-    # Default max_enrichments=5; only 2 search results exist so we expect 2.
-    detail_count = sum(1 for name, _ in _calls if name == "getCandidateDetail")
-    assert detail_count <= 5
-    assert detail_count == 2
+    # Default max_enrichments=5; only 2 search results exist so we expect 2
+    # technical-document enrichment calls (detail is not used).
+    tech_count = sum(
+        1 for name, _ in _calls if name == "getCandidateTechnicalDocument"
+    )
+    assert tech_count <= 5
+    assert tech_count == 2
 
 
 @pytest.mark.asyncio

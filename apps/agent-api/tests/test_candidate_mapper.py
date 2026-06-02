@@ -114,6 +114,31 @@ def test_experience_years_extracted_as_float() -> None:
     assert card.experience_years == 7.0
 
 
+def test_experience_years_not_filled_from_boond_level_id() -> None:
+    # Bare `experience` is a BoondManager dictionary LEVEL id, not years —
+    # it must never surface as literal years of experience.
+    card = candidate_card_from_result(
+        _result(source_tool="searchCandidates", data={"experience": 3})
+    )
+    assert card.experience_years is None
+
+
+def test_skills_extracted_from_tools_proficiency_list() -> None:
+    # Technical-document `tools` is a list of {tool, level} dicts.
+    card = candidate_card_from_result(
+        _result(data={"tools": [{"tool": "Java", "level": 3}, {"tool": "Spring"}]})
+    )
+    assert card.skills == ["Java", "Spring"]
+
+
+def test_skills_extracted_from_delimited_string() -> None:
+    # BoondManager `skills` is a free-text string, not a list.
+    card = candidate_card_from_result(
+        _result(data={"skills": "Java, Spring; Kafka"})
+    )
+    assert card.skills == ["Java", "Spring", "Kafka"]
+
+
 def test_match_score_is_none_for_detail_tools() -> None:
     card = candidate_card_from_result(
         _result(source_tool="getCandidateDetail", score=1.0)
