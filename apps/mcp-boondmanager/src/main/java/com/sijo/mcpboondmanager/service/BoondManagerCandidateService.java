@@ -48,14 +48,28 @@ public class BoondManagerCandidateService {
             new ParameterizedTypeReference<>() {};
 
     private final BoondManagerClient client;
+    private final ExperienceDictionaryResolver experienceResolver;
 
-    public BoondManagerCandidateService(BoondManagerClient client) {
+    public BoondManagerCandidateService(BoondManagerClient client,
+                                        ExperienceDictionaryResolver experienceResolver) {
         this.client = client;
+        this.experienceResolver = experienceResolver;
     }
 
     public DictionaryResponseDto getDictionary() {
+        return getDictionary(null);
+    }
+
+    /**
+     * @param language optional BoondManager locale to request localized labels (e.g. {@code "en"},
+     *                 {@code "fr"}); when {@code null}/blank the account default language is used
+     */
+    public DictionaryResponseDto getDictionary(String language) {
         try {
-            BoondDictionaryEnvelope envelope = client.get(DICTIONARY_PATH, DICTIONARY_TYPE);
+            BoondDictionaryEnvelope envelope = client.get(
+                    DICTIONARY_PATH,
+                    builder -> addScalar(builder, "language", emptyToNull(language)),
+                    DICTIONARY_TYPE);
             return toDictionaryResponse(envelope);
         } catch (BoondApiException ex) {
             throw new DictionaryResolutionException(
@@ -159,6 +173,13 @@ public class BoondManagerCandidateService {
     }
 
     /**
+     * Returns {@code null} for a {@code null}/blank string, so it is skipped by {@link #addScalar}.
+     */
+    private static String emptyToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    /**
      * Appends a repeatable query parameter as multiple {@code name[]=value} entries (BoondManager
      * unions multiple values). Skips null/empty lists and null elements — never sends an empty list.
      */
@@ -192,16 +213,17 @@ public class BoondManagerCandidateService {
         ));
     }
 
-    private static CandidateSearchResponseDto toSearchResponse(
+    private CandidateSearchResponseDto toSearchResponse(
             BoondListEnvelope<BoondCandidateSummaryAttributes> envelope) {
         List<CandidateSummaryDto> candidates = envelope.data().stream()
-                .map(BoondManagerCandidateService::toCandidateSummary)
+                .map(this::toCandidateSummary)
                 .toList();
         return new CandidateSearchResponseDto(candidates, toPaginationMeta(envelope.meta()));
     }
 
-    private static CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data) {
+    private CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data) {
         BoondCandidateSummaryAttributes attrs = data.attributes();
+        ResolvedExperience experience = experienceResolver.resolve(attrs.experience());
         return new CandidateSummaryDto(
                 parseId(data.id()),
                 attrs.firstName(),
@@ -215,6 +237,10 @@ public class BoondManagerCandidateService {
                 attrs.country(),
                 attrs.title(),
                 attrs.experience(),
+                experience.minYears(),
+                experience.openEnded(),
+                experience.specified(),
+                experience.rawLabel(),
                 attrs.skills(),
                 attrs.diplomas(),
                 attrs.expertiseAreas(),
@@ -265,12 +291,12 @@ public class BoondManagerCandidateService {
         );
     }
 
-    private static TechnicalDocumentDto toTechnicalDocument(
+    private TechnicalDocumentDto toTechnicalDocument(
             BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope) {
         return toTechnicalDocument(envelope.data());
     }
 
-    private static TechnicalDocumentDto toTechnicalDocument(
+    private TechnicalDocumentDto toTechnicalDocument(
             BoondListEnvelope<BoondTechnicalDocumentAttributes> envelope) {
         if (envelope.data() == null || envelope.data().isEmpty()) {
             throw new ExternalServiceException(
@@ -281,9 +307,10 @@ public class BoondManagerCandidateService {
         return toTechnicalDocument(envelope.data().getFirst());
     }
 
-    private static TechnicalDocumentDto toTechnicalDocument(
+    private TechnicalDocumentDto toTechnicalDocument(
             BoondData<BoondTechnicalDocumentAttributes> data) {
         BoondTechnicalDocumentAttributes a = data.attributes();
+        ResolvedExperience experience = experienceResolver.resolve(a.experience());
         return new TechnicalDocumentDto(
                 parseId(data.id()),
                 a.tdId(),
@@ -291,6 +318,10 @@ public class BoondManagerCandidateService {
                 a.description(),
                 a.summary(),
                 a.experience(),
+                experience.minYears(),
+                experience.openEnded(),
+                experience.specified(),
+                experience.rawLabel(),
                 a.training(),
                 a.diplomas(),
                 a.skills(),

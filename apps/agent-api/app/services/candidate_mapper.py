@@ -35,11 +35,20 @@ _TITLE_FIELDS: Final[tuple[str, ...]] = (
     "role",
 )
 
+# Years-of-experience fields. `experienceMinYears` is the MCP server's
+# resolved minimum years for the candidate's experience band (null when
+# not specified). The bare `experience` field is a dictionary LEVEL id —
+# NEVER a count of years — and is intentionally absent here.
 _EXPERIENCE_FIELDS: Final[tuple[str, ...]] = (
+    "experienceMinYears",
+    "experience_min_years",
     "experienceYears",
     "yearsOfExperience",
     "experience_years",
-    "experience",
+)
+_EXPERIENCE_OPEN_ENDED_FIELDS: Final[tuple[str, ...]] = (
+    "experienceOpenEnded",
+    "experience_open_ended",
 )
 
 _CITY_FIELDS: Final[tuple[str, ...]] = ("city", "town", "locality")
@@ -63,6 +72,11 @@ _SKILLS_FIELDS: Final[tuple[str, ...]] = (
     "technical_skills",
     "tags",
 )
+# Fields holding tool/technology proficiency entries (list of {tool, level}).
+_TOOLS_FIELDS: Final[tuple[str, ...]] = ("tools", "technologies")
+# Split a free-text skills string into discrete skills (delimiters only —
+# never spaces, so multi-word skills like "machine learning" survive).
+_SKILL_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"[,;/|\n·•]+")
 _SKILL_TEXT_FIELDS: Final[tuple[str, ...]] = (
     "title",
     "jobTitle",
@@ -94,6 +108,20 @@ _KNOWN_SKILL_PATTERNS: Final[tuple[tuple[str, str], ...]] = (
     (r"\bfront[-\s]?end\b", "Front-end"),
     (r"\bback[-\s]?end\b|\bback\b", "Back-end"),
 )
+_SKILL_NOISE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:\d+\+?\s*(?:yrs?|years?|ans?)|[+-]?\d+(?:\.\d+)?)$",
+    re.IGNORECASE,
+)
+_SKILL_NOISE_LABELS: Final[frozenset[str]] = frozenset(
+    {"inconnu", "unknown", "n/a", "na", "none", "null"}
+)
+# Conservative non-skill phrases (verbs/HR/generic words that are clearly
+# not technologies). Matched on the whole, lower-cased label only.
+_SKILL_NOISE_PHRASE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:hire\b|recruit\b|gestion\b|coding|documentation|internet)\b.*$",
+    re.IGNORECASE,
+)
+_MAX_SKILLS: Final[int] = 12
 
 _BOOND_URL_FIELDS: Final[tuple[str, ...]] = ("boondUrl", "boond_url", "url", "link")
 _ENRICHMENT_FIELDS: Final[tuple[str, ...]] = (
@@ -190,6 +218,16 @@ def _first_number(data: dict[str, object], keys: Iterable[str]) -> float | None:
     return None
 
 
+def _first_bool(data: dict[str, object], keys: Iterable[str]) -> bool | None:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            return value.strip().lower() == "true"
+    return None
+
+
 def _build_full_name(data: dict[str, object]) -> str | None:
     full = _first_non_empty_str(data, _NAME_FIELDS_FULL)
     if full:
@@ -222,27 +260,60 @@ def _build_availability(data: dict[str, object]) -> str | None:
 
 
 def _extract_skills(data: dict[str, object]) -> list[str]:
-    for key in _SKILLS_FIELDS:
+    """Collect candidate skills from BoondManager summary + technical doc.
+
+    Handles the real shapes: a free-text ``skills`` STRING (split on
+    delimiters), list skills, the ``tools`` proficiency list of
+    ``{tool, level}`` dicts, and a conservative text fallback.
+    De-duplicated, order-preserving, capped.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str) -> None:
+        text = value.strip()
+        if not text:
+            return
+        key = text.lower()
+        if (
+            key in _SKILL_NOISE_LABELS
+            or _SKILL_NOISE_RE.match(text)
+            or _SKILL_NOISE_PHRASE_RE.match(text)
+        ):
+            return
+        if key not in seen and len(out) < _MAX_SKILLS:
+            seen.add(key)
+            out.append(text)
+
+    # Structured tool/technology proficiency first (most reliable).
+    for key in _TOOLS_FIELDS:
         value = data.get(key)
         if isinstance(value, list):
-            skills: list[str] = []
             for item in value:
-                if isinstance(item, str) and item.strip():
-                    skills.append(item.strip())
+                if isinstance(item, str):
+                    _add(item)
                 elif isinstance(item, dict):
-                    name = _first_non_empty_str(item, ("name", "label", "skill"))
+                    name = _first_non_empty_str(item, ("tool", "name", "label", "skill"))
                     if name:
-                        skills.append(name)
-            if skills:
-                return skills
-        if isinstance(value, str) and value.strip():
-            parts = [
-                part.strip()
-                for part in re.split(r"[,;\n\r]+", value)
-                if part.strip()
-            ]
-            if parts:
-                return parts[:12]
+                        _add(name)
+
+    # Skills text / list fields.
+    for key in _SKILLS_FIELDS:
+        value = data.get(key)
+        if isinstance(value, str):
+            for part in _SKILL_SPLIT_RE.split(value):
+                _add(part)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    _add(item)
+                elif isinstance(item, dict):
+                    name = _first_non_empty_str(item, ("name", "label", "skill", "tool"))
+                    if name:
+                        _add(name)
+
+    if out:
+        return out
     return _infer_skills_from_text(data)
 
 
@@ -260,7 +331,7 @@ def _infer_skills_from_text(data: dict[str, object]) -> list[str]:
     for pattern, label in _KNOWN_SKILL_PATTERNS:
         if re.search(pattern, haystack, flags=re.IGNORECASE) and label not in skills:
             skills.append(label)
-    return skills[:12]
+    return skills[:_MAX_SKILLS]
 
 
 def _build_boond_url(data: dict[str, object]) -> str | None:
@@ -333,15 +404,25 @@ def candidate_card_from_result(result: SearchResult) -> CandidateCard | None:
     if title and title.strip() == resolved_id.strip():
         title = None
 
+    experience_years = _first_number(merged, _EXPERIENCE_FIELDS)
+    open_ended = (
+        _first_bool(merged, _EXPERIENCE_OPEN_ENDED_FIELDS)
+        if experience_years is not None
+        else None
+    )
+
     return CandidateCard(
         id=resolved_id,
         full_name=full_name,
         title=title,
-        experience_years=_first_number(merged, _EXPERIENCE_FIELDS),
+        experience_years=experience_years,
+        experience_open_ended=open_ended,
         location=_build_location(merged),
         availability=_build_availability(merged),
         skills=_extract_skills(merged),
         match_score=_match_score(result),
+        is_full_match=result.is_full_match,
+        unmet_criteria=list(result.unmet_criteria),
         summary=_build_summary(full_name, title, merged),
         boond_url=_build_boond_url(merged),
     )

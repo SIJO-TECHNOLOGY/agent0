@@ -30,12 +30,12 @@ class BoondDictionaryToolTest {
     @Test
     void givenDictionaryRequest_whenGetDictionary_thenReturnsServiceResponse() {
         DictionaryResponseDto expected = TestFixtures.dictionary();
-        when(candidateService.getDictionary()).thenReturn(expected);
+        when(candidateService.getDictionary("en")).thenReturn(expected);
 
-        DictionaryResponseDto response = tool().getDictionary();
+        DictionaryResponseDto response = tool().getDictionary("en");
 
         assertThat(response).isSameAs(expected);
-        verify(candidateService).getDictionary();
+        verify(candidateService).getDictionary("en");
         verifyNoMoreInteractions(candidateService);
     }
 
@@ -43,16 +43,16 @@ class BoondDictionaryToolTest {
     void givenBackendException_whenGetDictionary_thenPropagatesProjectException() {
         BoondApiException exception = new BoondApiException(
                 "backend failed", HttpStatus.INTERNAL_SERVER_ERROR, "/application/dictionary", new RuntimeException());
-        when(candidateService.getDictionary()).thenThrow(exception);
+        when(candidateService.getDictionary("en")).thenThrow(exception);
 
-        assertThatThrownBy(() -> tool().getDictionary())
+        assertThatThrownBy(() -> tool().getDictionary("en"))
                 .isSameAs(exception);
     }
 
     @Test
     void givenToolClass_whenInspected_thenToolNameRemainsUnchanged() throws NoSuchMethodException {
         Tool annotation = BoondDictionaryTool.class
-                .getMethod("getDictionary")
+                .getMethod("getDictionary", String.class)
                 .getAnnotation(Tool.class);
 
         assertThat(annotation.name()).isEqualTo("getDictionary");

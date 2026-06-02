@@ -76,7 +76,11 @@ def _id_of(entry: dict[str, object]) -> object | None:
 
 
 def _extract_lower_threshold(label: str) -> int | None:
-    """Return the lower numeric bound implied by an open-ended label."""
+    """Return the lower numeric bound implied by an OPEN-ENDED label.
+
+    Used by the search-filter resolver, which must NOT match closed ranges
+    (a "5-10 years" bucket should not satisfy a "10+ years" filter).
+    """
     for pattern in (_PLUS_THRESHOLD_RE, _GTE_THRESHOLD_RE, _AND_MORE_RE):
         match = pattern.search(label)
         if match:
@@ -85,6 +89,64 @@ def _extract_lower_threshold(label: str) -> int | None:
             except (TypeError, ValueError):
                 continue
     return None
+
+
+def dictionary_section_entries(
+    raw_records: Iterable[object], section: str
+) -> list[dict[str, object]]:
+    """Collect dictionary entries for a named section (e.g. ``"tool"``).
+
+    The real ``getDictionary`` returns a single record shaped like
+    ``{"setting": {"experience": [...], "tool": [...]}}``; older/mock
+    shapes may expose ``{section: [...]}`` directly or already be a flat
+    list of entries. This normalizes all three so callers always get a
+    flat ``list[dict]`` for the requested section.
+    """
+    out: list[dict[str, object]] = []
+    for record in raw_records:
+        if not isinstance(record, dict):
+            continue
+        direct = record.get(section)
+        if isinstance(direct, list):
+            out.extend(e for e in direct if isinstance(e, dict))
+        setting = record.get("setting")
+        if isinstance(setting, dict):
+            nested = setting.get(section)
+            if isinstance(nested, list):
+                out.extend(e for e in nested if isinstance(e, dict))
+    return out
+
+
+def resolve_tool_ids(
+    entries: Iterable[object], wanted_labels: Iterable[str]
+) -> list[object]:
+    """Best-effort: map tool/skill names to their dictionary ids.
+
+    Case-insensitive exact label match against the ``setting.tool``
+    dictionary. Returns the matched ids (de-duplicated, in dictionary
+    order). Never invents an id — labels with no match are omitted, so a
+    non-tool entity (e.g. a company name) simply contributes nothing.
+    """
+    wanted = {
+        label.strip().lower()
+        for label in wanted_labels
+        if isinstance(label, str) and label.strip()
+    }
+    if not wanted:
+        return []
+    matched: list[object] = []
+    seen: set[object] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        label = _label_of(entry)
+        if label is None or label.strip().lower() not in wanted:
+            continue
+        entry_id = _id_of(entry)
+        if entry_id is not None and entry_id not in seen:
+            seen.add(entry_id)
+            matched.append(entry_id)
+    return matched
 
 
 def resolve_experience_id(

@@ -3,6 +3,7 @@ package com.sijo.mcpboondmanager.tools;
 import com.sijo.mcpboondmanager.dto.dictionary.DictionaryResponseDto;
 import com.sijo.mcpboondmanager.service.BoondManagerCandidateService;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -23,7 +24,12 @@ public class BoondDictionaryTool {
                     "Must be called before searchCandidates when the user provides human-readable " +
                     "values that need to be resolved to their BoondManager IDs."
     )
-    public DictionaryResponseDto getDictionary() {
-        return candidateService.getDictionary();
+    public DictionaryResponseDto getDictionary(
+            @ToolParam(required = false, description =
+                    "Optional BoondManager locale for the returned labels (e.g. 'en', 'fr'). " +
+                            "When omitted, the account's default language is used.")
+            String language
+    ) {
+        return candidateService.getDictionary(language);
     }
 }

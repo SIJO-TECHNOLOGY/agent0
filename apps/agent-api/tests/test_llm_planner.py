@@ -71,6 +71,10 @@ def test_prompt_includes_query_tools_and_constraints() -> None:
     )
     assert "MCP" in system
     assert "input_schema" in system
+    # The planner must NOT be told to resolve dictionary ids (it plans in a
+    # single pass and cannot), and must be told not to emit placeholders.
+    assert "reuse its returned ids" not in system
+    assert "<...>" in system
     assert "search a java dev in CIB" in user
     assert "region" in user
     assert "searchCandidates" in user

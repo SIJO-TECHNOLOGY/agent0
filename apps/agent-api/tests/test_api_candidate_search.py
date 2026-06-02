@@ -70,6 +70,30 @@ async def _empty_handler(_inputs: dict[str, object]) -> list[dict[str, object]]:
     return []
 
 
+async def _java_only_handler(
+    inputs: dict[str, object],
+) -> list[dict[str, object]]:
+    # Neither candidate carries any "CIB" signal, so that criterion can
+    # never be verified from search data.
+    _captured_inputs.append(dict(inputs))
+    return [
+        {
+            "id": 2001,
+            "firstName": "Jo",
+            "lastName": "Engs",
+            "jobTitle": "Java Engineer",
+            "skills": ["Java", "Spring"],
+        },
+        {
+            "id": 2002,
+            "firstName": "Mo",
+            "lastName": "Coder",
+            "jobTitle": "C# Developer",
+            "skills": ["C#"],
+        },
+    ]
+
+
 _captured_inputs: list[dict[str, object]] = []
 
 
@@ -103,6 +127,15 @@ async def candidate_search_client() -> AsyncIterator[AsyncClient]:
 async def empty_candidate_search_client() -> AsyncIterator[AsyncClient]:
     _captured_inputs.clear()
     app = _make_app(_empty_handler)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+
+@pytest_asyncio.fixture()
+async def java_only_candidate_search_client() -> AsyncIterator[AsyncClient]:
+    _captured_inputs.clear()
+    app = _make_app(_java_only_handler)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -151,15 +184,45 @@ async def test_candidate_search_normalizes_results_into_cards(
     assert body["ui"]["type"] == "candidate_cards"
     assert len(body["ui"]["candidates"]) == 2
 
-    first = body["ui"]["candidates"][0]
+    # This test validates normalization, not ranking, so look the card up by
+    # id rather than position. (Evidence ranking now puts the candidate that
+    # matches more criteria first — covered by a dedicated ranking test.)
+    sarah = next(c for c in body["ui"]["candidates"] if c["id"] == "1001")
     # Cards are mapped, raw MCP fields never leak.
-    assert first["id"] == "1001"
-    assert first["full_name"] == "Sarah Martin"
-    assert first["title"] == "Backend Java Engineer"
-    assert first["location"] == "Paris, France"
-    assert first["skills"] == ["Java", "Spring"]
+    assert sarah["full_name"] == "Sarah Martin"
+    assert sarah["title"] == "Backend Java Engineer"
+    assert sarah["location"] == "Paris, France"
+    assert sarah["skills"] == ["Java", "Spring"]
     assert "firstName" not in response.text
     assert "lastName" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_unverifiable_criteria_yields_honest_broad_message(
+    java_only_candidate_search_client: AsyncClient,
+) -> None:
+    response = await java_only_candidate_search_client.post(
+        "/api/search",
+        json={"query": CANDIDATE_SEARCH_QUERY, "filters": {}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    cards = body["ui"]["candidates"]
+    # No candidate is dropped — broad results are kept, just framed honestly.
+    assert len(cards) == 2
+
+    message = body["message"]
+    # Must NOT over-claim that the candidates match the strict criteria.
+    assert "matching your search" not in message
+    assert "broad candidate results" in message
+    # The specific unconfirmed criterion is surfaced.
+    assert "could not verify" in message
+    assert "cib" in message.lower()
+
+    # The contradicting C# candidate must not read as a confident match.
+    csharp = next(c for c in cards if c["id"] == "2002")
+    assert csharp["match_score"] is None
 
 
 @pytest.mark.asyncio

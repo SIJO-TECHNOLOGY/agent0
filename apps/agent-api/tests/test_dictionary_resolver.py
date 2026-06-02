@@ -2,7 +2,46 @@
 
 from __future__ import annotations
 
-from app.services.dictionary_resolver import resolve_experience_id
+from app.services.dictionary_resolver import (
+    dictionary_section_entries,
+    resolve_experience_id,
+    resolve_tool_ids,
+)
+
+
+def test_dictionary_section_entries_extracts_nested_setting() -> None:
+    raw = [
+        {
+            "setting": {
+                "tool": [{"id": "t1", "label": "Java"}],
+                "experience": [{"id": "e1", "label": "10+ years"}],
+            }
+        }
+    ]
+    assert dictionary_section_entries(raw, "tool") == [
+        {"id": "t1", "label": "Java"}
+    ]
+
+
+def test_dictionary_section_entries_extracts_direct_shape() -> None:
+    raw = [{"tool": [{"id": "t1", "label": "Java"}]}]
+    assert dictionary_section_entries(raw, "tool") == [
+        {"id": "t1", "label": "Java"}
+    ]
+
+
+def test_resolve_tool_ids_matches_case_insensitively_and_omits_misses() -> None:
+    entries = [
+        {"id": "java-id", "label": "Java"},
+        {"id": "py-id", "label": "Python"},
+    ]
+    # "JAVA" matches Java; "cib" matches nothing -> omitted (never invented).
+    assert resolve_tool_ids(entries, ["JAVA", "cib"]) == ["java-id"]
+
+
+def test_resolve_tool_ids_returns_empty_when_no_match() -> None:
+    entries = [{"id": "java-id", "label": "Java"}]
+    assert resolve_tool_ids(entries, ["cib", "rust"]) == []
 
 
 def test_resolves_to_entry_with_n_plus_label() -> None:

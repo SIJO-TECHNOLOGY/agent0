@@ -8,6 +8,7 @@ update) so the graph remains side-effect free.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Final
@@ -31,7 +32,17 @@ from app.services.candidate_mapper import (
     candidate_cards_from_results,
     candidate_cards_with_diagnostics,
 )
-from app.services.dictionary_resolver import resolve_experience_id
+from app.services.dictionary_resolver import (
+    dictionary_section_entries,
+    resolve_experience_id,
+    resolve_tool_ids,
+)
+from app.services.search_strategy import (
+    build_recall_passes,
+    classify_anchors,
+    evidence_score,
+    parse_years,
+)
 from app.services.event_emitter import EventEmitter, NoopEventEmitter
 from app.services.result_inspector import (
     sanitized_preview,
@@ -756,9 +767,12 @@ def _inputs_for_step(state: GraphState, tool_name: str) -> dict[str, object]:
 def _record_to_result(record: dict[str, object], source_tool: str) -> SearchResult:
     raw_score = record.get("score")
     if raw_score is None:
-        # Detail-style tools return authoritative records without scoring
-        # metadata. Treat them as full-confidence matches.
-        score = 1.0
+        # Search-style tools return candidates whose relevance is UNKNOWN
+        # until evidence is checked in ranking — they must earn their score
+        # there, not be presented as full-confidence matches. Detail-style
+        # by-id lookups (e.g. getCandidateDetail) are authoritative, so they
+        # stay full-confidence.
+        score = 0.0 if source_tool.startswith("search") else 1.0
     else:
         try:
             score = float(raw_score)
@@ -1187,24 +1201,276 @@ def _evidence_haystack(result: SearchResult) -> str:
     return " ".join(parts).lower()
 
 
-async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
-    """Re-rank search-tool results by evidence found in MCP fields.
+_DOMAIN_CONSTRAINT_KEYS: Final[tuple[str, ...]] = (
+    "domain",
+    "last_experience_company",
+    "company",
+    "sector",
+    "business_context",
+)
 
-    Each intent entity that appears in the candidate's combined MCP
-    payload contributes a small score bump (capped). Detail/tech-doc
-    enrichment also adds tiny bumps so richer evidence wins ties.
-    Detail-only flows (e.g. candidate-id lookup) are untouched.
+
+def _domain_terms(constraints: dict[str, str]) -> tuple[str, ...]:
+    terms: list[str] = []
+    for key in _DOMAIN_CONSTRAINT_KEYS:
+        value = constraints.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() not in terms:
+            terms.append(value.strip())
+    return tuple(terms)
+
+
+def _summary_haystack(result: SearchResult) -> str:
+    """The candidate's SUMMARY surface: title/snippet + search-summary data.
+
+    Excludes the ``_``-prefixed enrichment payloads (technical document /
+    detail), so a criterion found here is "visible" on the search summary
+    even before any technical-document confirmation.
+    """
+    parts: list[str] = []
+    if result.title:
+        parts.append(result.title)
+    if result.snippet:
+        parts.append(result.snippet)
+    safe = {
+        k: v
+        for k, v in result.data.items()
+        if not (isinstance(k, str) and k.startswith("_"))
+    }
+    _collect_strings(safe, parts)
+    return " ".join(parts).lower()
+
+
+def _techdoc_haystack(result: SearchResult) -> str:
+    """Text from the candidate's technical-document enrichment payload only."""
+    payload = result.data.get(ENRICHMENT_TECH_DOC_KEY)
+    if not isinstance(payload, dict):
+        return ""
+    parts: list[str] = []
+    _collect_strings(payload, parts)
+    return " ".join(parts).lower()
+
+
+def _min_years_in(source: object) -> int | None:
+    """Read an ``experienceMinYears`` value from a record/dict, if present."""
+    if not isinstance(source, dict):
+        return None
+    for key in ("experienceMinYears", "experience_min_years"):
+        value = source.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                continue
+    return None
+
+
+def _record_experience_min_years(result: SearchResult) -> int | None:
+    """MCP-resolved minimum years of experience for the candidate (or None).
+
+    BoondManager (via the MCP server) resolves the experience level id to a
+    canonical ``experienceMinYears`` on both the search summary and the
+    technical document; ``None`` means "not specified".
+    """
+    for source in (
+        result.data,
+        result.data.get("attributes"),
+        result.data.get(ENRICHMENT_TECH_DOC_KEY),
+    ):
+        years = _min_years_in(source)
+        if years is not None:
+            return years
+    return None
+
+
+def _techdoc_min_years(result: SearchResult) -> int | None:
+    """experienceMinYears from the technical-document enrichment payload only."""
+    return _min_years_in(result.data.get(ENRICHMENT_TECH_DOC_KEY))
+
+
+# Free-text business-context fields. Domain evidence is matched against
+# these high-signal surfaces (title/job-title, summary, description) rather
+# than the raw skills/tools blob, so an incidental business word in a long
+# skills list does not earn domain credit.
+_DOMAIN_TEXT_FIELDS: Final[tuple[str, ...]] = ("summary", "description")
+_DOMAIN_SURFACE_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "jobTitle",
+    "headline",
+    "position",
+    "summary",
+    "description",
+)
+
+
+def _flatten_for_domain(data: dict[str, object]) -> dict[str, object]:
+    """Hoist JSON:API ``attributes`` so title/summary lookups don't miss them."""
+    flat = dict(data)
+    attributes = data.get("attributes")
+    if isinstance(attributes, dict):
+        for key, value in attributes.items():
+            flat.setdefault(key, value)
+    return flat
+
+
+def _summary_domain_text(result: SearchResult) -> str:
+    """High-signal SUMMARY domain surface: title/job-title + summary/description."""
+    parts: list[str] = []
+    if result.title:
+        parts.append(result.title)
+    if result.snippet:
+        parts.append(result.snippet)
+    flat = _flatten_for_domain(result.data)
+    for field in _DOMAIN_SURFACE_FIELDS:
+        value = flat.get(field)
+        if isinstance(value, str):
+            parts.append(value)
+    return " ".join(parts).lower()
+
+
+def _techdoc_domain_text(result: SearchResult) -> str:
+    """Technical-document free-text (summary/description) for domain evidence."""
+    payload = result.data.get(ENRICHMENT_TECH_DOC_KEY)
+    if not isinstance(payload, dict):
+        return ""
+    parts = [
+        str(payload[field])
+        for field in _DOMAIN_TEXT_FIELDS
+        if isinstance(payload.get(field), str)
+    ]
+    return " ".join(parts).lower()
+
+
+def _domain_haystack(result: SearchResult) -> str:
+    """High-signal domain surface for scoring: summary text + tech-doc text."""
+    summary = _summary_domain_text(result)
+    techdoc = _techdoc_domain_text(result)
+    return f"{summary} {techdoc}".strip()
+
+
+def _criteria_status(
+    results: list[SearchResult],
+    *,
+    skills: tuple[str, ...],
+    domains: tuple[str, ...],
+    role: str | None,
+    required_years: int | None,
+) -> tuple[list[str], list[str]]:
+    """Classify each requested criterion across candidates.
+
+    Returns ``(missing, visible_unverified)`` human-readable label lists:
+    - **verified** — evidenced in some candidate's technical document (omitted),
+    - **visible** — evidenced only in a summary/title (e.g. CIB in a job title),
+    - **missing** — evidenced nowhere.
+    Labels preserve the user's original term (acronym intact).
+    """
+    verified: set[str] = set()
+    visible: set[str] = set()
+    for result in results:
+        if not result.source_tool.startswith("search"):
+            continue
+        techdoc = _techdoc_haystack(result)
+        if techdoc:
+            td_years = _techdoc_min_years(result)
+            _, td_hits = evidence_score(
+                techdoc,
+                skills=skills,
+                domains=domains,
+                role=role,
+                candidate_min_years=(
+                    td_years if td_years is not None else parse_years(techdoc)
+                ),
+                required_min_years=required_years,
+                domain_haystack=_techdoc_domain_text(result),
+            )
+            verified |= td_hits
+        summary = _summary_haystack(result)
+        _, sm_hits = evidence_score(
+            summary,
+            skills=skills,
+            domains=domains,
+            role=role,
+            candidate_min_years=_record_experience_min_years(result),
+            required_min_years=required_years,
+            domain_haystack=_summary_domain_text(result),
+        )
+        visible |= sm_hits
+
+    missing: list[str] = []
+    visible_only: list[str] = []
+
+    def _classify(key: str, label: str) -> None:
+        if key in verified:
+            return
+        (visible_only if key in visible else missing).append(label)
+
+    for skill in skills:
+        _classify(f"skill:{skill.lower()}", skill)
+    if domains:
+        _classify("domain", ", ".join(domains))
+    if role:
+        _classify("role", role)
+    if required_years is not None:
+        _classify("seniority", f"{required_years}+ years")
+    return missing, visible_only
+
+
+def _evaluate_match(
+    hits: set[str],
+    *,
+    skills: tuple[str, ...],
+    domains: tuple[str, ...],
+    role: str | None,
+    required_years: int | None,
+) -> tuple[bool, list[str]]:
+    """Strict per-candidate match from its evidence ``hits``.
+
+    Full match iff EVERY requested criterion is evidenced for the candidate
+    (unknown counts as not evidenced). Returns ``(is_full_match, unmet)`` with
+    human labels (original casing / verbatim domain term) for the criteria
+    not evidenced — same labels as the aggregate status.
+    """
+    unmet: list[str] = []
+    for skill in skills:
+        if f"skill:{skill.lower()}" not in hits:
+            unmet.append(skill)
+    if domains and "domain" not in hits:
+        unmet.append(", ".join(domains))
+    if role and "role" not in hits:
+        unmet.append(role)
+    if required_years is not None and "seniority" not in hits:
+        unmet.append(f"{required_years}+ years")
+    return (not unmet), unmet
+
+
+async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
+    """Rank search-tool results by weighted, multi-criteria evidence.
+
+    Distinct criteria are scored separately — skill/role anchors, the
+    domain/business-context signal (e.g. CIB / banking found in the
+    title or technical document), and seniority (the candidate's known
+    experience meeting the requested minimum). A profile that matches more
+    criteria — especially seniority and domain — outranks a bare skill
+    match, so a 3-year Java profile never ties a 10+-year Java+CIB one.
+
+    Criteria never evidenced on any candidate are recorded as
+    ``criteria_unverified`` so the user-facing message stays honest.
     """
     if not state.results or state.interpreted_intent is None:
         await _emit_candidate_cards_partial(ctx, state.results)
         return state
 
-    entities = [
-        entity.lower()
-        for entity in state.interpreted_intent.entities
-        if isinstance(entity, str) and entity.strip()
-    ]
-    if not entities:
+    intent = state.interpreted_intent
+    skills = tuple(
+        e.strip() for e in intent.entities if isinstance(e, str) and e.strip()
+    )
+    domains = _domain_terms(intent.constraints)
+    role = intent.constraints.get("role") or None
+    required_years = _int_or_none(intent.constraints.get("min_experience_years"))
+    if not (skills or domains or role or required_years is not None):
         await _emit_candidate_cards_partial(ctx, state.results)
         return state
 
@@ -1214,20 +1480,75 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             re_ranked.append(result)
             continue
         haystack = _evidence_haystack(result)
-        matches = sum(1 for entity in entities if entity in haystack)
-        bonus = min(0.5, matches * 0.1)
-        if ENRICHMENT_DETAIL_KEY in result.data:
-            bonus += 0.05
-        if ENRICHMENT_TECH_DOC_KEY in result.data:
-            bonus += 0.05
-        new_score = max(0.0, min(1.0, result.score + bonus))
-        re_ranked.append(result.model_copy(update={"score": new_score}))
+        score, hits = evidence_score(
+            haystack,
+            skills=skills,
+            domains=domains,
+            role=role,
+            candidate_min_years=_candidate_min_years(result, haystack),
+            required_min_years=required_years,
+            domain_haystack=_domain_haystack(result),
+        )
+        # Tiny tie-break for candidates we actually enriched with evidence.
+        if score > 0.0 and ENRICHMENT_TECH_DOC_KEY in result.data:
+            score = min(1.0, score + 0.03)
+        is_full_match, unmet = _evaluate_match(
+            hits,
+            skills=skills,
+            domains=domains,
+            role=role,
+            required_years=required_years,
+        )
+        re_ranked.append(
+            result.model_copy(
+                update={
+                    "score": round(score, 4),
+                    "is_full_match": is_full_match,
+                    "unmet_criteria": unmet,
+                }
+            )
+        )
 
     re_ranked.sort(key=lambda r: r.score, reverse=True)
+
+    # Distinguish verified (in a technical document) / visible (in a summary
+    # only) / missing, so the message never claims a criterion is unverifiable
+    # when some candidate visibly shows it.
+    missing, visible_only = _criteria_status(
+        re_ranked,
+        skills=skills,
+        domains=domains,
+        role=role,
+        required_years=required_years,
+    )
+    warnings = list(state.warnings)
+    if missing and not any(w.code == "criteria_unverified" for w in warnings):
+        warnings.append(
+            Warning(
+                code="criteria_unverified",
+                message="could not verify: " + ", ".join(missing),
+            )
+        )
+    if visible_only and not any(w.code == "criteria_visible" for w in warnings):
+        warnings.append(
+            Warning(
+                code="criteria_visible",
+                message=(
+                    "visible on candidate profiles but not confirmed in "
+                    "technical documents: " + ", ".join(visible_only)
+                ),
+            )
+        )
+
     logger.info(
         "graph.rank_candidates",
         extra={
-            "entities": list(entities),
+            "skills": list(skills),
+            "domains": list(domains),
+            "role": role,
+            "required_years": required_years,
+            "missing_criteria": list(missing),
+            "visible_unverified_criteria": list(visible_only),
             "ranked": [
                 {"id": r.id, "source_tool": r.source_tool, "score": r.score}
                 for r in re_ranked[:5]
@@ -1235,7 +1556,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         },
     )
     await _emit_candidate_cards_partial(ctx, re_ranked)
-    return _replace(state, results=re_ranked)
+    return _replace(state, results=re_ranked, warnings=warnings)
 
 
 async def _emit_candidate_cards_partial(
@@ -1431,6 +1752,422 @@ def _candidate_id_call_inputs(
     return {"candidateId": value}
 
 
+# ---------------------------------------------------------------------------
+# Value-level input guarding + Agent-API-owned dictionary resolution
+# ---------------------------------------------------------------------------
+#
+# The LLM plans in a single pass and cannot know BoondManager dictionary
+# ids, so it must NOT emit them. Two safety layers protect execution:
+#   1. `_sanitize_tool_inputs` strips placeholder / wrongly-typed values
+#      so a bad plan can never crash the MCP call (plan-validate checks
+#      field names, not values).
+#   2. `_resolve_search_filters` lets the Agent API resolve experience /
+#      tool dictionary ids deterministically from the interpreted intent —
+#      restoring the documented ownership boundary.
+
+_PLACEHOLDER_RE: Final[re.Pattern[str]] = re.compile(r"^\s*<.*>\s*$")
+_ARRAY_OPERATOR_TOKENS: Final[frozenset[str]] = frozenset({"#AND#", "#OR#"})
+_SEARCH_FILTER_TOOLS: Final[frozenset[str]] = frozenset(
+    {SEARCH_CANDIDATES_TOOL, LEGACY_CONSULTANT_SEARCH_TOOL}
+)
+# searchCandidates fields that carry an experience-level filter, real
+# schema first (the live tool exposes the plural `experiences`).
+_SEARCH_EXPERIENCE_FIELDS: Final[tuple[str, ...]] = (
+    "experiences",
+    "experience",
+    "experienceLevel",
+    "experience_id",
+)
+_SEARCH_TOOLS_FIELD: Final[str] = "tools"
+
+
+def _is_placeholder(value: object) -> bool:
+    return isinstance(value, str) and bool(_PLACEHOLDER_RE.match(value))
+
+
+def _schema_field_spec(schema: dict[str, object], field: str) -> dict[str, object]:
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        spec = properties.get(field)
+        if isinstance(spec, dict):
+            return spec
+    return {}
+
+
+def _array_item_type(spec: dict[str, object]) -> str | None:
+    if spec.get("type") != "array":
+        return None
+    items = spec.get("items")
+    if isinstance(items, dict):
+        item_type = items.get("type")
+        return item_type if isinstance(item_type, str) else None
+    return None
+
+
+def _int_coercible(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, str):
+        try:
+            int(value.strip())
+        except ValueError:
+            return False
+        return True
+    return False
+
+
+def _sanitize_tool_inputs(
+    inputs: dict[str, object], schema: dict[str, object]
+) -> tuple[dict[str, object], list[str]]:
+    """Strip input values that could never execute against the MCP schema.
+
+    Returns the cleaned inputs plus the names of dropped fields. Guards:
+    - placeholder scalars / list elements (e.g. ``"<JAVA_ID>"``),
+    - non-integer values in an integer-typed field or array,
+    - arrays that collapse to nothing meaningful (only operator tokens).
+    """
+    clean: dict[str, object] = {}
+    dropped: list[str] = []
+    for key, value in inputs.items():
+        spec = _schema_field_spec(schema, str(key))
+
+        if isinstance(value, list):
+            item_type = _array_item_type(spec)
+            cleaned_items: list[object] = []
+            for item in value:
+                if _is_placeholder(item):
+                    continue
+                if isinstance(item, str) and item in _ARRAY_OPERATOR_TOKENS:
+                    cleaned_items.append(item)
+                    continue
+                if item_type == "integer" and not _int_coercible(item):
+                    continue
+                cleaned_items.append(item)
+            meaningful = [
+                it
+                for it in cleaned_items
+                if not (isinstance(it, str) and it in _ARRAY_OPERATOR_TOKENS)
+            ]
+            if not meaningful:
+                dropped.append(str(key))
+                continue
+            clean[key] = cleaned_items
+            continue
+
+        if _is_placeholder(value):
+            dropped.append(str(key))
+            continue
+        if spec.get("type") == "integer" and not _int_coercible(value):
+            dropped.append(str(key))
+            continue
+        clean[key] = value
+    return clean, dropped
+
+
+def _coerce_scalar(value: object, target_type: object) -> object:
+    if target_type == "integer" and _int_coercible(value):
+        return int(str(value).strip())
+    if target_type == "string":
+        return str(value)
+    return value
+
+
+def _coerce_for_field(
+    schema: dict[str, object], field: str, value: object
+) -> object:
+    spec = _schema_field_spec(schema, field)
+    if spec.get("type") == "array":
+        return [_coerce_scalar(value, _array_item_type(spec))]
+    return _coerce_scalar(value, spec.get("type"))
+
+
+def _coerce_array_for_field(
+    schema: dict[str, object], field: str, values: list[object]
+) -> list[object]:
+    spec = _schema_field_spec(schema, field)
+    item_type: object = (
+        _array_item_type(spec)
+        if spec.get("type") == "array"
+        else spec.get("type")
+    )
+    out: list[object] = []
+    for value in values:
+        if item_type == "integer" and not _int_coercible(value):
+            continue
+        out.append(_coerce_scalar(value, item_type))
+    return out
+
+
+async def _fetch_dictionary(
+    ctx: NodeContext, available_by_name: dict[str, McpTool]
+) -> list[dict[str, object]] | None:
+    """Fetch the BoondManager reference dictionary, or None if unavailable.
+
+    The live ``getDictionary`` takes no inputs; we still try a couple of
+    legacy key-param shapes for mock/older servers. Never raises.
+    """
+    dict_tool = available_by_name.get(DICTIONARY_TOOL)
+    if dict_tool is None:
+        return None
+    attempt_args: list[dict[str, object]] = [{}]
+    dict_properties = _schema_property_names(dict_tool.input_schema)
+    for param in _DICTIONARY_KEY_PARAMS:
+        if param in dict_properties:
+            attempt_args.append({param: "setting"})
+    for args in attempt_args:
+        try:
+            raw = await ctx.mcp_client.call_tool(DICTIONARY_TOOL, args)
+        except (McpTransientError, McpToolError):
+            logger.warning("graph.llm_dictionary_call_failed", extra={"args": args})
+            continue
+        if raw:
+            return [r for r in raw if isinstance(r, dict)]
+    return None
+
+
+async def _resolve_search_filters(
+    ctx: NodeContext,
+    inputs: dict[str, object],
+    schema: dict[str, object],
+    intent: InterpretedIntent | None,
+    available_by_name: dict[str, McpTool],
+) -> tuple[dict[str, object], list[Warning]]:
+    """Inject Agent-API-resolved dictionary filters into search inputs.
+
+    The LLM only declares intent; the Agent API resolves experience/tool
+    dictionary ids here (best-effort, never inventing an id). Filters the
+    (sanitized) plan already supplied validly are left untouched.
+    """
+    warnings: list[Warning] = []
+    if intent is None:
+        return inputs, warnings
+
+    property_names = _schema_property_names(schema)
+    min_years_raw = intent.constraints.get("min_experience_years")
+
+    exp_field = next(
+        (f for f in _SEARCH_EXPERIENCE_FIELDS if f in property_names), None
+    )
+    # Only the experience-level filter is injected here. The structured
+    # `tools` id filter is intentionally NOT applied — it is unreliable and
+    # can kill recall; skill matching is handled by keywords + ranking.
+    needs_experience = bool(min_years_raw) and exp_field is not None and (
+        exp_field not in inputs
+    )
+    if not needs_experience or exp_field is None:
+        return inputs, warnings
+
+    raw = await _fetch_dictionary(ctx, available_by_name)
+    if raw is None:
+        warnings.append(_experience_unmapped_warning())
+        return inputs, warnings
+
+    min_years = _int_or_none(min_years_raw)
+    entry_id = (
+        resolve_experience_id(
+            dictionary_section_entries(raw, "experience"), min_years
+        )
+        if min_years is not None
+        else None
+    )
+    if entry_id is None:
+        warnings.append(_experience_unmapped_warning())
+        return inputs, warnings
+
+    resolved = dict(inputs)
+    resolved[exp_field] = _coerce_for_field(schema, exp_field, entry_id)
+    return resolved, warnings
+
+
+def _experience_unmapped_warning() -> Warning:
+    return Warning(
+        code="experience_filter_unmapped",
+        message=(
+            "Years-of-experience filter is not applied: no matching "
+            "dictionary entry was found for the requested experience level."
+        ),
+    )
+
+
+_MAX_SEARCH_PASSES: Final[int] = 5
+
+def _int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _candidate_min_years(result: SearchResult, haystack: str) -> int | None:
+    """Best-known minimum years for a candidate.
+
+    Prefers the MCP-resolved ``experienceMinYears``; falls back to a years
+    figure parsed from the candidate's CV free-text.
+    """
+    resolved = _record_experience_min_years(result)
+    parsed = parse_years(haystack)
+    known = [y for y in (resolved, parsed) if y is not None]
+    return max(known) if known else None
+
+
+def _prerank_search_results(
+    results: list[SearchResult],
+    *,
+    anchors_skills: tuple[str, ...],
+    anchors_domains: tuple[str, ...],
+    anchors_role: str | None,
+    required_years: int | None,
+) -> None:
+    """Reorder search summaries by visible evidence.
+
+    Enrichment is bounded, so it must spend its budget on the candidates
+    whose SUMMARY already shows the most evidence (skill/role/domain/
+    seniority) — not the first N in BoondManager order. Seniority comes
+    from the MCP-resolved ``experienceMinYears`` on each summary. Mutates
+    ``results`` in place so the downstream fan-out picks the best candidates.
+    """
+    annotated = list(results)
+
+    def _key(result: SearchResult) -> float:
+        if not result.source_tool.startswith("search"):
+            return -1.0
+        haystack = _evidence_haystack(result)
+        score, _ = evidence_score(
+            haystack,
+            skills=anchors_skills,
+            domains=anchors_domains,
+            role=anchors_role,
+            candidate_min_years=_candidate_min_years(result, haystack),
+            required_min_years=required_years,
+            domain_haystack=_domain_haystack(result),
+        )
+        return score
+
+    annotated.sort(key=_key, reverse=True)
+    results[:] = annotated
+
+
+async def _execute_search_ladder(
+    ctx: NodeContext,
+    *,
+    tool: McpTool,
+    intent: InterpretedIntent | None,
+    available_by_name: dict[str, McpTool],
+    tool_calls: list[ToolCall],
+    results: list[SearchResult],
+    warnings: list[Warning],
+    errors: list[AgentError],
+) -> bool:
+    """Run searchCandidates as a recall-first relaxation ladder.
+
+    ``searchCandidates`` is a recall tool, so instead of one strict call we
+    build a bounded ladder of progressively broader passes from the
+    interpreted intent (generic anchors — no hardcoded skill) and stop at
+    the first pass that returns candidates. Returns ``True`` when the ladder
+    handled the search; ``False`` when no usable anchors exist (the caller
+    then falls back to the planned search inputs).
+    """
+    if intent is None:
+        return False
+
+    schema = tool.input_schema
+    property_names = _schema_property_names(schema)
+    entities = [str(e).strip() for e in intent.entities if str(e).strip()]
+    if not entities and not intent.constraints:
+        return False
+
+    raw = await _fetch_dictionary(ctx, available_by_name)
+    tool_entries = dictionary_section_entries(raw, "tool") if raw else []
+
+    # An entity is a concrete (server-filterable) skill iff it resolves to a
+    # tool dictionary id. This is generic across technologies.
+    skill_labels = {
+        e.lower() for e in entities if tool_entries and resolve_tool_ids(tool_entries, [e])
+    }
+    anchors = classify_anchors(intent.entities, intent.constraints, skill_labels)
+    if anchors.is_empty():
+        return False
+
+    # Keyword-only recall ladder: the structured `tools` filter is unreliable
+    # (it kills recall), so precision comes from evidence pre-ranking and
+    # ranking, not from hard id filters on the search.
+    passes = build_recall_passes(
+        anchors, schema_fields=property_names, max_passes=_MAX_SEARCH_PASSES
+    )
+    if not passes:
+        return False
+
+    required_years = _int_or_none(intent.constraints.get("min_experience_years"))
+
+    start_len = len(tool_calls)
+    used_relaxed: bool | None = None
+    for index, search_pass in enumerate(passes):
+        if index > 0:
+            await ctx.event_emitter.emit(
+                "search_relaxed",
+                {
+                    "reason": "previous search returned no candidates",
+                    "next_pass": search_pass.label,
+                    "pass_index": index,
+                },
+            )
+        inputs, _dropped = _sanitize_tool_inputs(dict(search_pass.inputs), schema)
+        call, raw_records = await _execute_single_tool(ctx, tool.name, inputs)
+        tool_calls.append(call)
+        if call.status is ToolCallStatus.FAILED:
+            _absorb_direct_outcome(
+                call, raw_records, tool.name, results, warnings, errors
+            )
+            return True
+        if raw_records:
+            _absorb_direct_outcome(
+                call, raw_records, tool.name, results, warnings, errors
+            )
+            used_relaxed = search_pass.relaxed
+            break
+
+    if used_relaxed is not None:
+        # Found candidates — pre-rank summaries so the best (by visible
+        # evidence), not the first N, are the ones enriched downstream.
+        _prerank_search_results(
+            results,
+            anchors_skills=anchors.skills,
+            anchors_domains=anchors.domains,
+            anchors_role=anchors.role,
+            required_years=required_years,
+        )
+        if used_relaxed:
+            warnings.append(
+                Warning(
+                    code="search_broadened",
+                    message=(
+                        "The initial search was broadened to find candidates; "
+                        "some criteria may not be strictly applied."
+                    ),
+                )
+            )
+    else:
+        # Every pass ran successfully but returned nothing.
+        any_failure = any(
+            c.status is ToolCallStatus.FAILED for c in tool_calls[start_len:]
+        )
+        if not any_failure:
+            warnings.append(
+                Warning(
+                    code="no_results_after_fallback",
+                    message=(
+                        "No candidates were found, even after broader "
+                        "fallback searches."
+                    ),
+                )
+            )
+    return True
+
+
 async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
     """Execute the validated LLM plan with bounded fan-out.
 
@@ -1479,11 +2216,61 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
         )
 
         if not is_fanout:
+            # searchCandidates is recall-first: let the Agent API run a
+            # bounded relaxation ladder built from the interpreted intent.
+            # Falls back to the planned inputs when no anchors are usable.
+            if step.tool_name in _SEARCH_FILTER_TOOLS:
+                handled = await _execute_search_ladder(
+                    ctx,
+                    tool=tool,
+                    intent=state.interpreted_intent,
+                    available_by_name=available_by_name,
+                    tool_calls=tool_calls,
+                    results=results,
+                    warnings=warnings,
+                    errors=errors,
+                )
+                if handled:
+                    continue
             inputs = dict(step.inputs)
+            inputs, dropped = _sanitize_tool_inputs(inputs, tool.input_schema)
+            if dropped:
+                warnings.append(
+                    Warning(
+                        code="filter_unresolved",
+                        message=(
+                            "Some planned filters were dropped because they "
+                            "could not be resolved or were wrongly typed: "
+                            + ", ".join(sorted(set(dropped)))
+                            + "."
+                        ),
+                    )
+                )
+            if step.tool_name in _SEARCH_FILTER_TOOLS:
+                inputs, resolve_warnings = await _resolve_search_filters(
+                    ctx,
+                    inputs,
+                    tool.input_schema,
+                    state.interpreted_intent,
+                    available_by_name,
+                )
+                warnings.extend(resolve_warnings)
             call, raw = await _execute_single_tool(ctx, step.tool_name, inputs)
             tool_calls.append(call)
             _absorb_direct_outcome(
                 call, raw, step.tool_name, results, warnings, errors
+            )
+            continue
+
+        # getCandidateDetail carries no skills/experience/work-history, so
+        # it is useless for criteria verification. Skip it as a fan-out
+        # enrichment to preserve the budget for the technical document (the
+        # actual evidence tool). The direct candidate-detail-by-id flow is
+        # not a fan-out and is unaffected.
+        if step.tool_name == CANDIDATE_DETAIL_TOOL:
+            logger.info(
+                "graph.skip_detail_fanout",
+                extra={"depends_on": step.depends_on},
             )
             continue
 
@@ -1517,6 +2304,9 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
             # bounded numberPerPage) but never override the fan-out key.
             for key, value in step.inputs.items():
                 inputs.setdefault(key, value)
+            # Guard against placeholder / wrongly-typed extras the LLM may
+            # have layered on; the fan-out key itself is always clean.
+            inputs, _dropped = _sanitize_tool_inputs(inputs, tool.input_schema)
             call, raw = await _execute_single_tool(ctx, step.tool_name, inputs)
             tool_calls.append(call)
             _merge_fanout_outcome(

@@ -23,6 +23,7 @@ import com.sijo.mcpboondmanager.exception.CandidateNotFoundException;
 import com.sijo.mcpboondmanager.exception.DictionaryResolutionException;
 import com.sijo.mcpboondmanager.exception.ExternalServiceException;
 import com.sijo.mcpboondmanager.support.TestFixtures;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -40,19 +41,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class BoondManagerCandidateServiceTest {
 
+    private static final ResolvedExperience RESOLVED_EXPERIENCE =
+            new ResolvedExperience(3, false, true, "3 ans");
+
     @Mock
     private BoondManagerClient client;
+
+    @Mock
+    private ExperienceDictionaryResolver experienceResolver;
+
+    @BeforeEach
+    void stubExperienceResolver() {
+        lenient().when(experienceResolver.resolve(any())).thenReturn(RESOLVED_EXPERIENCE);
+    }
 
     @Test
     void givenDictionaryEndpoint_whenGetDictionary_thenMapsEnvelopeToMcpResponse() {
         BoondDictionaryEnvelope envelope = dictionaryEnvelope();
-        when(client.get(eq("/application/dictionary"), any(ParameterizedTypeReference.class)))
+        when(client.get(eq("/application/dictionary"), any(Consumer.class),
+                any(ParameterizedTypeReference.class)))
                 .thenReturn(envelope);
 
         DictionaryResponseDto response = service().getDictionary();
@@ -72,7 +86,8 @@ class BoondManagerCandidateServiceTest {
     void givenBoondApiFailure_whenGetDictionary_thenMapsToDictionaryResolutionException() {
         BoondApiException backend = new BoondApiException(
                 "boom", HttpStatus.SERVICE_UNAVAILABLE, "/application/dictionary", null);
-        when(client.get(eq("/application/dictionary"), any(ParameterizedTypeReference.class)))
+        when(client.get(eq("/application/dictionary"), any(Consumer.class),
+                any(ParameterizedTypeReference.class)))
                 .thenThrow(backend);
 
         assertThatThrownBy(() -> service().getDictionary())
@@ -81,6 +96,38 @@ class BoondManagerCandidateServiceTest {
                     assertThat(ex.path()).isEqualTo("/application/dictionary");
                     assertThat(ex.getCause()).isSameAs(backend);
                 });
+    }
+
+    @Test
+    void givenLanguage_whenGetDictionary_thenPassesLanguageQueryParam() {
+        when(client.get(eq("/application/dictionary"), any(Consumer.class),
+                any(ParameterizedTypeReference.class)))
+                .thenReturn(dictionaryEnvelope());
+
+        service().getDictionary("en");
+
+        ArgumentCaptor<Consumer<UriBuilder>> queryCaptor = ArgumentCaptor.captor();
+        verify(client).get(eq("/application/dictionary"), queryCaptor.capture(),
+                any(ParameterizedTypeReference.class));
+        UriComponentsBuilder builder = UriComponentsBuilder.newInstance();
+        queryCaptor.getValue().accept(builder);
+        assertThat(builder.build().getQueryParams()).containsEntry("language", List.of("en"));
+    }
+
+    @Test
+    void givenBlankLanguage_whenGetDictionary_thenOmitsLanguageQueryParam() {
+        when(client.get(eq("/application/dictionary"), any(Consumer.class),
+                any(ParameterizedTypeReference.class)))
+                .thenReturn(dictionaryEnvelope());
+
+        service().getDictionary("  ");
+
+        ArgumentCaptor<Consumer<UriBuilder>> queryCaptor = ArgumentCaptor.captor();
+        verify(client).get(eq("/application/dictionary"), queryCaptor.capture(),
+                any(ParameterizedTypeReference.class));
+        UriComponentsBuilder builder = UriComponentsBuilder.newInstance();
+        queryCaptor.getValue().accept(builder);
+        assertThat(builder.build().getQueryParams()).doesNotContainKey("language");
     }
 
     @Test
@@ -94,6 +141,9 @@ class BoondManagerCandidateServiceTest {
         assertThat(response.candidates()).hasSize(1);
         assertThat(response.candidates().getFirst().id()).isEqualTo(42);
         assertThat(response.candidates().getFirst().firstName()).isEqualTo("Ada");
+        assertThat(response.candidates().getFirst().experience()).isEqualTo(3);
+        assertThat(response.candidates().getFirst().experienceMinYears()).isEqualTo(3);
+        assertThat(response.candidates().getFirst().experienceSpecified()).isTrue();
         assertThat(response.meta().totalRows()).isEqualTo(1);
         assertThat(response.meta().currentPage()).isEqualTo(1);
 
@@ -183,6 +233,14 @@ class BoondManagerCandidateServiceTest {
                         TechnicalDocumentDto.ToolProficiency::level)
                 .containsExactly(org.assertj.core.groups.Tuple.tuple("IntelliJ", 5));
         assertThat(response.diplomas()).containsExactly("Engineering school");
+
+        // raw experience id is preserved and the language-neutral fields come from the resolver
+        assertThat(response.experience()).isEqualTo(3);
+        assertThat(response.experienceMinYears()).isEqualTo(3);
+        assertThat(response.experienceOpenEnded()).isFalse();
+        assertThat(response.experienceSpecified()).isTrue();
+        assertThat(response.experienceLabelRaw()).isEqualTo("3 ans");
+        verify(experienceResolver).resolve(3);
     }
 
     @Test
@@ -196,9 +254,9 @@ class BoondManagerCandidateServiceTest {
 
         TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
 
-        assertThat(response.id()).isEqualTo(101);
+        assertThat(response.id()).isEqualTo(42);
         assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
-        assertThat(response.candidateId()).isEqualTo(42);
+        assertThat(response.tdId()).isEqualTo("101");
     }
 
     @Test
@@ -211,9 +269,9 @@ class BoondManagerCandidateServiceTest {
 
         TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
 
-        assertThat(response.id()).isEqualTo(101);
+        assertThat(response.id()).isEqualTo(42);
         assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
-        assertThat(response.candidateId()).isEqualTo(42);
+        assertThat(response.tdId()).isEqualTo("101");
     }
 
     @Test
@@ -259,7 +317,7 @@ class BoondManagerCandidateServiceTest {
     }
 
     private BoondManagerCandidateService service() {
-        return new BoondManagerCandidateService(client);
+        return new BoondManagerCandidateService(client, experienceResolver);
     }
 
     private BoondDictionaryEnvelope dictionaryEnvelope() {
@@ -323,13 +381,14 @@ class BoondManagerCandidateServiceTest {
 
     private BoondListEnvelope<BoondTechnicalDocumentAttributes> technicalDocumentListEnvelope() {
         BoondTechnicalDocumentAttributes attrs = new BoondTechnicalDocumentAttributes(
-                "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
-                3, "bac5", "Engineering school",
-                "Java, Spring, PostgreSQL", "backend", "finance",
-                "IntelliJ:5", "fr:5|en:4",
-                Boolean.FALSE, "2025-01-01", "2026-01-01", 42);
+                "101", "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
+                3, "bac5",
+                List.of("Engineering school"), "Java, Spring, PostgreSQL",
+                List.of("backend"), List.of("finance"),
+                List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
+                List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")));
         return new BoondListEnvelope<>(
-                List.of(new BoondData<>("101", "technicaldata", attrs)),
+                List.of(new BoondData<>("42", "candidate", attrs)),
                 new BoondMeta(new BoondMeta.Totals(1), 1));
     }
 }

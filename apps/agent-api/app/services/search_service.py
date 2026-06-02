@@ -15,6 +15,7 @@ from app.models.api import (
     SearchResponse,
 )
 from app.models.graph_state import GraphState
+from app.models.tools import ToolCallStatus
 from app.services.candidate_mapper import candidate_cards_from_results
 from app.services.event_emitter import EventEmitter, NoopEventEmitter
 from app.services.llm_planner import LlmPlanner
@@ -126,7 +127,13 @@ class SearchService:
 # (rather than a hard failure). Surfaced in the message so users know
 # the result set is narrower than their request.
 _LIMITED_SEARCH_WARNING_CODES: frozenset[str] = frozenset(
-    {"experience_filter_unmapped"}
+    {
+        "experience_filter_unmapped",
+        "criteria_unverified",
+        "criteria_visible",
+        "filter_unresolved",
+        "search_broadened",
+    }
 )
 
 
@@ -179,6 +186,13 @@ def _base_message(
                 "The candidate search did not complete. Please refine "
                 "your query and try again."
             )
+        if _candidate_search_failed(final_state):
+            # The search tool was invoked but errored (e.g. an MCP-side
+            # failure). That is not "matched zero" — say so truthfully.
+            return (
+                "The candidate search could not be completed because a "
+                "search tool failed. Please try again or adjust your query."
+            )
         if final_state.results:
             # A candidate-producing search returned records but the
             # mapper couldn't normalize them into displayable cards.
@@ -188,10 +202,38 @@ def _base_message(
                 "normalized into displayable candidate cards. Check the "
                 "stream's results_normalized event for drop reasons."
             )
+        if _has_warning(final_state, "no_results_after_fallback"):
+            # The recall ladder broadened the search and still found
+            # nothing — say so, rather than implying one narrow attempt.
+            return (
+                "No candidates matched your search, even after broader "
+                "fallback searches. Try different or fewer terms."
+            )
         return "No candidates matched your search."
+    # When the query carried strict criteria we couldn't confirm against
+    # the returned candidates — or we had to broaden the search to find
+    # anyone — never claim a strict match. Say the results are broad. The
+    # specific unconfirmed criteria are appended by the limited-search hint.
+    unverified = (
+        _has_warning(final_state, "criteria_unverified")
+        or _has_warning(final_state, "criteria_visible")
+        or _has_warning(final_state, "search_broadened")
+    )
     if count == 1:
         name = candidates[0].full_name or candidates[0].id
+        if unverified:
+            return (
+                f"I found 1 broad candidate result ({name}), but the strict "
+                "criteria could not be fully verified. Showing the closest "
+                "match ranked by available evidence."
+            )
         return f"Found 1 candidate matching your search: {name}."
+    if unverified:
+        return (
+            f"I found {count} broad candidate results, but the strict "
+            "criteria could not be fully verified. Showing the closest "
+            "matches ranked by available evidence."
+        )
     return f"I found {count} candidates matching your search."
 
 
@@ -206,12 +248,37 @@ def _ran_candidate_search(final_state: GraphState) -> bool:
     )
 
 
+def _candidate_search_failed(final_state: GraphState) -> bool:
+    return any(
+        call.tool in _CANDIDATE_SEARCH_TOOL_NAMES
+        and call.status is ToolCallStatus.FAILED
+        for call in final_state.tool_calls
+    )
+
+
 def _limited_search_hint(final_state: GraphState) -> str | None:
     triggered = [
         w for w in final_state.warnings if w.code in _LIMITED_SEARCH_WARNING_CODES
     ]
     if not triggered:
         return None
+    clauses: list[str] = []
+    if any(w.code == "search_broadened" for w in triggered):
+        clauses.append("search was broadened to find candidates")
     if any(w.code == "experience_filter_unmapped" for w in triggered):
-        return "(experience filter could not be applied)"
-    return "(some filters could not be applied)"
+        clauses.append("experience filter could not be applied")
+    if any(w.code == "filter_unresolved" for w in triggered):
+        clauses.append("some planned filters could not be applied")
+    unverified = next(
+        (w for w in triggered if w.code == "criteria_unverified"), None
+    )
+    if unverified is not None and unverified.message:
+        clauses.append(unverified.message)
+    visible = next(
+        (w for w in triggered if w.code == "criteria_visible"), None
+    )
+    if visible is not None and visible.message:
+        clauses.append(visible.message)
+    if not clauses:
+        clauses.append("some filters could not be applied")
+    return "(" + "; ".join(clauses) + ")"

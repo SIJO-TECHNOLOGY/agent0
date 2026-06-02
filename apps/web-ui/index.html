@@ -18,9 +18,9 @@
         <img src="./assets/logo.png" alt="SIJO" onerror="this.hidden=true; this.nextElementSibling.hidden=false">
         <span class="brand-fallback" hidden>SIJO</span>
       </div>
-      <h1>SIJO Assistant</h1>
-      <p>Connectez-vous avec votre compte Microsoft professionnel pour accéder au chatbot interne.</p>
-      <button class="primary-btn" id="loginBtn" type="button">Se connecter avec Microsoft</button>
+      <h1 data-i18n="app.name">SIJO Assistant</h1>
+      <p data-i18n="auth.intro">Connectez-vous avec votre compte Microsoft professionnel pour accéder au chatbot interne.</p>
+      <button class="primary-btn" id="loginBtn" type="button" data-i18n="auth.login_cta">Se connecter avec Microsoft</button>
       <p class="login-note" id="loginError" role="alert"></p>
     </div>
   </section>
@@ -33,7 +33,7 @@
       </div>
       <div class="loading-row">
         <span class="spinner" aria-hidden="true"></span>
-        <span id="loadingText">Connexion en cours...</span>
+        <span id="loadingText" data-i18n="auth.connecting">Connexion en cours...</span>
       </div>
     </div>
   </section>
@@ -49,20 +49,24 @@
 
       <button class="sidebar-btn" id="newChatBtn" type="button">
         <span class="icon-plus" aria-hidden="true"></span>
-        Nouvelle conversation
+        <span data-i18n="conversations.default_title">Nouvelle conversation</span>
       </button>
 
-      <div class="conversation-list" id="conversationList" aria-label="Conversations"></div>
+      <div class="conversation-list" id="conversationList" data-i18n-aria="nav.conversations" aria-label="Conversations"></div>
       <div class="sidebar-status" id="sidebarStatus"></div>
     </aside>
 
     <main class="main">
       <header class="header">
-        <span class="header-title" id="conversationTitle">Nouvelle conversation</span>
+        <span class="header-title" id="conversationTitle" data-i18n="conversations.default_title">Nouvelle conversation</span>
         <div class="header-actions">
           <span class="header-user" id="currentUser"></span>
           <span class="header-badge">SIJO · Assistant</span>
-          <button class="ghost-btn" id="logoutBtn" type="button">Déconnexion</button>
+          <select class="lang-switcher" id="langSwitcher" data-i18n-aria="langSwitcher.aria" aria-label="Langue">
+            <option value="fr">FR</option>
+            <option value="en">EN</option>
+          </select>
+          <button class="ghost-btn" id="logoutBtn" type="button" data-i18n="auth.logout">Déconnexion</button>
         </div>
       </header>
 
@@ -72,17 +76,17 @@
             <img src="./assets/logo.png" alt="SIJO" onerror="this.hidden=true; this.nextElementSibling.hidden=false">
             <span class="brand-fallback" hidden>SIJO</span>
           </div>
-          <div class="empty-title">Bonjour,<br><span>comment puis-je vous aider ?</span></div>
-          <p class="empty-sub">Décrivez votre besoin candidat complet, par exemple : Développeur Java senior, Paris, finance, dispo rapidement.</p>
-          <div class="search-guides" aria-label="Critères de recherche suggérés">
-            <span>Poste</span>
-            <span>Localisation</span>
-            <span>Expérience</span>
-            <span>Compétences</span>
-            <span>Secteur</span>
-            <span>Disponibilité</span>
-            <span>Contrat</span>
-            <span>TJM / salaire</span>
+          <div class="empty-title"><span data-i18n="empty.title_line1">Bonjour,</span><br><span data-i18n="empty.title_line2">comment puis-je vous aider ?</span></div>
+          <p class="empty-sub" data-i18n="empty.subtitle">Décrivez votre besoin candidat complet, par exemple : Développeur Java senior, Paris, finance, dispo rapidement.</p>
+          <div class="search-guides" data-i18n-aria="empty.guides_aria" aria-label="Critères de recherche suggérés">
+            <span data-i18n="criteria.role">Poste</span>
+            <span data-i18n="criteria.location">Localisation</span>
+            <span data-i18n="criteria.experience">Expérience</span>
+            <span data-i18n="criteria.skills">Compétences</span>
+            <span data-i18n="criteria.sector">Secteur</span>
+            <span data-i18n="criteria.availability">Disponibilité</span>
+            <span data-i18n="criteria.contract">Contrat</span>
+            <span data-i18n="criteria.tjm_salary">TJM / salaire</span>
           </div>
         </div>
         <div class="messages-inner" id="messages"></div>
@@ -91,22 +95,22 @@
       <div class="input-zone">
         <div class="input-error" id="inputError" role="alert"></div>
         <div class="input-wrap">
-          <textarea id="messageInput" placeholder="Décrivez le profil recherché : poste, localisation, compétences, secteur, disponibilité..." rows="1"></textarea>
-          <button class="send" id="sendBtn" type="button" aria-label="Envoyer">
+          <textarea id="messageInput" data-i18n-placeholder="input.placeholder" placeholder="Décrivez le profil recherché : poste, localisation, compétences, secteur, disponibilité..." rows="1"></textarea>
+          <button class="send" id="sendBtn" type="button" data-i18n-aria="input.send_aria" aria-label="Envoyer">
             <span class="send-arrow" aria-hidden="true"></span>
           </button>
         </div>
-        <div class="criteria-row" aria-label="Critères utiles pour votre recherche">
-          <span>Poste</span>
-          <span>Localisation</span>
-          <span>Années d'expérience</span>
-          <span>Compétences</span>
-          <span>Secteur</span>
-          <span>Disponibilité</span>
-          <span>Contrat</span>
-          <span>TJM / salaire</span>
+        <div class="criteria-row" data-i18n-aria="input.criteria_aria" aria-label="Critères utiles pour votre recherche">
+          <span data-i18n="criteria.role">Poste</span>
+          <span data-i18n="criteria.location">Localisation</span>
+          <span data-i18n="criteria.experience_years">Années d'expérience</span>
+          <span data-i18n="criteria.skills">Compétences</span>
+          <span data-i18n="criteria.sector">Secteur</span>
+          <span data-i18n="criteria.availability">Disponibilité</span>
+          <span data-i18n="criteria.contract">Contrat</span>
+          <span data-i18n="criteria.tjm_salary">TJM / salaire</span>
         </div>
-        <div class="hint"><kbd>Entrée</kbd> pour envoyer · <kbd>Maj + Entrée</kbd> saut de ligne</div>
+        <div class="hint"><kbd data-i18n="input.kbd_enter">Entrée</kbd> <span data-i18n="input.hint_send">pour envoyer</span> · <kbd data-i18n="input.kbd_shift_enter">Maj + Entrée</kbd> <span data-i18n="input.hint_newline">saut de ligne</span></div>
       </div>
     </main>
   </div>
@@ -115,40 +119,40 @@
   <aside class="candidate-drawer" id="candidateDrawer" aria-labelledby="drawerName" hidden>
     <div class="drawer-header">
       <div>
-        <p class="drawer-eyebrow">Profil candidat</p>
-        <h2 id="drawerName">Nom du candidat</h2>
-        <p id="drawerTitle">Titre du candidat</p>
+        <p class="drawer-eyebrow" data-i18n="drawer.eyebrow">Profil candidat</p>
+        <h2 id="drawerName" data-i18n="drawer.name_placeholder">Nom du candidat</h2>
+        <p id="drawerTitle" data-i18n="drawer.title_placeholder">Titre du candidat</p>
       </div>
-      <button class="drawer-close" id="drawerCloseBtn" type="button" aria-label="Fermer">×</button>
+      <button class="drawer-close" id="drawerCloseBtn" type="button" data-i18n-aria="drawer.close_aria" aria-label="Fermer">×</button>
     </div>
 
     <div class="drawer-body">
       <section class="drawer-section">
-        <h3>Résumé</h3>
-        <p id="drawerSummary">Aucun résumé disponible.</p>
+        <h3 data-i18n="candidate.sections.summary">Résumé</h3>
+        <p id="drawerSummary" data-i18n="candidate.no_summary">Aucun résumé disponible.</p>
       </section>
 
       <section class="drawer-section">
-        <h3>Compétences</h3>
+        <h3 data-i18n="candidate.sections.skills">Compétences</h3>
         <div class="candidate-skills" id="drawerSkills"></div>
       </section>
 
       <dl class="drawer-details">
         <div>
-          <dt>Expérience</dt>
-          <dd id="drawerExperience">Non renseignée</dd>
+          <dt data-i18n="candidate.meta.experience">Expérience</dt>
+          <dd id="drawerExperience" data-i18n="candidate.not_specified_f">Non renseignée</dd>
         </div>
         <div>
-          <dt>Localisation</dt>
-          <dd id="drawerLocation">Non renseignée</dd>
+          <dt data-i18n="candidate.meta.location">Localisation</dt>
+          <dd id="drawerLocation" data-i18n="candidate.not_specified_f">Non renseignée</dd>
         </div>
         <div>
-          <dt>Disponibilité</dt>
-          <dd id="drawerAvailability">Non renseignée</dd>
+          <dt data-i18n="candidate.meta.availability">Disponibilité</dt>
+          <dd id="drawerAvailability" data-i18n="candidate.not_specified_f">Non renseignée</dd>
         </div>
         <div>
-          <dt>Match</dt>
-          <dd id="drawerMatch">Score N/A</dd>
+          <dt data-i18n="candidate.meta.match">Match</dt>
+          <dd id="drawerMatch" data-i18n="match.na">Score N/A</dd>
         </div>
       </dl>
 
@@ -156,7 +160,7 @@
     </div>
 
     <div class="drawer-footer">
-      <button class="primary-btn" id="drawerBoondBtn" type="button">Ouvrir BoondManager</button>
+      <button class="primary-btn" id="drawerBoondBtn" type="button" data-i18n="candidate.open_boond">Ouvrir BoondManager</button>
     </div>
   </aside>
 </body>
