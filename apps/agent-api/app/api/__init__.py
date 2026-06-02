@@ -6,8 +6,10 @@ from app.api.mcp_tools import router as mcp_tools_router
 from app.api.ready import router as ready_router
 from app.api.search import router as search_router
 from app.api.search_stream import router as search_stream_router
+from app.api.chat import router as chat_router
 
 __all__ = [
+    "chat_router",
     "health_router",
     "mcp_debug_router",
     "mcp_tools_router",

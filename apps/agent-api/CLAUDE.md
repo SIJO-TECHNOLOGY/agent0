@@ -38,6 +38,7 @@ The Agent API owns:
 - Ranking.
 - Aggregation.
 - Summarization.
+- Normalization of MCP results into frontend UI response models.
 
 The MCP BoondManager server owns:
 
@@ -53,6 +54,7 @@ The Agent API must not:
 - Duplicate MCP server business data access logic.
 - Embed BoondManager-specific pagination or authentication behavior.
 - Turn FastAPI route handlers into orchestration logic.
+- Return raw BoondManager MCP payloads to the frontend.
 
 ## Agent Pattern
 
@@ -84,6 +86,36 @@ Do not implement:
 - Keep prompt templates versioned and reviewable.
 - Use structured logging with request IDs or correlation IDs.
 - Design response contracts so SSE or WebSocket streaming can be added later.
+- Return `conversation_id`, `message`, and `ui` by default from `POST /api/search`.
+- Keep internal agent metadata out of the default frontend response.
+
+## Frontend Response Contract
+
+The frontend expects UI-oriented responses. For candidate search, use:
+
+```json
+{
+  "conversation_id": "conv_123",
+  "message": "I found 5 candidates matching your search.",
+  "ui": {
+    "type": "candidate_cards",
+    "candidates": []
+  }
+}
+```
+
+Candidate card values must be normalized from BoondManager MCP results.
+
+Rules:
+
+- Use `null` for unknown scalar or numeric fields.
+- Use `[]` for missing list fields.
+- Never invent candidate data.
+- LLM-generated summaries must be grounded in MCP result fields.
+- Do not expose `interpreted_intent`, `execution_plan`, `tool_calls`, `confidence`, or `warnings` by default.
+- These metadata fields may exist internally or in explicit debug mode only.
+
+Future UI types may include `mission_cards`, `client_cards`, `table`, `clarification_request`, and `error_message`, but do not emit them until the frontend supports them.
 
 ## Configuration
 
@@ -107,5 +139,6 @@ An implementation is acceptable when:
 - `POST /api/search` follows the documented API contract.
 - LangGraph owns workflow state and transitions.
 - MCP is the only path to BoondManager data.
+- MCP results are normalized into UI-friendly response models.
 - Error handling is structured and user-safe.
 - Tests cover API validation, graph behavior, MCP client behavior, and failure cases.

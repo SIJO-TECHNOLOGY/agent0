@@ -21,6 +21,7 @@ import com.sijo.mcpboondmanager.dto.dictionary.DictionarySettingDto;
 import com.sijo.mcpboondmanager.exception.BoondApiException;
 import com.sijo.mcpboondmanager.exception.CandidateNotFoundException;
 import com.sijo.mcpboondmanager.exception.DictionaryResolutionException;
+import com.sijo.mcpboondmanager.exception.ExternalServiceException;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -42,6 +43,8 @@ public class BoondManagerCandidateService {
     private static final ParameterizedTypeReference<BoondSingleEnvelope<BoondCandidateDetailAttributes>> DETAIL_TYPE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<BoondSingleEnvelope<BoondTechnicalDocumentAttributes>> TD_TYPE =
+            new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<BoondListEnvelope<BoondTechnicalDocumentAttributes>> TD_LIST_TYPE =
             new ParameterizedTypeReference<>() {};
 
     private final BoondManagerClient client;
@@ -111,15 +114,38 @@ public class BoondManagerCandidateService {
 
     public TechnicalDocumentDto getCandidateTechnicalDocument(Integer candidateId) {
         String path = CANDIDATES_PATH + "/" + candidateId + "/technical-data";
+        String fallbackPath = CANDIDATES_PATH + "/" + candidateId + "/technical-datas";
+        try {
+            return getCandidateTechnicalDocumentAtPath(path, candidateId);
+        } catch (BoondApiException | ExternalServiceException ex) {
+            try {
+                return getCandidateTechnicalDocumentAtPath(fallbackPath, candidateId);
+            } catch (BoondApiException | ExternalServiceException fallbackEx) {
+                if (isNotFound(fallbackEx)) {
+                    if (!isNotFound(ex)) {
+                        throw ex;
+                    }
+                    throw new CandidateNotFoundException(candidateId, fallbackPath, fallbackEx);
+                }
+                throw fallbackEx;
+            }
+        }
+    }
+
+    private static boolean isNotFound(RuntimeException ex) {
+        return ex instanceof BoondApiException boondEx
+                && HttpStatus.NOT_FOUND.value() == boondEx.status().value();
+    }
+
+    private TechnicalDocumentDto getCandidateTechnicalDocumentAtPath(String path, Integer candidateId) {
         try {
             BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope =
                     client.get(path, TD_TYPE);
-            return toTechnicalDocument(envelope);
-        } catch (BoondApiException ex) {
-            if (HttpStatus.NOT_FOUND.value() == ex.status().value()) {
-                throw new CandidateNotFoundException(candidateId, path, ex);
-            }
-            throw ex;
+            return toTechnicalDocument(envelope, candidateId);
+        } catch (ExternalServiceException ex) {
+            BoondListEnvelope<BoondTechnicalDocumentAttributes> envelope =
+                    client.get(path, TD_LIST_TYPE);
+            return toTechnicalDocument(envelope, candidateId);
         }
     }
 
@@ -240,8 +266,26 @@ public class BoondManagerCandidateService {
     }
 
     private static TechnicalDocumentDto toTechnicalDocument(
-            BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope) {
-        BoondData<BoondTechnicalDocumentAttributes> data = envelope.data();
+            BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope,
+            Integer candidateId) {
+        return toTechnicalDocument(envelope.data(), candidateId);
+    }
+
+    private static TechnicalDocumentDto toTechnicalDocument(
+            BoondListEnvelope<BoondTechnicalDocumentAttributes> envelope,
+            Integer candidateId) {
+        if (envelope.data() == null || envelope.data().isEmpty()) {
+            throw new ExternalServiceException(
+                    "BoondManager returned no technical document records",
+                    CANDIDATES_PATH,
+                    null);
+        }
+        return toTechnicalDocument(envelope.data().getFirst(), candidateId);
+    }
+
+    private static TechnicalDocumentDto toTechnicalDocument(
+            BoondData<BoondTechnicalDocumentAttributes> data,
+            Integer candidateId) {
         BoondTechnicalDocumentAttributes a = data.attributes();
         return new TechnicalDocumentDto(
                 parseId(data.id()),
@@ -256,7 +300,8 @@ public class BoondManagerCandidateService {
                 a.expertiseAreas(),
                 a.activityAreas(),
                 toToolProficiencies(a.tools()),
-                toLanguageProficiencies(a.languages())
+                toLanguageProficiencies(a.languages()),
+                candidateId
         );
     }
 

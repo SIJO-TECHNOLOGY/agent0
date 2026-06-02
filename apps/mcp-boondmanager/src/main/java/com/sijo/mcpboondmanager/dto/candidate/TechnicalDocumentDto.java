@@ -24,7 +24,8 @@ public record TechnicalDocumentDto(
         List<String> expertiseAreas,
         List<String> activityAreas,
         List<ToolProficiency> tools,
-        List<LanguageProficiency> languages
+        List<LanguageProficiency> languages,
+        Integer candidateId
 ) {
 
     /**

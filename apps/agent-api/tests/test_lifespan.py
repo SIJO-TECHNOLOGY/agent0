@@ -17,6 +17,7 @@ from app.mcp.mock_client import MockMcpClient
 def _real_settings(**overrides: object) -> Settings:
     base: dict[str, object] = {
         "use_mock_mcp": False,
+        "use_llm_planner": False,
         "mcp_server_url": "http://remote.test/mcp",
         "mcp_transport": "streamable_http",
         "mcp_timeout_seconds": 2.0,
@@ -34,6 +35,7 @@ async def test_lifespan_binds_mcp_client_on_startup(
         "get_settings",
         lambda: Settings(
             use_mock_mcp=True,
+            use_llm_planner=False,
             mcp_server_url="http://localhost:8001/mcp",
             mcp_transport="streamable_http",
         ),
@@ -59,6 +61,7 @@ async def test_lifespan_closes_async_client_on_shutdown(
         async def aclose(self) -> None:
             closed["count"] += 1
 
+    monkeypatch.setattr(main_module, "get_settings", lambda: _real_settings())
     monkeypatch.setattr(main_module, "create_mcp_client", lambda _s: AsyncClosable())
 
     app = FastAPI()
@@ -79,6 +82,7 @@ async def test_lifespan_closes_sync_client_on_shutdown(
         def close(self) -> None:
             closed["count"] += 1
 
+    monkeypatch.setattr(main_module, "get_settings", lambda: _real_settings())
     monkeypatch.setattr(main_module, "create_mcp_client", lambda _s: SyncClosable())
 
     app = FastAPI()
@@ -96,6 +100,7 @@ async def test_lifespan_client_without_close_does_not_raise(
     class NoClose:
         pass
 
+    monkeypatch.setattr(main_module, "get_settings", lambda: _real_settings())
     monkeypatch.setattr(main_module, "create_mcp_client", lambda _s: NoClose())
 
     app = FastAPI()
@@ -156,13 +161,13 @@ async def test_lifespan_real_mode_marks_unavailable_when_connect_fails(
     app = FastAPI()
     # Must NOT raise: the app stays up so /api/health remains reachable.
     async with lifespan(app):
-        assert app.state.mcp_client is None
+        assert isinstance(app.state.mcp_client, FailingClient)
         assert app.state.mcp_status.status == "unavailable"
         assert "server down" in app.state.mcp_status.error
         assert app.state.mcp_status.url == "http://remote.test/mcp"
 
-    # Failed-connect path also attempts a best-effort close.
-    assert close_events == ["aclose"]
+    # Failed-connect path attempts a best-effort close, then shutdown closes again.
+    assert close_events == ["aclose", "aclose"]
 
 
 @pytest.mark.asyncio
@@ -183,7 +188,7 @@ async def test_lifespan_real_mode_close_failure_during_failed_connect_is_swallow
 
     app = FastAPI()
     async with lifespan(app):
-        assert app.state.mcp_client is None
+        assert isinstance(app.state.mcp_client, DoublyBadClient)
         assert app.state.mcp_status.status == "unavailable"
 
 
@@ -208,6 +213,6 @@ async def test_lifespan_real_mode_marks_unavailable_when_connect_cancelled(
     app = FastAPI()
     # Must NOT propagate CancelledError out of lifespan.
     async with lifespan(app):
-        assert app.state.mcp_client is None
+        assert isinstance(app.state.mcp_client, CancelClient)
         assert app.state.mcp_status.status == "unavailable"
         assert "CancelledError" in app.state.mcp_status.error

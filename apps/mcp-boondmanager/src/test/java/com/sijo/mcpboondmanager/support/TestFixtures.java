@@ -129,7 +129,8 @@ public final class TestFixtures {
                 List.of("backend"),
                 List.of("finance"),
                 List.of(new TechnicalDocumentDto.ToolProficiency("IntelliJ", 5)),
-                List.of(new TechnicalDocumentDto.LanguageProficiency("en", "fluent"))
+                List.of(new TechnicalDocumentDto.LanguageProficiency("en", "fluent")),
+                42
         );
     }
 

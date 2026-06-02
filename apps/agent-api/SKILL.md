@@ -34,6 +34,7 @@ Before implementation, read these files in order:
 - Introduce the MCP client behind an abstraction.
 - Mock MCP tool responses before depending on a live MCP server.
 - Add tests as each workflow layer is introduced.
+- Normalize MCP results into frontend UI response models before returning from API routes.
 
 ## Fixed Decisions
 
@@ -53,3 +54,33 @@ Before implementation, read these files in order:
 - Do not put orchestration in route handlers.
 - Do not implement open-ended ReAct loops for the MVP.
 - Do not create source code unless the user requests implementation.
+- Do not return raw BoondManager MCP payloads to the frontend.
+- Do not expose internal agent metadata by default.
+
+## Frontend Response Contract
+
+`POST /api/search` should return `conversation_id`, `message`, and `ui`.
+
+For candidate search results:
+
+```json
+{
+  "conversation_id": "conv_123",
+  "message": "I found 5 candidates matching your search.",
+  "ui": {
+    "type": "candidate_cards",
+    "candidates": []
+  }
+}
+```
+
+Candidate card values must be adapted from BoondManager MCP server results.
+
+Use:
+
+- `null` for unknown scalar or numeric fields.
+- `[]` for missing list fields.
+
+Never invent candidate data. Summaries may be LLM-generated only when grounded in MCP result fields.
+
+Internal fields such as `interpreted_intent`, `execution_plan`, `tool_calls`, `confidence`, and `warnings` may exist internally or in debug mode, but are not the default frontend response.
