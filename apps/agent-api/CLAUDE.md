@@ -96,7 +96,7 @@ The frontend expects UI-oriented responses. For candidate search, use:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "I found 5 candidates matching your search.",
+  "message": "J'ai trouvé 5 profils proches de votre recherche.",
   "ui": {
     "type": "candidate_cards",
     "candidates": []
@@ -112,6 +112,15 @@ Rules:
 - Use `[]` for missing list fields.
 - Never invent candidate data.
 - LLM-generated summaries must be grounded in MCP result fields.
+- Resolve dictionary-backed BoondManager IDs into labels where possible
+  (experience, availability, candidate state, mobility, tools, languages,
+  activity areas).
+- Candidate cards may expose enriched profile fields such as `state_label`,
+  `technical_summary`, `diplomas`, `expertise_areas`, `activity_areas`,
+  `tools`, `languages`, `source`, and `last_update`.
+- User-facing messages should stay natural and honest. Prefer "profils proches"
+  and "points à confirmer" when criteria are not fully verified; do not expose
+  internal warning codes or long diagnostic parentheses.
 - Do not expose `interpreted_intent`, `execution_plan`, `tool_calls`, `confidence`, or `warnings` by default.
 - These metadata fields may exist internally or in explicit debug mode only.
 

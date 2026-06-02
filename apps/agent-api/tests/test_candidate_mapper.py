@@ -106,7 +106,7 @@ def test_availability_falls_back_to_date_field() -> None:
     card = candidate_card_from_result(
         _result(data={"availabilityDate": "2026-07-01"})
     )
-    assert card.availability == "Available from 2026-07-01"
+    assert card.availability == "Disponible à partir du 2026-07-01"
 
 
 def test_experience_years_extracted_as_float() -> None:
@@ -167,13 +167,13 @@ def test_boond_url_only_returned_for_http_strings() -> None:
     invalid = candidate_card_from_result(_result(data={"boondUrl": "not-a-url"}))
     empty = candidate_card_from_result(_result(data={}))
     assert valid.boond_url == "https://ui.boondmanager.com/candidates/41924"
-    assert invalid.boond_url is None
-    assert empty.boond_url is None
+    assert invalid.boond_url == "https://ui.boondmanager.com/candidates/41924/overview"
+    assert empty.boond_url == "https://ui.boondmanager.com/candidates/41924/overview"
 
 
 def test_summary_falls_back_to_generic_when_no_grounding_fields() -> None:
     card = candidate_card_from_result(_result(data={}))
-    assert card.summary == "Candidate profile found in BoondManager."
+    assert card.summary == "Profil candidat trouvé dans BoondManager."
 
 
 def test_summary_uses_full_name_and_title_when_available() -> None:
@@ -233,6 +233,9 @@ def test_json_api_style_record_resolves_id_and_name() -> None:
 
 
 def test_nested_technical_document_feeds_card_fields() -> None:
+    # In real BoondManager, `experience` is a LEVEL ID (not years).
+    # A genuine year count must come from `experienceYears` (a different field).
+    # We test both cases: skills come from the tech doc, years from explicit field.
     card = candidate_card_from_result(
         _result(
             id="41924",
@@ -241,7 +244,8 @@ def test_nested_technical_document_feeds_card_fields() -> None:
                 "lastName": "Martin",
                 "technicalDocument": {
                     "title": "Senior Java Backend",
-                    "experience": 7,
+                    "experience": 5,          # level ID — NOT surfaced as experience_years
+                    "experienceYears": 7,      # explicit year count — IS surfaced
                     "skills": "Java, Spring; Kafka\nDocker",
                 },
             },
@@ -249,7 +253,7 @@ def test_nested_technical_document_feeds_card_fields() -> None:
     )
     assert card is not None
     assert card.title == "Senior Java Backend"
-    assert card.experience_years == 7.0
+    assert card.experience_years == 7.0        # from experienceYears, not experience ID
     assert card.skills == ["Java", "Spring", "Kafka", "Docker"]
 
 
@@ -328,3 +332,74 @@ def test_internal_enrichment_keys_never_leak_through_skills_or_summary() -> None
     assert "_enrichment_detail" not in serialized
     assert "_enrichment_technical_document" not in serialized
     assert "secret" not in serialized
+
+
+def test_resolved_labels_and_profile_details_surface_from_real_search_shape() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "firstName": "Aymane",
+                "lastName": "EL IDRISSI",
+                "title": "Business Analyst IT",
+                "city": "Paris",
+                "country": "France",
+                "availability": "1",
+                "experience": 4,
+                "mobilityAreas": ["portage"],
+                "skills": "Guidewire, Postman, SQL, Oracle, XML, Python, Java",
+                "diplomas": [
+                    "2023 - Diplome d'ingenieur, Ingenierie informatique",
+                ],
+                "tools": [{"tool": "sql", "level": 1}],
+                "languages": [{"language": "anglais", "level": "courant"}],
+                "_availabilityLabel": "1 mois",
+                "_experienceLabel": "5 ans",
+                "_mobilityLabel": "Portage",
+                "_stateLabel": "Vivier",
+                "_resolvedToolLabels": ["SQL"],
+                "_resolvedLanguageLabels": [
+                    {"language": "Anglais", "level": "Courant"}
+                ],
+                "_resolvedActivityAreaLabels": ["Business Analyst"],
+            },
+        )
+    )
+
+    assert card is not None
+    assert card.availability == "1 mois"
+    assert card.experience_label == "5 ans"
+    assert card.mobility == "Portage"
+    assert card.state_label == "Vivier"
+    assert card.diplomas == ["2023 - Diplome d'ingenieur, Ingenierie informatique"]
+    assert card.tools == [{"name": "SQL", "level": 1}]
+    assert card.languages == [{"language": "Anglais", "level": "Courant"}]
+    assert card.activity_areas == ["Business Analyst"]
+    assert "SQL" in card.skills
+
+
+def test_technical_document_adds_summary_domains_tools_and_languages() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "id": 41961,
+                "_enrichment_technical_document": {
+                    "summary": "Profil BA IT oriente production.",
+                    "expertiseAreas": ["Banque"],
+                    "activityAreas": ["businessanalyst"],
+                    "diplomas": ["Bac+5"],
+                    "tools": [{"tool": "sql", "level": 3}],
+                    "languages": [{"language": "anglais", "level": "courant"}],
+                },
+            },
+        )
+    )
+
+    assert card is not None
+    assert card.technical_summary == "Profil BA IT oriente production."
+    assert card.expertise_areas == ["Banque"]
+    assert card.activity_areas == ["businessanalyst"]
+    assert card.diplomas == ["Bac+5"]
+    assert card.tools == [{"name": "sql", "level": "3"}]
+    assert card.languages == [{"language": "anglais", "level": "courant"}]

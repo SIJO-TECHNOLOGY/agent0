@@ -54,7 +54,7 @@ Example:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "I found 5 candidates matching your search.",
+  "message": "J'ai trouvé 5 profils proches de votre recherche. Certains points restent à confirmer dans les dossiers candidats.",
   "ui": {
     "type": "candidate_cards",
     "candidates": [
@@ -68,7 +68,12 @@ Example:
         "skills": ["Java", "Spring", "Kafka"],
         "match_score": 0.86,
         "summary": "Confirmed backend profile.",
-        "boond_url": "https://ui.boondmanager.com/"
+        "boond_url": "https://ui.boondmanager.com/",
+        "state_label": "Vivier",
+        "technical_summary": "Solid Java/Spring backend profile.",
+        "diplomas": ["Bac+5"],
+        "tools": [{ "name": "Java", "level": 5 }],
+        "languages": [{ "language": "Anglais", "level": "Courant" }]
       }
     ]
   }
@@ -78,6 +83,16 @@ Example:
 The values above are examples only. Real candidate values must be adapted from BoondManager MCP server results.
 
 Internal metadata such as interpreted intent, execution plan, tool calls, confidence, and warnings may exist in graph state or debug mode, but should not be the default frontend response.
+
+Candidate cards may include enriched profile metadata from BoondManager MCP
+results: resolved experience, availability, state and mobility labels, diplomas,
+expertise/activity areas, tools with levels, languages with levels, technical
+summary, source, and last update. Unknown scalar fields stay `null`; unknown
+list fields stay `[]`.
+
+User-facing search messages should be natural and honest. When not every
+criterion can be fully confirmed from evidence, describe returned records as
+close profiles with points to confirm rather than exposing internal warnings.
 
 ## System Context
 

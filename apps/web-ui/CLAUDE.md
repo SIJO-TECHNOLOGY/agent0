@@ -16,6 +16,8 @@ Allowed frontend capabilities:
 - Candidate cards.
 - Enriched candidate result summaries.
 - AI match evaluation display.
+- Resolved candidate metadata display.
+- Diplomas, domains, tools, and languages display.
 - Recent experience display.
 - Lightweight display-only sorting/filtering of already received candidates.
 - Candidate detail rendering.
@@ -69,10 +71,12 @@ No React, Vue, Angular, or frontend framework should be introduced.
 When enabled:
 
 - Microsoft authentication is bypassed.
-- A mock user is used.
+- Authentication state is mocked.
 - API responses are mocked in `api.js`.
 - Candidate cards can be tested without a backend.
 - Debug logs for normalized responses may appear in the console.
+- The header user-name slot should remain blank until real identity display is
+  implemented.
 
 When disabled:
 
@@ -121,12 +125,20 @@ For `candidate_cards`, the frontend may render optional fields:
 - `candidate.salary_expectation`
 - `candidate.tjm`
 - `candidate.mobility`
+- `candidate.state_label`
+- `candidate.source`
+- `candidate.last_update`
 - `candidate.ai_evaluation` or `candidate.match_explanation`
 - `candidate.experiences`
 - `candidate.highlights`
 - `candidate.strengths` or `candidate.strong_points`
 - `candidate.watch_points`, `candidate.weaknesses`, or `candidate.vigilance_points`
 - `candidate.technical_summary`
+- `candidate.diplomas`
+- `candidate.expertise_areas`
+- `candidate.activity_areas`
+- `candidate.tools`
+- `candidate.languages`
 
 All these fields are optional. The frontend must remain robust when they are
 missing.
@@ -134,6 +146,10 @@ missing.
 Lightweight sorting/filtering is allowed only for already received candidate
 cards. The frontend must not construct BoondManager queries or apply backend
 business rules.
+
+Candidate-search copy should stay natural. Do not surface backend warning codes,
+criteria diagnostics, or long parenthesized technical explanations in normal
+assistant messages.
 
 ## Backend Relationship
 

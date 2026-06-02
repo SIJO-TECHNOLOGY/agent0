@@ -33,9 +33,20 @@ from app.services.candidate_mapper import (
     candidate_cards_with_diagnostics,
 )
 from app.services.dictionary_resolver import (
+    dictionary_activity_area_option_entries,
+    dictionary_availability_entries,
+    dictionary_candidate_state_entries,
+    dictionary_contract_entries,
+    dictionary_language_level_entries,
+    dictionary_language_spoken_entries,
+    dictionary_mobility_option_entries,
     dictionary_section_entries,
+    dictionary_tool_entries,
+    entry_id_of,
     experience_years_for_id,
+    resolve_excluded_state_ids,
     resolve_experience_id,
+    resolve_label_for_id,
     resolve_tool_ids,
 )
 from app.services.search_strategy import (
@@ -73,6 +84,7 @@ class NodeContext:
     max_plan_steps: int = DEFAULT_LLM_PLAN_STEPS
     event_emitter: EventEmitter = field(default_factory=NoopEventEmitter)
     debug_mode: bool = False
+    boond_base_url: str = "https://ui.boondmanager.com"
 
 
 def _replace(state: GraphState, **changes: object) -> GraphState:
@@ -507,8 +519,8 @@ async def _build_search_candidates_inputs(
             Warning(
                 code="clarification_needed",
                 message=(
-                    "Please refine your search with at least one keyword "
-                    "(skill, technology, role, location, or company)."
+                    "Veuillez affiner votre recherche avec au moins un critère "
+                    "(compétence, technologie, rôle, localisation ou entreprise)."
                 ),
             )
         )
@@ -516,8 +528,17 @@ async def _build_search_candidates_inputs(
 
     if "page" in property_names and "page" not in inputs:
         inputs["page"] = 1
-    if "numberPerPage" in property_names and "numberPerPage" not in inputs:
-        inputs["numberPerPage"] = 10
+    if "maxResults" in property_names and "maxResults" not in inputs:
+        inputs["maxResults"] = 25
+    elif "numberPerPage" in property_names and "numberPerPage" not in inputs:
+        inputs["numberPerPage"] = 25
+
+    # Request richer candidate data from the API
+    if "columns" in property_names and "columns" not in inputs:
+        inputs["columns"] = [
+            "state", "tools", "languages", "expertiseAreas",
+            "activityAreas", "mobilityAreas", "experience",
+        ]
 
     return inputs, warnings
 
@@ -926,7 +947,7 @@ async def _emit_results_normalized(
     raw_count = sum(
         c.result_count for c in new_tool_calls if c.status is ToolCallStatus.SUCCESS
     )
-    cards, dropped = candidate_cards_with_diagnostics(deduped)
+    cards, dropped = candidate_cards_with_diagnostics(deduped, boond_base_url=ctx.boond_base_url)
     await ctx.event_emitter.emit(
         "results_normalized",
         {
@@ -1026,6 +1047,18 @@ def should_replan(state: GraphState) -> str:
 # without inventing fields. Prefixed with `_` so the mapper drops them.
 ENRICHMENT_DETAIL_KEY: Final[str] = "_enrichment_detail"
 ENRICHMENT_TECH_DOC_KEY: Final[str] = "_enrichment_technical_document"
+ENRICHMENT_RESUME_KEY: Final[str] = "_enrichment_resume"
+# Resolved human-readable labels stored alongside raw BoondManager id values.
+AVAILABILITY_LABEL_KEY: Final[str] = "_availabilityLabel"
+EXPERIENCE_LABEL_KEY: Final[str] = "_experienceLabel"
+CONTRACT_LABEL_KEY: Final[str] = "_contractLabel"
+MOBILITY_LABEL_KEY: Final[str] = "_mobilityLabel"
+RESOLVED_TOOL_LABELS_KEY: Final[str] = "_resolvedToolLabels"
+STATE_LABEL_KEY: Final[str] = "_stateLabel"
+RESOLVED_LANGUAGE_LABELS_KEY: Final[str] = "_resolvedLanguageLabels"
+RESOLVED_ACTIVITY_AREA_LABELS_KEY: Final[str] = "_resolvedActivityAreaLabels"
+
+RESUME_TOOL: Final[str] = "getCandidateCV"
 
 
 def _candidate_id_inputs(
@@ -1079,6 +1112,191 @@ def _merge_detail_into_result_data(
         target.setdefault(key, value)
 
 
+def _raw_availability(data: dict[str, object]) -> object | None:
+    """Extract the raw availability value from a result data dict."""
+    raw = data.get("availability")
+    if raw is None:
+        attrs = data.get("attributes")
+        if isinstance(attrs, dict):
+            raw = attrs.get("availability")
+    return raw
+
+
+def _raw_experience_id(data: dict[str, object]) -> object | None:
+    """Extract the raw experience level id from a result data dict."""
+    raw = data.get("experience")
+    if raw is None:
+        attrs = data.get("attributes")
+        if isinstance(attrs, dict):
+            raw = attrs.get("experience")
+    # Also try the technical document if present.
+    if raw is None:
+        tech = data.get(ENRICHMENT_TECH_DOC_KEY)
+        if isinstance(tech, dict):
+            raw = tech.get("experience")
+    return raw
+
+
+def _raw_contract_type(data: dict[str, object]) -> object | None:
+    """Extract the raw contract type id (typeOf) from a result data dict."""
+    raw = data.get("typeOf")
+    if raw is None:
+        attrs = data.get("attributes")
+        if isinstance(attrs, dict):
+            raw = attrs.get("typeOf")
+    if raw is None:
+        detail = data.get(ENRICHMENT_DETAIL_KEY)
+        if isinstance(detail, dict):
+            raw = detail.get("typeOf")
+    return raw
+
+
+def _inject_resolved_labels(
+    data: dict[str, object],
+    avail_entries: list[dict[str, object]],
+    exp_entries: list[dict[str, object]],
+    contract_entries: list[dict[str, object]] | None = None,
+    mobility_entries: list[dict[str, object]] | None = None,
+    tool_entries: list[dict[str, object]] | None = None,
+    state_entries: list[dict[str, object]] | None = None,
+    language_spoken_entries: list[dict[str, object]] | None = None,
+    language_level_entries: list[dict[str, object]] | None = None,
+    activity_area_entries: list[dict[str, object]] | None = None,
+) -> None:
+    """Resolve BoondManager integer IDs to human-readable labels in-place.
+
+    Stores the resolved labels under internal keys so the mapper can
+    prefer them over the raw id values without extra dict calls.
+    """
+    if AVAILABILITY_LABEL_KEY not in data and avail_entries:
+        raw_avail = _raw_availability(data)
+        if raw_avail is not None:
+            label = resolve_label_for_id(avail_entries, raw_avail)
+            if label:
+                data[AVAILABILITY_LABEL_KEY] = label
+
+    if EXPERIENCE_LABEL_KEY not in data and exp_entries:
+        raw_exp = _raw_experience_id(data)
+        if raw_exp is not None:
+            label = resolve_label_for_id(exp_entries, raw_exp)
+            if label:
+                data[EXPERIENCE_LABEL_KEY] = label
+
+    if CONTRACT_LABEL_KEY not in data and contract_entries:
+        raw_contract = _raw_contract_type(data)
+        if raw_contract is not None:
+            label = resolve_label_for_id(contract_entries, raw_contract)
+            if label:
+                data[CONTRACT_LABEL_KEY] = label
+
+    if STATE_LABEL_KEY not in data and state_entries:
+        raw_state = data.get("state")
+        if raw_state is None:
+            attrs = data.get("attributes")
+            if isinstance(attrs, dict):
+                raw_state = attrs.get("state")
+        if raw_state is not None:
+            label = resolve_label_for_id(state_entries, raw_state)
+            if label:
+                data[STATE_LABEL_KEY] = label
+
+    # Resolve mobility area IDs to human-readable labels.
+    # BoondManager uses long path-like IDs e.g. "mondeeuropefranceiledefranceparis"
+    if MOBILITY_LABEL_KEY not in data and mobility_entries:
+        raw_areas: object = data.get("mobilityAreas")
+        if raw_areas is None:
+            attrs = data.get("attributes")
+            if isinstance(attrs, dict):
+                raw_areas = attrs.get("mobilityAreas")
+        if isinstance(raw_areas, list) and raw_areas:
+            labels = [
+                resolve_label_for_id(mobility_entries, area_id) or str(area_id)
+                for area_id in raw_areas
+                if area_id
+            ]
+            labels = [lb for lb in labels if lb]
+            if labels:
+                data[MOBILITY_LABEL_KEY] = ", ".join(labels[:3])
+
+    # Resolve tool IDs to labels in the tech doc and search result tools list.
+    # e.g. {"tool": "ccc", "level": 3} → {"tool": "C++", "level": 3}
+    if RESOLVED_TOOL_LABELS_KEY not in data and tool_entries:
+        resolved: list[str] = []
+        # Tech doc enrichment tools
+        for source_key in (ENRICHMENT_TECH_DOC_KEY, "tools"):
+            source = data.get(source_key)
+            if isinstance(source, dict):
+                raw_tools = source.get("tools")
+            elif isinstance(source, list):
+                raw_tools = source
+            else:
+                raw_tools = None
+            if not isinstance(raw_tools, list):
+                continue
+            for item in raw_tools:
+                if isinstance(item, dict):
+                    tool_id = item.get("tool")
+                    if tool_id:
+                        label = resolve_label_for_id(tool_entries, tool_id)
+                        name = label or str(tool_id)
+                        if name and name not in resolved:
+                            resolved.append(name)
+                elif isinstance(item, str) and item:
+                    label = resolve_label_for_id(tool_entries, item)
+                    name = label or item
+                    if name and name not in resolved:
+                        resolved.append(name)
+        if resolved:
+            data[RESOLVED_TOOL_LABELS_KEY] = resolved
+
+    if RESOLVED_LANGUAGE_LABELS_KEY not in data and (
+        language_spoken_entries or language_level_entries
+    ):
+        raw_languages = data.get("languages")
+        if raw_languages is None:
+            tech = data.get(ENRICHMENT_TECH_DOC_KEY)
+            if isinstance(tech, dict):
+                raw_languages = tech.get("languages")
+        if isinstance(raw_languages, list):
+            resolved_languages: list[dict[str, object]] = []
+            for item in raw_languages:
+                if not isinstance(item, dict):
+                    continue
+                raw_language = item.get("language") or item.get("name")
+                raw_level = item.get("level")
+                language = (
+                    resolve_label_for_id(language_spoken_entries or [], raw_language)
+                    or (str(raw_language).strip() if raw_language else None)
+                )
+                level = (
+                    resolve_label_for_id(language_level_entries or [], raw_level)
+                    or (str(raw_level).strip() if raw_level else None)
+                )
+                if language:
+                    entry: dict[str, object] = {"language": language}
+                    if level:
+                        entry["level"] = level
+                    resolved_languages.append(entry)
+            if resolved_languages:
+                data[RESOLVED_LANGUAGE_LABELS_KEY] = resolved_languages
+
+    if RESOLVED_ACTIVITY_AREA_LABELS_KEY not in data and activity_area_entries:
+        raw_areas = data.get("activityAreas")
+        if raw_areas is None:
+            tech = data.get(ENRICHMENT_TECH_DOC_KEY)
+            if isinstance(tech, dict):
+                raw_areas = tech.get("activityAreas")
+        if isinstance(raw_areas, list):
+            labels = [
+                resolve_label_for_id(activity_area_entries, area_id) or str(area_id)
+                for area_id in raw_areas
+                if area_id
+            ]
+            labels = [label for label in labels if label]
+            if labels:
+                data[RESOLVED_ACTIVITY_AREA_LABELS_KEY] = labels
+
+
 async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     """Enrich shortlisted searchCandidates results with deeper MCP data.
 
@@ -1090,9 +1308,9 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         return state
 
     tools_by_name = {tool.name: tool for tool in state.available_tools}
+    # detail_tool may be None in mock mode — that's fine; tech-doc and CV
+    # enrichment must still run. We only skip the detail call, not everything.
     detail_tool = tools_by_name.get(CANDIDATE_DETAIL_TOOL)
-    if detail_tool is None:
-        return state
 
     eligible = [
         result
@@ -1104,15 +1322,37 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     if not eligible:
         return state
 
-    enrich_with_tech_docs = (
-        TECHNICAL_DOCUMENT_TOOL in tools_by_name
-        and (ctx.llm_planner is not None or _technical_query(state.interpreted_intent))
-    )
+    # Always enrich with the technical document when the tool is available —
+    # it carries the richest skill, experience, and summary data.
+    enrich_with_tech_docs = TECHNICAL_DOCUMENT_TOOL in tools_by_name
     tech_doc_schema: dict[str, object] = (
         tools_by_name[TECHNICAL_DOCUMENT_TOOL].input_schema
         if enrich_with_tech_docs
         else {}
     )
+    # Enrich with CV text when the getCandidateCV tool is available.
+    enrich_with_resume = RESUME_TOOL in tools_by_name
+    resume_schema: dict[str, object] = (
+        tools_by_name[RESUME_TOOL].input_schema if enrich_with_resume else {}
+    )
+
+    # Resolve availability and experience labels from the dictionary so the
+    # frontend never shows raw BoondManager integer IDs.
+    dict_raw = list(state.dictionary_raw)
+    if not dict_raw and DICTIONARY_TOOL in tools_by_name:
+        # Dictionary not yet cached (deterministic path) — fetch it once now.
+        fetched = await _fetch_dictionary(ctx, tools_by_name)
+        if fetched:
+            dict_raw = fetched
+    avail_entries = dictionary_availability_entries(dict_raw)
+    exp_entries = dictionary_section_entries(dict_raw, "experience")
+    contract_entries = dictionary_contract_entries(dict_raw)
+    mobility_entries = dictionary_mobility_option_entries(dict_raw)
+    tool_entries = dictionary_tool_entries(dict_raw)
+    state_entries = dictionary_candidate_state_entries(dict_raw)
+    language_spoken_entries = dictionary_language_spoken_entries(dict_raw)
+    language_level_entries = dictionary_language_level_entries(dict_raw)
+    activity_area_entries = dictionary_activity_area_option_entries(dict_raw)
 
     tool_calls = list(state.tool_calls)
     enriched_results = list(state.results)
@@ -1131,7 +1371,7 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
 
         merged_data = dict(result.data)
 
-        if ctx.llm_planner is None and ENRICHMENT_DETAIL_KEY not in merged_data:
+        if ctx.llm_planner is None and detail_tool is not None and ENRICHMENT_DETAIL_KEY not in merged_data:
             detail_inputs = _candidate_id_inputs(result.id, detail_tool.input_schema)
             detail_call, detail_raw = await _execute_single_tool(
                 ctx, CANDIDATE_DETAIL_TOOL, detail_inputs
@@ -1156,6 +1396,30 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
                 and isinstance(doc_raw[0], dict)
             ):
                 merged_data[ENRICHMENT_TECH_DOC_KEY] = doc_raw[0]
+
+        # Enrich with parsed CV text — provides rich skill and experience data
+        # that may not appear in the technical document or search summary.
+        if enrich_with_resume and ENRICHMENT_RESUME_KEY not in merged_data:
+            resume_inputs = _candidate_id_inputs(result.id, resume_schema)
+            resume_call, resume_raw = await _execute_single_tool(
+                ctx, RESUME_TOOL, resume_inputs
+            )
+            tool_calls.append(resume_call)
+            if (
+                resume_call.status is ToolCallStatus.SUCCESS
+                and resume_raw
+                and isinstance(resume_raw[0], dict)
+                and resume_raw[0].get("hasContent")
+            ):
+                merged_data[ENRICHMENT_RESUME_KEY] = resume_raw[0]
+
+        # Resolve all BoondManager integer/opaque IDs to human-readable labels.
+        _inject_resolved_labels(
+            merged_data, avail_entries, exp_entries,
+            contract_entries, mobility_entries, tool_entries,
+            state_entries, language_spoken_entries,
+            language_level_entries, activity_area_entries,
+        )
 
         enriched_results[position] = result.model_copy(
             update={"data": merged_data}
@@ -1382,7 +1646,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         warnings.append(
             Warning(
                 code="criteria_unverified",
-                message="could not verify: " + ", ".join(missing),
+                message="non vérifié : " + ", ".join(missing),
             )
         )
     if visible_only and not any(w.code == "criteria_visible" for w in warnings):
@@ -1390,8 +1654,8 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             Warning(
                 code="criteria_visible",
                 message=(
-                    "visible on candidate profiles but not confirmed in "
-                    "technical documents: " + ", ".join(visible_only)
+                    "visible sur les profils mais non confirmé dans les documents "
+                    "techniques : " + ", ".join(visible_only)
                 ),
             )
         )
@@ -1419,7 +1683,7 @@ async def _emit_candidate_cards_partial(
     ctx: NodeContext, results: list[SearchResult]
 ) -> None:
     """Surface the current candidate cards as a streaming preview event."""
-    cards = candidate_cards_from_results(results)
+    cards = candidate_cards_from_results(results, boond_base_url=ctx.boond_base_url)
     await ctx.event_emitter.emit(
         "candidate_cards_partial",
         {"candidates": [card.model_dump() for card in cards]},
@@ -1439,13 +1703,13 @@ async def generate_final_response(state: GraphState, _: NodeContext) -> GraphSta
     if ranked:
         top = ranked[0]
         summary = (
-            f"Found {len(ranked)} result(s). Top match: {top.title} "
+            f"{len(ranked)} résultat(s) trouvé(s). Meilleur profil : {top.title} "
             f"(type={top.type}, score={top.score:.2f})."
         )
     else:
         summary = (
-            "No results matched your query. Try refining keywords or removing "
-            "filters."
+            "Aucun résultat ne correspond à votre requête. Essayez de modifier "
+            "les mots-clés ou d'enlever des filtres."
         )
 
     logger.info(
@@ -1844,8 +2108,8 @@ def _experience_unmapped_warning() -> Warning:
     return Warning(
         code="experience_filter_unmapped",
         message=(
-            "Years-of-experience filter is not applied: no matching "
-            "dictionary entry was found for the requested experience level."
+            "Le filtre d'expérience n'a pas pu être appliqué : aucune "
+            "entrée de référentiel ne correspond au niveau demandé."
         ),
     )
 
@@ -1944,6 +2208,7 @@ async def _execute_search_ladder(
     results: list[SearchResult],
     warnings: list[Warning],
     errors: list[AgentError],
+    dictionary_out: list[dict[str, object]] | None = None,
 ) -> bool:
     """Run searchCandidates as a recall-first relaxation ladder.
 
@@ -1964,8 +2229,31 @@ async def _execute_search_ladder(
         return False
 
     raw = await _fetch_dictionary(ctx, available_by_name)
+    # Share dictionary with caller so enrich_candidates can reuse it without an extra call.
+    if raw and dictionary_out is not None:
+        dictionary_out.extend(raw)
     tool_entries = dictionary_section_entries(raw, "tool") if raw else []
     exp_entries = dictionary_section_entries(raw, "experience") if raw else []
+
+    # Resolve candidate states to exclude profiles marked "do not contact" / "to delete".
+    state_entries = dictionary_candidate_state_entries(raw) if raw else []
+    excluded_state_ids = resolve_excluded_state_ids(state_entries) if state_entries else []
+    if excluded_state_ids:
+        excluded_strs = {str(eid) for eid in excluded_state_ids}
+        active_state_ids: list[object] = [
+            entry_id_of(e)
+            for e in state_entries
+            if entry_id_of(e) is not None and str(entry_id_of(e)) not in excluded_strs
+        ]
+        logger.info(
+            "graph.candidate_state_filter",
+            extra={
+                "excluded_count": len(excluded_state_ids),
+                "active_count": len(active_state_ids),
+            },
+        )
+    else:
+        active_state_ids = []
 
     # An entity is a concrete (server-filterable) skill iff it resolves to a
     # tool dictionary id. This is generic across technologies.
@@ -2000,6 +2288,15 @@ async def _execute_search_ladder(
                 },
             )
         inputs, _dropped = _sanitize_tool_inputs(dict(search_pass.inputs), schema)
+        # Exclude profiles marked "do not contact" / "to delete"
+        if active_state_ids and "candidateStates" in property_names:
+            inputs.setdefault("candidateStates", active_state_ids)
+        # Request richer data columns
+        if "columns" in property_names:
+            inputs.setdefault("columns", [
+                "state", "tools", "languages", "expertiseAreas",
+                "activityAreas", "mobilityAreas", "experience",
+            ])
         call, raw_records = await _execute_single_tool(ctx, tool.name, inputs)
         tool_calls.append(call)
         if call.status is ToolCallStatus.FAILED:
@@ -2072,6 +2369,7 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
     warnings = list(state.warnings)
     errors = list(state.errors)
     selected: list[str] = list(state.selected_tools)
+    dictionary_out: list[dict[str, object]] = list(state.dictionary_raw)
 
     for step in state.llm_plan.plan:
         tool = available_by_name.get(step.tool_name)
@@ -2114,6 +2412,7 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
                     results=results,
                     warnings=warnings,
                     errors=errors,
+                    dictionary_out=dictionary_out,
                 )
                 if handled:
                     continue
@@ -2145,6 +2444,14 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
             _absorb_direct_outcome(
                 call, raw, step.tool_name, results, warnings, errors
             )
+            # Cache dictionary results so enrich_candidates can reuse them
+            # without a second getDictionary call.
+            if (
+                step.tool_name == DICTIONARY_TOOL
+                and call.status is ToolCallStatus.SUCCESS
+                and raw
+            ):
+                dictionary_out.extend(r for r in raw if isinstance(r, dict))
             continue
 
         # getCandidateDetail carries no skills/experience/work-history, so
@@ -2244,6 +2551,7 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
         warnings=warnings,
         errors=errors,
         selected_tools=selected,
+        dictionary_raw=dictionary_out,
     )
 
 

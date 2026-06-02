@@ -136,7 +136,7 @@ The final API response should be UI-oriented:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "I found 5 candidates matching your search.",
+  "message": "J'ai trouvé 5 profils proches de votre recherche.",
   "ui": {
     "type": "candidate_cards",
     "candidates": []
@@ -152,14 +152,30 @@ Candidate card fields:
 - `full_name`
 - `title`
 - `experience_years`
+- `experience_label`
 - `location`
 - `availability`
 - `skills`
 - `match_score`
 - `summary`
 - `boond_url`
+- `state_label`
+- `mobility`
+- `contract_preferences`
+- `technical_summary`
+- `diplomas`
+- `expertise_areas`
+- `activity_areas`
+- `tools`
+- `languages`
+- `source`
+- `last_update`
 
-The card values must be adapted from BoondManager MCP results. Missing scalar or numeric fields should be `null`; missing list fields should be `[]`. Do not invent candidate data. LLM-generated summaries are allowed only when grounded in MCP result fields.
+The card values must be adapted from BoondManager MCP results. Missing scalar
+or numeric fields should be `null`; missing list fields should be `[]`. Do not
+invent candidate data. LLM-generated summaries are allowed only when grounded in
+MCP result fields. Dictionary-backed BoondManager IDs should be resolved into
+labels before display whenever possible.
 
 ## Internal Metadata
 

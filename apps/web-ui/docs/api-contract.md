@@ -58,7 +58,7 @@ Preferred response:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "I found matching candidates.",
+  "message": "J'ai trouvé des profils proches de votre recherche.",
   "ui": {
     "type": "candidate_cards"
   }
@@ -70,7 +70,7 @@ Legacy response still supported:
 ```json
 {
   "conversation_id": "conv_123",
-  "answer": "I found matching candidates.",
+  "answer": "J'ai trouvé des profils proches de votre recherche.",
   "candidates": []
 }
 ```
@@ -98,11 +98,11 @@ Example:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "I found 5 candidates matching your search.",
+  "message": "J'ai trouvé 5 profils proches de votre recherche. Je les ai classés selon les informations disponibles ; certains points restent à confirmer dans les dossiers candidats.",
   "ui": {
     "type": "candidate_cards",
-    "title": "278 relevant profiles found",
-    "subtitle": "7 profiles available immediately",
+    "title": "5 profils candidats trouvés",
+    "subtitle": "2 profils disponibles rapidement",
     "filters_summary": ["Java", "Senior", "Paris", "Finance"],
     "candidates": [
       {
@@ -110,15 +110,19 @@ Example:
         "full_name": "Sarah Martin",
         "title": "Backend Java Engineer",
         "experience_years": 7,
+        "experience_label": "7 ans",
         "location": "Paris",
         "availability": "Available immediately",
         "skills": ["Java", "Spring", "Kafka"],
         "match_score": 0.86,
         "summary": "Confirmed backend profile.",
+        "state_label": "Vivier",
         "contract_preferences": ["CDI", "Freelance"],
         "salary_expectation": "55k",
         "tjm": "600",
         "mobility": "Paris and hybrid",
+        "source": "Linkedin Recruiter",
+        "last_update": "2026-06-01",
         "ai_evaluation": {
           "label": "AI evaluation",
           "score_label": "Ideal match - 92%",
@@ -139,6 +143,16 @@ Example:
         "strengths": ["Strong Java/Spring alignment"],
         "watch_points": ["Availability should be confirmed"],
         "technical_summary": "Solid Java/Spring backend profile.",
+        "diplomas": ["Bac+5"],
+        "expertise_areas": ["Banque"],
+        "activity_areas": ["Business Analyst"],
+        "tools": [
+          { "name": "Java", "level": 5 },
+          { "name": "Spring Boot", "level": 4 }
+        ],
+        "languages": [
+          { "language": "Anglais", "level": "Courant" }
+        ],
         "boond_url": "https://ui.boondmanager.com/"
       }
     ]
@@ -150,7 +164,7 @@ Legacy candidate location also works:
 
 ```json
 {
-  "answer": "I found candidates.",
+  "answer": "J'ai trouvé des profils.",
   "candidates": []
 }
 ```
@@ -164,15 +178,28 @@ Candidate cards support optional sourcing-oriented fields:
 - `salary_expectation`
 - `tjm`
 - `mobility`
+- `state_label`
+- `source`
+- `last_update`
 - `ai_evaluation` or `match_explanation`
 - `experiences`
 - `highlights`
 - `strengths` or `strong_points`
 - `watch_points`, `weaknesses`, or `vigilance_points`
 - `technical_summary`
+- `diplomas`
+- `expertise_areas`
+- `activity_areas`
+- `tools`
+- `languages`
 
 The frontend is defensive: missing optional fields are simply hidden or replaced
 with a non-business fallback label.
+
+Candidate card messages should sound natural. When the backend cannot fully
+confirm every requested criterion, it should frame results as close profiles and
+mention points to confirm, not expose internal warning codes or diagnostic
+parentheses.
 
 ## Lightweight Frontend Controls
 

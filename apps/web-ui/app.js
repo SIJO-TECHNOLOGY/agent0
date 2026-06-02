@@ -8,7 +8,6 @@ import {
   sendMessage,
 } from "./api.js";
 import {
-  getCurrentUser,
   handleRedirect,
   isAuthenticated,
   login,
@@ -184,13 +183,10 @@ function showChat() {
     return;
   }
 
-  const user = getCurrentUser();
-  const displayName = user?.name || user?.username || "Utilisateur SIJO";
-
   elements.loginScreen.hidden = true;
   elements.loadingScreen.hidden = true;
   elements.appShell.hidden = false;
-  elements.currentUser.textContent = displayName;
+  elements.currentUser.textContent = "";
   elements.conversationTitle.textContent ||= UI_CONFIG.default_conversation_title;
   elements.loginBtn.disabled = false;
   setUiState("empty");
@@ -429,7 +425,7 @@ function renderCandidateDetail(candidate) {
   const meta = document.createElement("div");
   meta.className = "candidate-meta";
   meta.append(
-    createMetaItem("Expérience", formatExperience(candidate.experience_years)),
+    createMetaItem("Expérience", formatExperience(candidate.experience_years, candidate.experience_label)),
     createMetaItem("Localisation", candidate.location || CANDIDATE_CONFIG.fallback_location),
     createMetaItem("Disponibilité", candidate.availability || CANDIDATE_CONFIG.fallback_availability),
     createMetaItem("Contrat", formatList(candidate.contract_preferences)),
@@ -453,7 +449,7 @@ function renderCandidateDetail(candidate) {
   );
   elements.messages.appendChild(detail);
   setUiState("active");
-  scrollToBottom();
+  scrollToElementTop(detail);
 }
 
 function renderTechnicalSummary(ui) {
@@ -505,7 +501,7 @@ function renderTechnicalSummary(ui) {
 
   elements.messages.appendChild(card);
   setUiState("active");
-  scrollToBottom();
+  scrollToElementTop(card);
 }
 
 function renderClarificationForm(response) {
@@ -547,7 +543,7 @@ function renderClarificationForm(response) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
-  scrollToBottom();
+  scrollToElementTop(wrapper);
 }
 
 async function submitClarification(form, sourceResponse) {
@@ -637,7 +633,7 @@ function renderCandidateCards(candidates, ui = {}) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
-  scrollToBottom();
+  scrollToElementTop(wrapper);
 
   return wrapper;
 }
@@ -662,10 +658,12 @@ function renderCandidateCard(candidate) {
   const meta = document.createElement("div");
   meta.className = "candidate-meta";
   meta.append(
-    createMetaItem("Expérience", formatExperience(candidate.experience_years)),
+    createMetaItem("Expérience", formatExperience(candidate.experience_years, candidate.experience_label)),
     createMetaItem("Localisation", candidate.location || CANDIDATE_CONFIG.fallback_location),
     createMetaItem("Contrat", formatList(candidate.contract_preferences)),
     createMetaItem("Disponibilité", candidate.availability || CANDIDATE_CONFIG.fallback_availability),
+    createMetaItem("Statut", candidate.state_label || "Non renseigné"),
+    createMetaItem("Mobilité", candidate.mobility || "Non renseignée"),
   );
 
   const summary = document.createElement("p");
@@ -705,6 +703,7 @@ function renderCandidateCard(candidate) {
     summary,
     renderAiEvaluation(candidate),
     skills,
+    renderProfileDetails(candidate),
     renderExperiences(candidate.experiences),
     renderCandidateInsights(candidate),
     actions,
@@ -721,7 +720,7 @@ function openCandidateDrawer(candidate) {
   elements.drawerName.textContent = candidate.full_name || "Candidat sans nom";
   elements.drawerTitle.textContent = candidate.title || CANDIDATE_CONFIG.fallback_title;
   elements.drawerSummary.textContent = candidate.summary || "Aucun résumé disponible.";
-  elements.drawerExperience.textContent = formatExperience(candidate.experience_years);
+  elements.drawerExperience.textContent = formatExperience(candidate.experience_years, candidate.experience_label);
   elements.drawerLocation.textContent = candidate.location || CANDIDATE_CONFIG.fallback_location;
   elements.drawerAvailability.textContent = candidate.availability || CANDIDATE_CONFIG.fallback_availability;
   elements.drawerMatch.textContent = formatMatchScore(candidate.match_score);
@@ -731,6 +730,13 @@ function openCandidateDrawer(candidate) {
   elements.drawerExtra.append(
     renderDrawerDetailList(candidate),
     renderDrawerSection("Évaluation IA", renderAiEvaluation(candidate)),
+    renderDrawerSection("Diplômes", renderSummaryList("Diplômes", candidate.diplomas)),
+    renderDrawerSection("Outils", renderSummaryList("Outils", formatTools(candidate.tools))),
+    renderDrawerSection("Langues", renderSummaryList("Langues", formatLanguages(candidate.languages))),
+    renderDrawerSection("Domaines", renderSummaryList("Domaines", [
+      ...normalizeList(candidate.expertise_areas),
+      ...normalizeList(candidate.activity_areas),
+    ])),
     renderDrawerSection("Dernières expériences", renderExperiences(candidate.experiences, 5)),
     renderDrawerSection("Analyse technique", renderTechnicalNotes(candidate)),
     renderDrawerSection("Mots-clés détectés", renderHighlightTags(candidate.highlights)),
@@ -877,6 +883,19 @@ function showInputError(message) {
 function scrollToBottom() {
   requestAnimationFrame(() => {
     elements.messagesArea.scrollTop = elements.messagesArea.scrollHeight;
+  });
+}
+
+/**
+ * Scroll so that the top of `element` is visible at the top of the messages area.
+ * Used for rich responses (candidate cards, detail, technical summary) so the user
+ * can read from the beginning without having to scroll back up.
+ */
+function scrollToElementTop(element) {
+  requestAnimationFrame(() => {
+    const containerRect = elements.messagesArea.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    elements.messagesArea.scrollTop += elementRect.top - containerRect.top;
   });
 }
 
@@ -1073,6 +1092,17 @@ function renderCandidateInsights(candidate) {
   return wrapper;
 }
 
+function renderProfileDetails(candidate) {
+  const items = [
+    ...normalizeList(candidate.diplomas).slice(0, 2).map((item) => `Diplôme: ${item}`),
+    ...formatLanguages(candidate.languages).slice(0, 2).map((item) => `Langue: ${item}`),
+    ...formatTools(candidate.tools).slice(0, 3).map((item) => `Outil: ${item}`),
+  ];
+  if (!items.length) return emptyFragment();
+
+  return renderSummaryList("Informations profil", items);
+}
+
 function renderDrawerDetailList(candidate) {
   const details = document.createElement("dl");
   details.className = "drawer-details";
@@ -1081,6 +1111,9 @@ function renderDrawerDetailList(candidate) {
     createMetaItem("Salaire", candidate.salary_expectation || "Non renseigné"),
     createMetaItem("TJM", candidate.tjm || "Non renseigné"),
     createMetaItem("Mobilité", candidate.mobility || "Non renseignée"),
+    createMetaItem("Statut", candidate.state_label || "Non renseigné"),
+    createMetaItem("Source", candidate.source || "Non renseignée"),
+    createMetaItem("Mise à jour", candidate.last_update || "Non renseignée"),
   );
   return details;
 }
@@ -1105,6 +1138,34 @@ function renderDrawerSection(title, content) {
   heading.textContent = title;
   section.append(heading, content);
   return section;
+}
+
+function normalizeList(items) {
+  return Array.isArray(items) ? items.filter(Boolean).map((item) => String(item)) : [];
+}
+
+function formatTools(tools) {
+  if (!Array.isArray(tools)) return [];
+  return tools
+    .filter((tool) => tool && typeof tool === "object")
+    .map((tool) => {
+      const name = tool.name || tool.tool || tool.label;
+      if (!name) return "";
+      return tool.level ? `${name} (${formatToolLevel(tool.level)})` : String(name);
+    })
+    .filter(Boolean);
+}
+
+function formatLanguages(languages) {
+  if (!Array.isArray(languages)) return [];
+  return languages
+    .filter((language) => language && typeof language === "object")
+    .map((language) => {
+      const name = language.language || language.name || language.label;
+      if (!name) return "";
+      return language.level ? `${name} - ${language.level}` : String(name);
+    })
+    .filter(Boolean);
 }
 
 function renderSummaryList(title, items) {
@@ -1179,7 +1240,10 @@ function emptyFragment() {
   return document.createDocumentFragment();
 }
 
-function formatExperience(years) {
+function formatExperience(years, label) {
+  // Prefer the resolved dictionary label (e.g. "5-10 ans") when available.
+  if (label && typeof label === "string" && label.trim()) return label.trim();
+
   if (years === null || years === undefined || years === "") return "Non renseignée";
 
   const value = Number(years);

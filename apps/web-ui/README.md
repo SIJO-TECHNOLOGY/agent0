@@ -11,6 +11,8 @@ This frontend is limited to advanced candidate search workflows:
 - candidate cards
 - enriched candidate result summaries
 - AI match evaluation display
+- resolved candidate profile metadata
+- diplomas, tools, languages, and domain display
 - recent experience display
 - lightweight display-only sorting/filtering of received results
 - candidate detail
@@ -71,7 +73,7 @@ backend.
 When `DEV_MODE = true`:
 
 - Microsoft auth is bypassed.
-- A mock user is used.
+- Authentication state is mocked.
 - `/api/chat` returns mock candidate responses.
 - Mock candidates include enriched optional fields for UI testing.
 - No backend is required to test the UI.
@@ -148,6 +150,14 @@ Candidate card responses may include optional sourcing fields such as:
 - highlight keywords
 - strengths and watch points
 - technical summary
+- diplomas
+- expertise and activity areas
+- tools with levels
+- languages with levels
+- candidate state, source, and last update when provided
 
 The frontend displays these fields when present and hides them when absent. It
 does not invent candidate data and does not build BoondManager queries.
+
+The header user-name slot is intentionally left blank until real authentication
+identity display is ready.
