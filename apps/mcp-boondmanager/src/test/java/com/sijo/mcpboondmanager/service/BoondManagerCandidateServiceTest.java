@@ -57,9 +57,13 @@ class BoondManagerCandidateServiceTest {
     @Mock
     private ExperienceDictionaryResolver experienceResolver;
 
+    @Mock
+    private AvailabilityDictionaryResolver availabilityResolver;
+
     @BeforeEach
-    void stubExperienceResolver() {
+    void stubResolvers() {
         lenient().when(experienceResolver.resolve(any())).thenReturn(RESOLVED_EXPERIENCE);
+        lenient().when(availabilityResolver.resolve(any())).thenReturn("3 mois");
     }
 
     @Test
@@ -144,6 +148,9 @@ class BoondManagerCandidateServiceTest {
         assertThat(response.candidates().getFirst().experience()).isEqualTo(3);
         assertThat(response.candidates().getFirst().experienceMinYears()).isEqualTo(3);
         assertThat(response.candidates().getFirst().experienceSpecified()).isTrue();
+        // availability is resolved to a human-readable string via the availability resolver
+        assertThat(response.candidates().getFirst().availability()).isEqualTo("3 mois");
+        verify(availabilityResolver).resolve("9");
         assertThat(response.meta().totalRows()).isEqualTo(1);
         assertThat(response.meta().currentPage()).isEqualTo(1);
 
@@ -317,7 +324,7 @@ class BoondManagerCandidateServiceTest {
     }
 
     private BoondManagerCandidateService service() {
-        return new BoondManagerCandidateService(client, experienceResolver);
+        return new BoondManagerCandidateService(client, experienceResolver, availabilityResolver);
     }
 
     private BoondDictionaryEnvelope dictionaryEnvelope() {

@@ -49,11 +49,14 @@ public class BoondManagerCandidateService {
 
     private final BoondManagerClient client;
     private final ExperienceDictionaryResolver experienceResolver;
+    private final AvailabilityDictionaryResolver availabilityResolver;
 
     public BoondManagerCandidateService(BoondManagerClient client,
-                                        ExperienceDictionaryResolver experienceResolver) {
+                                        ExperienceDictionaryResolver experienceResolver,
+                                        AvailabilityDictionaryResolver availabilityResolver) {
         this.client = client;
         this.experienceResolver = experienceResolver;
+        this.availabilityResolver = availabilityResolver;
     }
 
     public DictionaryResponseDto getDictionary() {
@@ -230,7 +233,7 @@ public class BoondManagerCandidateService {
                 attrs.lastName(),
                 attrs.email1(),
                 attrs.state(),
-                attrs.availability(),
+                availabilityResolver.resolve(attrs.availability()),
                 attrs.typeOf(),
                 attrs.mobilityAreas(),
                 attrs.town(),
