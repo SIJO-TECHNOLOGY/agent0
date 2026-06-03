@@ -4,16 +4,27 @@ import {
   deleteConversation,
   getConversation,
   getConversations,
-  searchStream,
   sendClarification,
+  streamSearch,
 } from "./api.js";
 import {
+  getCurrentUser,
   handleRedirect,
   isAuthenticated,
   login,
   logout,
 } from "./auth.js";
-import { CANDIDATE_CONFIG, DEV_MODE, FEATURES, UI_CONFIG } from "./config.js";
+import { CANDIDATE_CONFIG, DEV_MODE, FEATURES } from "./config.js";
+import {
+  applyStaticTranslations,
+  formatDate,
+  getLanguage,
+  initLanguage,
+  onLanguageChange,
+  setLanguage,
+  t,
+  tCount,
+} from "./i18n.js";
 
 window.addEventListener("error", console.error);
 window.addEventListener("unhandledrejection", console.error);
@@ -25,6 +36,10 @@ const state = {
   isBootstrapped: false,
   isLoading: false,
   uiState: "empty",
+  abortController: null,
+  renderedResults: [],
+  drawerTrigger: null,
+  conversationQuery: "",
 };
 
 const elements = {
@@ -35,11 +50,19 @@ const elements = {
   loginBtn: document.getElementById("loginBtn"),
   loginError: document.getElementById("loginError"),
   logoutBtn: document.getElementById("logoutBtn"),
-  currentUser: document.getElementById("currentUser"),
   conversationTitle: document.getElementById("conversationTitle"),
   conversationList: document.getElementById("conversationList"),
   sidebarStatus: document.getElementById("sidebarStatus"),
   newChatBtn: document.getElementById("newChatBtn"),
+  searchBtn: document.getElementById("searchBtn"),
+  conversationSearch: document.getElementById("conversationSearch"),
+  clearAllBtn: document.getElementById("clearAllBtn"),
+  settingsBtn: document.getElementById("settingsBtn"),
+  settingsMenu: document.getElementById("settingsMenu"),
+  userBtn: document.getElementById("userBtn"),
+  userMenu: document.getElementById("userMenu"),
+  sidebarUser: document.getElementById("sidebarUser"),
+  sidebarAvatar: document.getElementById("sidebarAvatar"),
   messagesArea: document.getElementById("messagesArea"),
   emptyState: document.getElementById("emptyState"),
   messages: document.getElementById("messages"),
@@ -59,12 +82,16 @@ const elements = {
   drawerMatch: document.getElementById("drawerMatch"),
   drawerExtra: document.getElementById("drawerExtra"),
   drawerBoondBtn: document.getElementById("drawerBoondBtn"),
+  langSwitcher: document.getElementById("langSwitcher"),
+  srStatus: document.getElementById("srStatus"),
 };
 
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
   console.log("[APP] Starting");
+  initLanguage();
+  applyStaticTranslations();
   bindEvents();
   applyFeatureVisibility();
   showLoading();
@@ -74,7 +101,7 @@ async function init() {
     console.log("[AUTH] OK");
   } catch (error) {
     console.error(error);
-    showLogin("Impossible de finaliser la connexion Microsoft.");
+    showLogin(t("auth.errors.finalize"));
     return;
   }
 
@@ -90,8 +117,16 @@ async function init() {
 function bindEvents() {
   if (state.isBootstrapped) return;
 
+  if (elements.langSwitcher) {
+    elements.langSwitcher.value = getLanguage();
+    elements.langSwitcher.addEventListener("change", (event) => {
+      setLanguage(event.target.value);
+    });
+  }
+  onLanguageChange(handleLanguageChange);
+
   elements.loginBtn.addEventListener("click", async () => {
-    elements.loginError.textContent = "Redirection vers Microsoft...";
+    elements.loginError.textContent = t("auth.redirecting");
     elements.loginBtn.disabled = true;
 
     try {
@@ -104,13 +139,14 @@ function bindEvents() {
     } catch (error) {
       console.error(error);
       elements.loginBtn.disabled = false;
-      showLogin("Impossible de démarrer la connexion Microsoft.");
+      showLogin(t("auth.errors.start"));
     }
   });
 
   elements.logoutBtn.addEventListener("click", async () => {
     try {
-      showLoading("Déconnexion en cours...");
+      if (state.abortController) state.abortController.abort();
+      showLoading(t("auth.logging_out"));
       await logout();
 
       if (DEV_MODE) {
@@ -122,12 +158,60 @@ function bindEvents() {
     } catch (error) {
       console.error(error);
       showChat();
-      showInputError("Impossible de se déconnecter.");
+      showInputError(t("auth.errors.logout"));
     }
   });
 
   elements.newChatBtn.addEventListener("click", newChat);
   elements.sendBtn.addEventListener("click", send);
+
+  if (elements.searchBtn) {
+    elements.searchBtn.addEventListener("click", toggleConversationSearch);
+  }
+  if (elements.conversationSearch) {
+    elements.conversationSearch.addEventListener("input", (event) => {
+      state.conversationQuery = event.target.value.trim().toLowerCase();
+      renderConversationList();
+    });
+  }
+  if (elements.clearAllBtn) {
+    elements.clearAllBtn.addEventListener("click", clearAllConversations);
+  }
+  if (elements.settingsBtn && elements.settingsMenu) {
+    elements.settingsBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleMenu(elements.settingsMenu, elements.settingsBtn, [
+        [elements.userMenu, elements.userBtn],
+      ]);
+    });
+  }
+  if (elements.userBtn && elements.userMenu) {
+    elements.userBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleMenu(elements.userMenu, elements.userBtn, [
+        [elements.settingsMenu, elements.settingsBtn],
+      ]);
+    });
+  }
+  document.addEventListener("click", (event) => {
+    if (
+      elements.settingsMenu
+      && !elements.settingsMenu.hidden
+      && !elements.settingsMenu.contains(event.target)
+      && !elements.settingsBtn?.contains(event.target)
+    ) {
+      closeMenu(elements.settingsMenu, elements.settingsBtn);
+    }
+    if (
+      elements.userMenu
+      && !elements.userMenu.hidden
+      && !elements.userMenu.contains(event.target)
+      && !elements.userBtn?.contains(event.target)
+    ) {
+      closeMenu(elements.userMenu, elements.userBtn);
+    }
+  });
+
   elements.drawerCloseBtn.addEventListener("click", closeCandidateDrawer);
   elements.drawerOverlay.addEventListener("click", closeCandidateDrawer);
   elements.drawerBoondBtn.addEventListener("click", () => {
@@ -135,7 +219,17 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeCandidateDrawer();
+    if (event.key === "Escape") {
+      closeCandidateDrawer();
+      if (elements.settingsMenu && !elements.settingsMenu.hidden) {
+        closeMenu(elements.settingsMenu, elements.settingsBtn);
+        elements.settingsBtn?.focus();
+      }
+      if (elements.userMenu && !elements.userMenu.hidden) {
+        closeMenu(elements.userMenu, elements.userBtn);
+        elements.userBtn?.focus();
+      }
+    }
   });
 
   elements.messageInput.addEventListener("input", () => {
@@ -151,6 +245,27 @@ function bindEvents() {
   });
 
   state.isBootstrapped = true;
+}
+
+function handleLanguageChange() {
+  applyStaticTranslations();
+  if (elements.langSwitcher) elements.langSwitcher.value = getLanguage();
+
+  // Re-render the dynamically-generated chrome we can cheaply refresh.
+  // Already-streamed chat bubbles and candidate cards keep their original
+  // language until the next render/search.
+  renderConversationList();
+  if (FEATURES.conversation_history) {
+    elements.sidebarStatus.textContent = state.conversations.length
+      ? ""
+      : t("conversations.empty");
+  }
+
+  // Re-render candidate-result blocks (toolbar + cards) in the new language,
+  // preserving each block's filter/sort selections.
+  state.renderedResults.forEach(({ wrapper, candidates, ui, viewState }) => {
+    populateCandidateResults(wrapper, candidates, ui, viewState);
+  });
 }
 
 function applyFeatureVisibility() {
@@ -170,7 +285,7 @@ function showLogin(message = "") {
   closeCandidateDrawer();
 }
 
-function showLoading(message = UI_CONFIG.auth_loading_message) {
+function showLoading(message = t("auth.connecting")) {
   elements.loginScreen.hidden = true;
   elements.loadingScreen.hidden = false;
   elements.appShell.hidden = true;
@@ -183,11 +298,15 @@ function showChat() {
     return;
   }
 
+  const user = getCurrentUser();
+  const displayName = user?.name || user?.username || t("auth.default_user");
+
   elements.loginScreen.hidden = true;
   elements.loadingScreen.hidden = true;
   elements.appShell.hidden = false;
-  elements.currentUser.textContent = "";
-  elements.conversationTitle.textContent ||= UI_CONFIG.default_conversation_title;
+  if (elements.sidebarUser) elements.sidebarUser.textContent = displayName;
+  if (elements.sidebarAvatar) elements.sidebarAvatar.textContent = initials(displayName);
+  elements.conversationTitle.textContent ||= t("conversations.default_title");
   elements.loginBtn.disabled = false;
   setUiState("empty");
   updateSendButton();
@@ -213,24 +332,34 @@ async function loadConversationsSafely() {
     clearMessages();
     renderConversationList();
     elements.sidebarStatus.textContent = getConversationLoadError(error);
-    elements.conversationTitle.textContent = UI_CONFIG.default_conversation_title;
+    elements.conversationTitle.textContent = t("conversations.default_title");
     setUiState("empty");
   }
 }
 
 async function loadConversations() {
-  elements.sidebarStatus.textContent = "Chargement des conversations...";
+  elements.sidebarStatus.textContent = t("conversations.loading_list");
   state.conversations = await getConversations();
   renderConversationList();
   elements.sidebarStatus.textContent = state.conversations.length
     ? ""
-    : "Aucune conversation pour le moment.";
+    : t("conversations.empty");
 }
+
+const CONVERSATION_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7A8.4 8.4 0 0 1 4 11.5 8.4 8.4 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5z"></path></svg>';
 
 function renderConversationList() {
   elements.conversationList.innerHTML = "";
 
-  state.conversations.forEach((conversation) => {
+  const query = state.conversationQuery;
+  const visible = query
+    ? state.conversations.filter((conversation) =>
+        (conversation.title || t("conversations.untitled")).toLowerCase().includes(query),
+      )
+    : state.conversations;
+
+  visible.forEach((conversation) => {
     const row = document.createElement("div");
     row.className = "conversation-row";
 
@@ -240,20 +369,28 @@ function renderConversationList() {
     item.classList.toggle("active", conversation.id === state.currentConversationId);
     item.addEventListener("click", () => openConversation(conversation.id));
 
+    const icon = document.createElement("span");
+    icon.className = "conv-icon";
+    icon.innerHTML = CONVERSATION_ICON_SVG;
+
+    const textCol = document.createElement("span");
+    textCol.className = "conv-text";
+
     const title = document.createElement("span");
     title.className = "conversation-title";
-    title.textContent = conversation.title || "Conversation sans titre";
+    title.textContent = conversation.title || t("conversations.untitled");
 
     const date = document.createElement("span");
     date.className = "conversation-date";
     date.textContent = formatDate(conversation.updated_at || conversation.created_at);
 
-    item.append(title, date);
+    textCol.append(title, date);
+    item.append(icon, textCol);
 
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "delete-conversation";
-    remove.setAttribute("aria-label", `Supprimer ${title.textContent}`);
+    remove.setAttribute("aria-label", t("conversations.delete_aria", { title: title.textContent }));
     remove.textContent = "×";
     remove.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -265,18 +402,96 @@ function renderConversationList() {
   });
 }
 
+function openMenu(menu, btn) {
+  if (!menu) return;
+  menu.hidden = false;
+  btn?.setAttribute("aria-expanded", "true");
+}
+
+function closeMenu(menu, btn) {
+  if (!menu) return;
+  menu.hidden = true;
+  btn?.setAttribute("aria-expanded", "false");
+}
+
+function toggleMenu(menu, btn, others = []) {
+  if (!menu) return;
+  others.forEach(([otherMenu, otherBtn]) => closeMenu(otherMenu, otherBtn));
+  if (menu.hidden) {
+    openMenu(menu, btn);
+  } else {
+    closeMenu(menu, btn);
+  }
+}
+
+function toggleConversationSearch() {
+  const input = elements.conversationSearch;
+  if (!input) return;
+
+  const willShow = input.hidden;
+  input.hidden = !willShow;
+  elements.searchBtn?.setAttribute("aria-expanded", String(willShow));
+  elements.searchBtn?.classList.toggle("active", willShow);
+
+  if (willShow) {
+    input.focus();
+  } else {
+    input.value = "";
+    state.conversationQuery = "";
+    renderConversationList();
+  }
+}
+
+async function clearAllConversations() {
+  if (state.isLoading || !state.conversations.length) return;
+  if (!window.confirm(t("sidebar.clear_all_confirm"))) return;
+
+  if (state.abortController) state.abortController.abort();
+  setLoading(true);
+  showInputError("");
+
+  try {
+    const ids = state.conversations.map((conversation) => conversation.id);
+    for (const id of ids) {
+      await deleteConversation(id);
+    }
+    state.conversations = [];
+    state.currentConversationId = null;
+    clearMessages();
+    closeCandidateDrawer();
+    elements.conversationTitle.textContent = t("conversations.default_title");
+    setUiState("empty");
+    renderConversationList();
+    elements.sidebarStatus.textContent = t("conversations.empty");
+  } catch (error) {
+    console.error(error);
+    showInputError(getErrorMessage(error));
+  } finally {
+    setLoading(false);
+  }
+}
+
+function initials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 async function openConversation(conversationId) {
   if (state.isLoading) return;
+
+  if (state.abortController) state.abortController.abort();
 
   setUiState("loading");
   clearMessages();
   closeCandidateDrawer();
-  elements.conversationTitle.textContent = "Chargement...";
+  elements.conversationTitle.textContent = t("conversations.loading_one");
 
   try {
     const conversation = await getConversation(conversationId);
     state.currentConversationId = conversation.id;
-    elements.conversationTitle.textContent = conversation.title || "Conversation";
+    elements.conversationTitle.textContent = conversation.title || t("conversations.open_fallback");
 
     if (conversation.messages?.length) {
       conversation.messages.forEach((message) => {
@@ -298,22 +513,24 @@ async function openConversation(conversationId) {
 
 async function newChat() {
   if (!isAuthenticated()) {
-    showLogin("Vous devez être connecté pour créer une conversation.");
+    showLogin(t("auth.errors.login_required_conversation"));
     return;
   }
 
   if (state.isLoading) return;
 
+  if (state.abortController) state.abortController.abort();
+
   setLoading(true);
   showInputError("");
 
   try {
-    const conversation = await createConversation(UI_CONFIG.default_conversation_title);
+    const conversation = await createConversation(t("conversations.default_title"));
     state.currentConversationId = conversation.id;
     state.conversations = [conversation, ...state.conversations];
     clearMessages();
     closeCandidateDrawer();
-    elements.conversationTitle.textContent = conversation.title || UI_CONFIG.default_conversation_title;
+    elements.conversationTitle.textContent = conversation.title || t("conversations.default_title");
     setUiState("empty");
     renderConversationList();
     elements.messageInput.focus();
@@ -328,6 +545,8 @@ async function newChat() {
 async function removeConversation(conversationId) {
   if (state.isLoading) return;
 
+  if (state.abortController) state.abortController.abort();
+
   setLoading(true);
   showInputError("");
 
@@ -339,14 +558,14 @@ async function removeConversation(conversationId) {
       state.currentConversationId = null;
       clearMessages();
       closeCandidateDrawer();
-      elements.conversationTitle.textContent = UI_CONFIG.default_conversation_title;
+      elements.conversationTitle.textContent = t("conversations.default_title");
       setUiState("empty");
     }
 
     renderConversationList();
     elements.sidebarStatus.textContent = state.conversations.length
       ? ""
-      : "Aucune conversation pour le moment.";
+      : t("conversations.empty");
   } catch (error) {
     console.error(error);
     showInputError(getErrorMessage(error));
@@ -355,22 +574,42 @@ async function removeConversation(conversationId) {
   }
 }
 
+function buildMessageHead(role) {
+  const head = document.createElement("div");
+  head.className = "msg-head";
+
+  const avatar = document.createElement("span");
+  const name = document.createElement("span");
+  name.className = "msg-name";
+
+  if (role === "user") {
+    avatar.className = "msg-avatar user";
+    const displayName = getCurrentUser()?.name || getCurrentUser()?.username || t("app.user_label");
+    avatar.textContent = initials(displayName);
+    name.textContent = displayName;
+  } else {
+    avatar.className = "msg-avatar assistant";
+    avatar.textContent = "S";
+    name.textContent = t("app.assistant_label");
+  }
+
+  avatar.setAttribute("aria-hidden", "true");
+  head.append(avatar, name);
+  return head;
+}
+
 function renderMessage(role, text) {
   const message = document.createElement("div");
   message.className = `message ${role}`;
 
-  const label = document.createElement("div");
-  label.className = "msg-label";
-  label.textContent = getRoleLabel(role);
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  body.textContent = text;
 
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = text;
-
-  message.append(label, bubble);
+  message.append(buildMessageHead(role), body);
   elements.messages.appendChild(message);
   setUiState(role === "error" ? "error" : "active");
-  scrollToBottom();
+  if (role === "user") scrollToBottom();
 
   return message;
 }
@@ -405,6 +644,28 @@ function renderAssistantResponse(response) {
   }
 }
 
+function renderStreamFinalResponse(data) {
+  const ui = data?.ui && typeof data.ui === "object" ? data.ui : { type: "text" };
+  const candidates = Array.isArray(ui.candidates)
+    ? ui.candidates
+    : Array.isArray(data?.candidates)
+      ? data.candidates
+      : [];
+
+  if (typeof data?.message === "string" && data.message.trim()) {
+    renderMessage("assistant", data.message);
+    if (elements.srStatus) elements.srStatus.textContent = data.message;
+  }
+
+  if (
+    FEATURES.candidate_cards
+    && ui.type === "candidate_cards"
+    && candidates.length > 0
+  ) {
+    renderCandidateCards(candidates, ui);
+  }
+}
+
 function renderCandidateDetail(candidate) {
   const detail = document.createElement("article");
   detail.className = "candidate-detail-card";
@@ -414,10 +675,10 @@ function renderCandidateDetail(candidate) {
 
   const identity = document.createElement("div");
   const name = document.createElement("h3");
-  name.textContent = candidate.full_name || "Candidat sans nom";
+  name.textContent = candidate.full_name || t("candidate.no_name");
 
   const title = document.createElement("p");
-  title.textContent = candidate.title || CANDIDATE_CONFIG.fallback_title;
+  title.textContent = candidate.title || t("candidate.fallback_title");
 
   identity.append(name, title);
   header.appendChild(identity);
@@ -425,17 +686,17 @@ function renderCandidateDetail(candidate) {
   const meta = document.createElement("div");
   meta.className = "candidate-meta";
   meta.append(
-    createMetaItem("Expérience", formatExperience(candidate.experience_years, candidate.experience_label)),
-    createMetaItem("Localisation", candidate.location || CANDIDATE_CONFIG.fallback_location),
-    createMetaItem("Disponibilité", candidate.availability || CANDIDATE_CONFIG.fallback_availability),
-    createMetaItem("Contrat", formatList(candidate.contract_preferences)),
-    createMetaItem("Salaire", candidate.salary_expectation || "Non renseigné"),
-    createMetaItem("TJM", candidate.tjm || "Non renseigné"),
+    createMetaItem(t("candidate.meta.experience"), formatExperience(candidate.experience_years)),
+    createMetaItem(t("candidate.meta.location"), candidate.location || t("candidate.fallback_location")),
+    createMetaItem(t("candidate.meta.availability"), candidate.availability || t("candidate.fallback_availability")),
+    createMetaItem(t("candidate.meta.contract"), formatList(candidate.contract_preferences)),
+    createMetaItem(t("candidate.meta.salary"), candidate.salary_expectation || t("candidate.not_specified")),
+    createMetaItem(t("candidate.meta.tjm"), candidate.tjm || t("candidate.not_specified")),
   );
 
   const summary = document.createElement("p");
   summary.className = "candidate-summary";
-  summary.textContent = candidate.summary || "Aucun résumé disponible.";
+  summary.textContent = candidate.summary || t("candidate.no_summary");
 
   detail.append(
     header,
@@ -449,7 +710,6 @@ function renderCandidateDetail(candidate) {
   );
   elements.messages.appendChild(detail);
   setUiState("active");
-  scrollToElementTop(detail);
 }
 
 function renderTechnicalSummary(ui) {
@@ -457,20 +717,20 @@ function renderTechnicalSummary(ui) {
   card.className = "technical-summary-card";
 
   const title = document.createElement("h3");
-  title.textContent = ui.title || "Analyse technique";
+  title.textContent = ui.title || t("technical.fallback_title");
 
   const summary = document.createElement("p");
   summary.className = "candidate-summary";
-  summary.textContent = ui.summary || "Aucune analyse disponible.";
+  summary.textContent = ui.summary || t("technical.no_analysis");
 
   card.append(title, summary);
 
   const grid = document.createElement("div");
   grid.className = "technical-summary-grid";
   grid.append(
-    renderSummaryList("Points forts", ui.strengths),
-    renderSummaryList("Points de vigilance", ui.weaknesses),
-    renderSummaryList("Langues", ui.languages),
+    renderSummaryList(t("technical.strengths"), ui.strengths),
+    renderSummaryList(t("technical.weaknesses"), ui.weaknesses),
+    renderSummaryList(t("technical.languages"), ui.languages),
   );
   card.appendChild(grid);
 
@@ -479,7 +739,7 @@ function renderTechnicalSummary(ui) {
     tools.className = "technical-tools";
 
     const toolsTitle = document.createElement("h4");
-    toolsTitle.textContent = "Compétences évaluées";
+    toolsTitle.textContent = t("technical.tools_title");
     tools.appendChild(toolsTitle);
 
     ui.tools.forEach((tool) => {
@@ -487,7 +747,7 @@ function renderTechnicalSummary(ui) {
       row.className = "technical-tool-row";
 
       const name = document.createElement("span");
-      name.textContent = tool.name || "Outil";
+      name.textContent = tool.name || t("technical.tool_fallback");
 
       const level = document.createElement("strong");
       level.textContent = formatToolLevel(tool.level);
@@ -501,7 +761,6 @@ function renderTechnicalSummary(ui) {
 
   elements.messages.appendChild(card);
   setUiState("active");
-  scrollToElementTop(card);
 }
 
 function renderClarificationForm(response) {
@@ -510,7 +769,7 @@ function renderClarificationForm(response) {
   wrapper.className = "clarification-form";
 
   const title = document.createElement("h3");
-  title.textContent = response.ui?.title || "Précision nécessaire";
+  title.textContent = response.ui?.title || t("clarification.fallback_title");
   wrapper.appendChild(title);
 
   questions.forEach((question) => {
@@ -518,7 +777,7 @@ function renderClarificationForm(response) {
     field.className = "clarification-field";
 
     const label = document.createElement("span");
-    label.textContent = question.label || question.field || "Précision";
+    label.textContent = question.label || question.field || t("clarification.field_fallback");
 
     const input = document.createElement("input");
     input.type = "text";
@@ -533,7 +792,7 @@ function renderClarificationForm(response) {
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "candidate-btn primary";
-  submit.textContent = "Envoyer";
+  submit.textContent = t("clarification.submit");
   wrapper.appendChild(submit);
 
   wrapper.addEventListener("submit", (event) => {
@@ -543,7 +802,6 @@ function renderClarificationForm(response) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
-  scrollToElementTop(wrapper);
 }
 
 async function submitClarification(form, sourceResponse) {
@@ -592,29 +850,59 @@ function renderCandidateCards(candidates, ui = {}) {
   const wrapper = document.createElement("div");
   wrapper.className = "candidate-results";
 
+  // Preserve filter/sort state across re-renders (e.g. language switch).
+  const viewState = { strictOnly: false, availableOnly: false, sortMode: "default" };
+  populateCandidateResults(wrapper, candidates, ui, viewState);
+
+  // Register for re-render on language change (toolbar + cards are built with
+  // t() and would otherwise stay in the previous language).
+  state.renderedResults.push({ wrapper, candidates, ui, viewState });
+
+  elements.messages.appendChild(wrapper);
+  setUiState("active");
+
+  return wrapper;
+}
+
+function populateCandidateResults(wrapper, candidates, ui, viewState) {
+  wrapper.innerHTML = "";
+
   const toolbar = renderCandidateResultsToolbar(ui, candidates);
   const list = document.createElement("div");
   list.className = "candidate-cards";
 
-  const controls = toolbar.querySelectorAll("input, select");
+  const strictInput = toolbar.querySelector("[data-strict-only]");
+  const availableInput = toolbar.querySelector("[data-available-only]");
+  const sortSelect = toolbar.querySelector("[data-sort]");
+
+  // Restore prior view state so a re-render does not reset the user's choices.
+  if (strictInput) strictInput.checked = viewState.strictOnly;
+  if (availableInput) availableInput.checked = viewState.availableOnly;
+  if (sortSelect) sortSelect.value = viewState.sortMode;
+
   const renderList = () => {
+    viewState.strictOnly = Boolean(strictInput?.checked);
+    viewState.availableOnly = Boolean(availableInput?.checked);
+    viewState.sortMode = sortSelect?.value || "default";
+
     list.innerHTML = "";
-    const availableOnly = toolbar.querySelector("[data-available-only]")?.checked;
-    const sortMode = toolbar.querySelector("[data-sort]")?.value || "default";
 
     let visibleCandidates = [...candidates];
-    if (availableOnly) {
+    if (viewState.strictOnly) {
+      visibleCandidates = visibleCandidates.filter((candidate) => candidate.is_full_match === true);
+    }
+    if (viewState.availableOnly) {
       visibleCandidates = visibleCandidates.filter(isAvailableSoon);
     }
 
-    if (sortMode === "score") {
+    if (viewState.sortMode === "score") {
       visibleCandidates.sort((a, b) => Number(b.match_score || 0) - Number(a.match_score || 0));
     }
 
     if (visibleCandidates.length === 0) {
       const empty = document.createElement("p");
       empty.className = "candidate-empty-note";
-      empty.textContent = "Aucun profil ne correspond à ce filtre d'affichage.";
+      empty.textContent = t("results.empty_filter");
       list.appendChild(empty);
       return;
     }
@@ -624,18 +912,12 @@ function renderCandidateCards(candidates, ui = {}) {
     });
   };
 
-  controls.forEach((control) => {
+  toolbar.querySelectorAll("input, select").forEach((control) => {
     control.addEventListener("change", renderList);
   });
 
   renderList();
   wrapper.append(toolbar, list);
-
-  elements.messages.appendChild(wrapper);
-  setUiState("active");
-  scrollToElementTop(wrapper);
-
-  return wrapper;
 }
 
 function renderCandidateCard(candidate) {
@@ -647,10 +929,10 @@ function renderCandidateCard(candidate) {
 
   const identity = document.createElement("div");
   const name = document.createElement("h3");
-  name.textContent = candidate.full_name || "Candidat sans nom";
+  name.textContent = candidate.full_name || t("candidate.no_name");
 
   const title = document.createElement("p");
-  title.textContent = candidate.title || CANDIDATE_CONFIG.fallback_title;
+  title.textContent = candidate.title || t("candidate.fallback_title");
 
   identity.append(name, title);
   header.append(identity, createMatchBadge(candidate.match_score));
@@ -658,17 +940,15 @@ function renderCandidateCard(candidate) {
   const meta = document.createElement("div");
   meta.className = "candidate-meta";
   meta.append(
-    createMetaItem("Expérience", formatExperience(candidate.experience_years, candidate.experience_label)),
-    createMetaItem("Localisation", candidate.location || CANDIDATE_CONFIG.fallback_location),
-    createMetaItem("Contrat", formatList(candidate.contract_preferences)),
-    createMetaItem("Disponibilité", candidate.availability || CANDIDATE_CONFIG.fallback_availability),
-    createMetaItem("Statut", candidate.state_label || "Non renseigné"),
-    createMetaItem("Mobilité", candidate.mobility || "Non renseignée"),
+    createMetaItem(t("candidate.meta.experience"), formatExperience(candidate.experience_years)),
+    createMetaItem(t("candidate.meta.location"), candidate.location || t("candidate.fallback_location")),
+    createMetaItem(t("candidate.meta.contract"), formatList(candidate.contract_preferences)),
+    createMetaItem(t("candidate.meta.availability"), candidate.availability || t("candidate.fallback_availability")),
   );
 
   const summary = document.createElement("p");
   summary.className = "candidate-summary";
-  summary.textContent = candidate.summary || "Aucun résumé disponible.";
+  summary.textContent = candidate.summary || t("candidate.no_summary");
 
   const skills = renderSkillTags(candidate.skills, candidate.highlights);
 
@@ -678,13 +958,15 @@ function renderCandidateCard(candidate) {
   const detailsBtn = document.createElement("button");
   detailsBtn.type = "button";
   detailsBtn.className = "candidate-btn secondary";
-  detailsBtn.textContent = "Voir plus";
+  detailsBtn.textContent = t("candidate.see_more");
+  detailsBtn.setAttribute("aria-controls", "candidateDrawer");
+  detailsBtn.setAttribute("aria-expanded", "false");
   detailsBtn.addEventListener("click", () => openCandidateDrawer(candidate));
 
   const boondBtn = document.createElement("button");
   boondBtn.type = "button";
   boondBtn.className = "candidate-btn primary";
-  boondBtn.textContent = "Ouvrir BoondManager";
+  boondBtn.textContent = t("candidate.open_boond");
   boondBtn.disabled = !candidate.boond_url;
   boondBtn.addEventListener("click", () => openBoondManager(candidate.boond_url));
 
@@ -703,7 +985,6 @@ function renderCandidateCard(candidate) {
     summary,
     renderAiEvaluation(candidate),
     skills,
-    renderProfileDetails(candidate),
     renderExperiences(candidate.experiences),
     renderCandidateInsights(candidate),
     actions,
@@ -717,49 +998,94 @@ function openCandidateDrawer(candidate) {
 
   state.currentDrawerCandidate = candidate;
 
-  elements.drawerName.textContent = candidate.full_name || "Candidat sans nom";
-  elements.drawerTitle.textContent = candidate.title || CANDIDATE_CONFIG.fallback_title;
-  elements.drawerSummary.textContent = candidate.summary || "Aucun résumé disponible.";
-  elements.drawerExperience.textContent = formatExperience(candidate.experience_years, candidate.experience_label);
-  elements.drawerLocation.textContent = candidate.location || CANDIDATE_CONFIG.fallback_location;
-  elements.drawerAvailability.textContent = candidate.availability || CANDIDATE_CONFIG.fallback_availability;
+  elements.drawerName.textContent = candidate.full_name || t("candidate.no_name");
+  elements.drawerTitle.textContent = candidate.title || t("candidate.fallback_title");
+  elements.drawerSummary.textContent = candidate.summary || t("candidate.no_summary");
+  elements.drawerExperience.textContent = formatExperience(candidate.experience_years);
+  elements.drawerLocation.textContent = candidate.location || t("candidate.fallback_location");
+  elements.drawerAvailability.textContent = candidate.availability || t("candidate.fallback_availability");
   elements.drawerMatch.textContent = formatMatchScore(candidate.match_score);
   elements.drawerSkills.innerHTML = "";
   elements.drawerSkills.append(...createSkillElements(candidate.skills, candidate.highlights));
   elements.drawerExtra.innerHTML = "";
   elements.drawerExtra.append(
     renderDrawerDetailList(candidate),
-    renderDrawerSection("Évaluation IA", renderAiEvaluation(candidate)),
-    renderDrawerSection("Diplômes", renderSummaryList("Diplômes", candidate.diplomas)),
-    renderDrawerSection("Outils", renderSummaryList("Outils", formatTools(candidate.tools))),
-    renderDrawerSection("Langues", renderSummaryList("Langues", formatLanguages(candidate.languages))),
-    renderDrawerSection("Domaines", renderSummaryList("Domaines", [
-      ...normalizeList(candidate.expertise_areas),
-      ...normalizeList(candidate.activity_areas),
-    ])),
-    renderDrawerSection("Dernières expériences", renderExperiences(candidate.experiences, 5)),
-    renderDrawerSection("Analyse technique", renderTechnicalNotes(candidate)),
-    renderDrawerSection("Mots-clés détectés", renderHighlightTags(candidate.highlights)),
+    renderDrawerSection(t("candidate.sections.ai_eval"), renderAiEvaluation(candidate)),
+    renderDrawerSection(t("candidate.sections.experiences"), renderExperiences(candidate.experiences, 5)),
+    renderDrawerSection(t("candidate.sections.technical"), renderTechnicalNotes(candidate)),
+    renderDrawerSection(t("candidate.sections.diplomas"), renderSimpleTagList(candidate.diplomas)),
+    renderDrawerSection(t("candidate.sections.expertise_areas"), renderSimpleTagList(candidate.expertise_areas)),
+    renderDrawerSection(t("candidate.sections.activity_areas"), renderSimpleTagList(candidate.activity_areas)),
+    renderDrawerSection(t("candidate.sections.tools"), renderToolsWithLevel(candidate.tools)),
+    renderDrawerSection(t("candidate.sections.languages"), renderLanguagesWithLevel(candidate.languages)),
+    renderDrawerSection(t("candidate.sections.keywords"), renderHighlightTags(candidate.highlights)),
+    renderDrawerSection(t("candidate.sections.meta"), renderCandidateMeta(candidate)),
   );
   elements.drawerBoondBtn.hidden = !FEATURES.boond_redirect || !candidate.boond_url;
   elements.drawerBoondBtn.disabled = !FEATURES.boond_redirect || !candidate.boond_url;
 
+  // Remember what to restore focus to, then move focus into the drawer.
+  state.drawerTrigger = document.activeElement;
+
   elements.drawerOverlay.hidden = false;
   elements.candidateDrawer.hidden = false;
+  document.body.style.overflow = "hidden";
+  elements.appShell.setAttribute("aria-hidden", "true");
+  document
+    .querySelectorAll('[aria-controls="candidateDrawer"]')
+    .forEach((btn) => btn.setAttribute("aria-expanded", "true"));
+  elements.candidateDrawer.addEventListener("keydown", trapDrawerFocus);
+
   requestAnimationFrame(() => {
     elements.drawerOverlay.classList.add("open");
     elements.candidateDrawer.classList.add("open");
+    elements.drawerCloseBtn.focus();
   });
+}
+
+function trapDrawerFocus(event) {
+  if (event.key !== "Tab") return;
+
+  const focusables = elements.candidateDrawer.querySelectorAll(
+    'button:not([hidden]):not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+  );
+  if (!focusables.length) return;
+
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function closeCandidateDrawer() {
   if (!elements.candidateDrawer || !elements.drawerOverlay) return;
+
+  const wasOpen = elements.candidateDrawer.classList.contains("open");
 
   state.currentDrawerCandidate = null;
   elements.drawerOverlay.classList.remove("open");
   elements.candidateDrawer.classList.remove("open");
   elements.drawerOverlay.hidden = true;
   elements.candidateDrawer.hidden = true;
+  elements.candidateDrawer.removeEventListener("keydown", trapDrawerFocus);
+
+  document.body.style.overflow = "";
+  elements.appShell.removeAttribute("aria-hidden");
+  document
+    .querySelectorAll('[aria-controls="candidateDrawer"]')
+    .forEach((btn) => btn.setAttribute("aria-expanded", "false"));
+
+  // Return focus to the element that opened the drawer.
+  if (wasOpen && state.drawerTrigger && typeof state.drawerTrigger.focus === "function") {
+    state.drawerTrigger.focus();
+  }
+  state.drawerTrigger = null;
 }
 
 function openBoondManager(url) {
@@ -778,27 +1104,153 @@ function renderLoading() {
   message.className = "message assistant";
   message.dataset.loading = "true";
 
-  const label = document.createElement("div");
-  label.className = "msg-label";
-  label.textContent = UI_CONFIG.assistant_label;
-
-  const bubble = document.createElement("div");
-  bubble.className = "bubble loading-bubble";
+  const body = document.createElement("div");
+  body.className = "msg-body loading-row";
 
   const spinner = document.createElement("span");
   spinner.className = "spinner";
   spinner.setAttribute("aria-hidden", "true");
 
   const text = document.createElement("span");
-  text.textContent = UI_CONFIG.loading_message;
+  text.textContent = t("loading.reflecting");
 
-  bubble.append(spinner, text);
-  message.append(label, bubble);
+  body.append(spinner, text);
+  message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
-  scrollToBottom();
 
   return message;
+}
+
+function renderThinking() {
+  const message = document.createElement("div");
+  message.className = "message assistant";
+  message.dataset.loading = "true";
+
+  const body = document.createElement("div");
+  body.className = "msg-body";
+
+  const steps = document.createElement("ul");
+  steps.className = "thinking-steps";
+  steps.setAttribute("role", "status");
+  steps.setAttribute("aria-live", "polite");
+
+  body.append(steps);
+  message.append(buildMessageHead("assistant"), body);
+  elements.messages.appendChild(message);
+  setUiState("loading");
+
+  let currentStep = null;
+
+  function completeStep(step) {
+    if (!step) return;
+    step.li.classList.remove("active");
+    step.li.classList.add("done");
+    step.icon.textContent = "✓";
+  }
+
+  return {
+    element: message,
+    addStep(text) {
+      if (!text) return;
+      completeStep(currentStep);
+
+      const li = document.createElement("li");
+      li.className = "thinking-step active";
+
+      const icon = document.createElement("span");
+      icon.className = "step-icon";
+      icon.setAttribute("aria-hidden", "true");
+
+      const stepText = document.createElement("span");
+      stepText.className = "step-text";
+      stepText.textContent = text;
+
+      li.append(icon, stepText);
+      steps.appendChild(li);
+      currentStep = { li, icon };
+    },
+    finish() {
+      completeStep(currentStep);
+      currentStep = null;
+    },
+    remove() {
+      message.remove();
+    },
+  };
+}
+
+function stepDescriptorForEvent(type, data) {
+  const label = (key) => t(`stream.step_labels.${key}`);
+
+  switch (type) {
+    case "search_started":
+      return { key: "start", label: label("start") };
+
+    case "plan_created":
+    case "replan_created":
+      return { key: "plan", label: label("plan") };
+
+    case "plan_validated":
+      return { key: "plan_validated", label: label("plan_validated") };
+
+    case "tool_call_started": {
+      const tool = String(data?.tool || "");
+      if (tool === "searchCandidates") return { key: "searching", label: label("searching") };
+      if (tool === "getCandidateTechnicalDocument") return { key: "reading_docs", label: label("reading_docs") };
+      if (tool === "getCandidateDetail") return { key: "reading_details", label: label("reading_details") };
+      return { key: "tool", label: label("tool") };
+    }
+
+    case "tool_call_completed": {
+      const tool = String(data?.tool || "");
+      const count = Number(data?.result_count);
+      if (tool === "searchCandidates" && Number.isFinite(count) && count > 0) {
+        return { key: "search_done", label: tCount("stream.step_labels.search_done", count, { count }) };
+      }
+      return null;
+    }
+
+    case "candidate_cards_partial":
+      return { key: "ranking", label: label("ranking") };
+
+    default:
+      return null;
+  }
+}
+
+async function runSearchStream(text, thinking) {
+  let finalResponse = null;
+  let failure = null;
+  const shownSteps = new Set();
+
+  await streamSearch(
+    text,
+    ({ type, data }) => {
+      if (type === "search_started" && data?.conversation_id) {
+        state.currentConversationId = data.conversation_id;
+      }
+
+      if (type === "final_response") {
+        finalResponse = data;
+        return;
+      }
+
+      if (type === "search_failed") {
+        failure = data?.error || {};
+        return;
+      }
+
+      const step = stepDescriptorForEvent(type, data);
+      if (step && !shownSteps.has(step.key)) {
+        shownSteps.add(step.key);
+        thinking.addStep(step.label);
+      }
+    },
+    { signal: state.abortController.signal },
+  );
+
+  return { finalResponse, failure };
 }
 
 async function send() {
@@ -807,7 +1259,7 @@ async function send() {
   if (!text || state.isLoading) return;
 
   if (!isAuthenticated()) {
-    showLogin("Vous devez être connecté pour envoyer un message.");
+    showLogin(t("auth.errors.login_required_message"));
     return;
   }
 
@@ -816,24 +1268,39 @@ async function send() {
   updateTitleFromMessage(text);
   resetInput();
 
-  const loadingMessage = renderLoading();
+  const thinking = renderThinking();
+  state.abortController = new AbortController();
   setLoading(true);
 
   try {
-    const response = await searchStream(text);
-    loadingMessage.remove();
+    const { finalResponse, failure } = await runSearchStream(text, thinking);
+    thinking.remove();
 
-    if (response.conversation_id) {
-      state.currentConversationId = response.conversation_id;
+    if (failure) {
+      renderMessage("error", failure.message || t("errors.generic"));
+      return;
     }
 
-    renderAssistantResponse(response);
+    if (!finalResponse) {
+      renderMessage("error", t("errors.incomplete_stream"));
+      return;
+    }
+
+    if (finalResponse.conversation_id) {
+      state.currentConversationId = finalResponse.conversation_id;
+    }
+
+    renderStreamFinalResponse(finalResponse);
     await loadConversationsSafely();
   } catch (error) {
     console.error(error);
-    loadingMessage.remove();
-    renderMessage("error", getErrorMessage(error));
+    thinking.remove();
+
+    if (!(error instanceof ApiError && error.type === "abort")) {
+      renderMessage("error", getErrorMessage(error));
+    }
   } finally {
+    state.abortController = null;
     setLoading(false);
   }
 }
@@ -857,6 +1324,7 @@ function setLoading(isLoading) {
 
 function clearMessages() {
   elements.messages.innerHTML = "";
+  state.renderedResults = [];
   setUiState("empty");
 }
 
@@ -883,19 +1351,6 @@ function showInputError(message) {
 function scrollToBottom() {
   requestAnimationFrame(() => {
     elements.messagesArea.scrollTop = elements.messagesArea.scrollHeight;
-  });
-}
-
-/**
- * Scroll so that the top of `element` is visible at the top of the messages area.
- * Used for rich responses (candidate cards, detail, technical summary) so the user
- * can read from the beginning without having to scroll back up.
- */
-function scrollToElementTop(element) {
-  requestAnimationFrame(() => {
-    const containerRect = elements.messagesArea.getBoundingClientRect();
-    const elementRect = element.getBoundingClientRect();
-    elements.messagesArea.scrollTop += elementRect.top - containerRect.top;
   });
 }
 
@@ -927,7 +1382,7 @@ function renderCandidateResultsToolbar(ui, candidates) {
   copy.className = "candidate-results-copy";
 
   const title = document.createElement("h3");
-  title.textContent = ui.title || `${candidates.length} profil${candidates.length > 1 ? "s" : ""} candidat${candidates.length > 1 ? "s" : ""} trouvé${candidates.length > 1 ? "s" : ""}`;
+  title.textContent = ui.title || tCount("results.count", candidates.length, { count: candidates.length });
   copy.appendChild(title);
 
   if (ui.subtitle) {
@@ -951,6 +1406,21 @@ function renderCandidateResultsToolbar(ui, candidates) {
   const controls = document.createElement("div");
   controls.className = "candidate-result-controls";
 
+  if (candidates.some((candidate) => typeof candidate.is_full_match === "boolean")) {
+    const label = document.createElement("label");
+    label.className = "availability-toggle";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.strictOnly = "true";
+
+    const text = document.createElement("span");
+    text.textContent = t("results.strict_toggle");
+
+    label.append(input, text);
+    controls.appendChild(label);
+  }
+
   if (candidates.some((candidate) => candidate.availability)) {
     const label = document.createElement("label");
     label.className = "availability-toggle";
@@ -960,7 +1430,7 @@ function renderCandidateResultsToolbar(ui, candidates) {
     input.dataset.availableOnly = "true";
 
     const text = document.createElement("span");
-    text.textContent = "Profils disponibles";
+    text.textContent = t("results.available_toggle");
 
     label.append(input, text);
     controls.appendChild(label);
@@ -969,15 +1439,15 @@ function renderCandidateResultsToolbar(ui, candidates) {
   if (candidates.some((candidate) => candidate.match_score !== null && candidate.match_score !== undefined)) {
     const sort = document.createElement("select");
     sort.dataset.sort = "true";
-    sort.setAttribute("aria-label", "Trier les candidats");
+    sort.setAttribute("aria-label", t("results.sort_aria"));
 
     const defaultOption = document.createElement("option");
     defaultOption.value = "default";
-    defaultOption.textContent = "Ordre reçu";
+    defaultOption.textContent = t("results.sort_default");
 
     const scoreOption = document.createElement("option");
     scoreOption.value = "score";
-    scoreOption.textContent = "Score décroissant";
+    scoreOption.textContent = t("results.sort_score");
 
     sort.append(defaultOption, scoreOption);
     controls.appendChild(sort);
@@ -1014,7 +1484,7 @@ function renderAiEvaluation(candidate) {
   heading.className = "ai-evaluation-heading";
 
   const label = document.createElement("span");
-  label.textContent = evaluation.label || "Évaluation IA";
+  label.textContent = evaluation.label || t("candidate.sections.ai_eval");
   heading.appendChild(label);
 
   if (evaluation.score_label) {
@@ -1047,7 +1517,7 @@ function renderExperiences(experiences, limit = 3) {
   section.className = "candidate-experiences";
 
   const title = document.createElement("h4");
-  title.textContent = "Dernières expériences";
+  title.textContent = t("candidate.sections.experiences");
   section.appendChild(title);
 
   const list = document.createElement("ul");
@@ -1055,7 +1525,7 @@ function renderExperiences(experiences, limit = 3) {
     const item = document.createElement("li");
 
     const main = document.createElement("strong");
-    main.textContent = [experience.title, experience.company].filter(Boolean).join(" · ") || "Expérience";
+    main.textContent = [experience.title, experience.company].filter(Boolean).join(" · ") || t("candidate.sections.experience_item_fallback");
     item.appendChild(main);
 
     if (experience.period) {
@@ -1082,38 +1552,24 @@ function renderCandidateInsights(candidate) {
   wrapper.className = "candidate-insights";
 
   if (hasStrengths) {
-    wrapper.appendChild(renderSummaryList("Points forts détectés", strengths.slice(0, 4)));
+    wrapper.appendChild(renderSummaryList(t("candidate.sections.strengths"), strengths.slice(0, 4)));
   }
 
   if (hasWarnings) {
-    wrapper.appendChild(renderSummaryList("Points de vigilance", warnings.slice(0, 4)));
+    wrapper.appendChild(renderSummaryList(t("candidate.sections.watch_points"), warnings.slice(0, 4)));
   }
 
   return wrapper;
-}
-
-function renderProfileDetails(candidate) {
-  const items = [
-    ...normalizeList(candidate.diplomas).slice(0, 2).map((item) => `Diplôme: ${item}`),
-    ...formatLanguages(candidate.languages).slice(0, 2).map((item) => `Langue: ${item}`),
-    ...formatTools(candidate.tools).slice(0, 3).map((item) => `Outil: ${item}`),
-  ];
-  if (!items.length) return emptyFragment();
-
-  return renderSummaryList("Informations profil", items);
 }
 
 function renderDrawerDetailList(candidate) {
   const details = document.createElement("dl");
   details.className = "drawer-details";
   details.append(
-    createMetaItem("Contrat", formatList(candidate.contract_preferences)),
-    createMetaItem("Salaire", candidate.salary_expectation || "Non renseigné"),
-    createMetaItem("TJM", candidate.tjm || "Non renseigné"),
-    createMetaItem("Mobilité", candidate.mobility || "Non renseignée"),
-    createMetaItem("Statut", candidate.state_label || "Non renseigné"),
-    createMetaItem("Source", candidate.source || "Non renseignée"),
-    createMetaItem("Mise à jour", candidate.last_update || "Non renseignée"),
+    createMetaItem(t("candidate.meta.contract"), formatList(candidate.contract_preferences)),
+    createMetaItem(t("candidate.meta.salary"), candidate.salary_expectation || t("candidate.not_specified")),
+    createMetaItem(t("candidate.meta.tjm"), candidate.tjm || t("candidate.not_specified")),
+    createMetaItem(t("candidate.meta.mobility"), candidate.mobility || t("candidate.not_specified_f")),
   );
   return details;
 }
@@ -1140,34 +1596,6 @@ function renderDrawerSection(title, content) {
   return section;
 }
 
-function normalizeList(items) {
-  return Array.isArray(items) ? items.filter(Boolean).map((item) => String(item)) : [];
-}
-
-function formatTools(tools) {
-  if (!Array.isArray(tools)) return [];
-  return tools
-    .filter((tool) => tool && typeof tool === "object")
-    .map((tool) => {
-      const name = tool.name || tool.tool || tool.label;
-      if (!name) return "";
-      return tool.level ? `${name} (${formatToolLevel(tool.level)})` : String(name);
-    })
-    .filter(Boolean);
-}
-
-function formatLanguages(languages) {
-  if (!Array.isArray(languages)) return [];
-  return languages
-    .filter((language) => language && typeof language === "object")
-    .map((language) => {
-      const name = language.language || language.name || language.label;
-      if (!name) return "";
-      return language.level ? `${name} - ${language.level}` : String(name);
-    })
-    .filter(Boolean);
-}
-
 function renderSummaryList(title, items) {
   const section = document.createElement("section");
   section.className = "technical-summary-section";
@@ -1177,7 +1605,7 @@ function renderSummaryList(title, items) {
   section.appendChild(heading);
 
   const list = document.createElement("ul");
-  const normalizedItems = Array.isArray(items) && items.length ? items : ["Non renseigné"];
+  const normalizedItems = Array.isArray(items) && items.length ? items : [t("candidate.not_specified")];
 
   normalizedItems.forEach((item) => {
     const li = document.createElement("li");
@@ -1197,12 +1625,12 @@ function createMatchBadge(score) {
 }
 
 function formatList(items) {
-  return Array.isArray(items) && items.length ? items.join(", ") : "Non renseigné";
+  return Array.isArray(items) && items.length ? items.join(", ") : t("candidate.not_specified");
 }
 
 function formatToolLevel(level) {
   const value = Number(level);
-  if (Number.isNaN(value)) return "Niveau non renseigné";
+  if (Number.isNaN(value)) return t("candidate.tool_level_unknown");
 
   return `${value}/5`;
 }
@@ -1217,7 +1645,7 @@ function renderSkillTags(skills, highlights = []) {
 function createSkillElements(skills, highlights = []) {
   const normalizedSkills = Array.isArray(skills) && skills.length
     ? skills.slice(0, CANDIDATE_CONFIG.max_visible_skills)
-    : ["Compétences non renseignées"];
+    : [t("candidate.skills_empty")];
   const highlightSet = new Set((Array.isArray(highlights) ? highlights : []).map((item) => String(item).toLowerCase()));
 
   return normalizedSkills.map((skill) => {
@@ -1236,31 +1664,96 @@ function isAvailableSoon(candidate) {
   return availability.includes("disponible") || availability.includes("immédiat") || availability.includes("immediat");
 }
 
+function renderSimpleTagList(items) {
+  const normalized = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!normalized.length) return emptyFragment();
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "highlight-tags";
+  normalized.forEach((item) => {
+    const tag = document.createElement("span");
+    tag.textContent = item;
+    wrapper.appendChild(tag);
+  });
+  return wrapper;
+}
+
+function renderToolsWithLevel(tools) {
+  const normalized = Array.isArray(tools) ? tools.filter(Boolean) : [];
+  if (!normalized.length) return emptyFragment();
+
+  const list = document.createElement("ul");
+  list.className = "drawer-tool-list";
+  normalized.forEach((tool) => {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = tool.name || t("technical.tool_fallback");
+    const level = document.createElement("strong");
+    level.textContent = tool.level != null ? `${tool.level}/5` : t("candidate.tool_level_unknown");
+    item.append(name, level);
+    list.appendChild(item);
+  });
+  return list;
+}
+
+function renderLanguagesWithLevel(languages) {
+  const normalized = Array.isArray(languages) ? languages.filter(Boolean) : [];
+  if (!normalized.length) return emptyFragment();
+
+  const list = document.createElement("ul");
+  list.className = "drawer-tool-list";
+  normalized.forEach((lang) => {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = lang.language || lang.name || lang;
+    const level = document.createElement("strong");
+    level.textContent = lang.level || "";
+    if (level.textContent) item.append(name, level);
+    else item.appendChild(name);
+    list.appendChild(item);
+  });
+  return list;
+}
+
+function renderCandidateMeta(candidate) {
+  const parts = [];
+  if (candidate.state_label) parts.push(`${t("candidate.meta.state")} : ${candidate.state_label}`);
+  if (candidate.source) parts.push(`${t("candidate.meta.source")} : ${candidate.source}`);
+  if (candidate.last_update) parts.push(`${t("candidate.meta.last_update")} : ${candidate.last_update}`);
+  if (!parts.length) return emptyFragment();
+
+  const dl = document.createElement("dl");
+  dl.className = "drawer-details";
+  parts.forEach((text) => {
+    const div = document.createElement("div");
+    div.textContent = text;
+    dl.appendChild(div);
+  });
+  return dl;
+}
+
 function emptyFragment() {
   return document.createDocumentFragment();
 }
 
-function formatExperience(years, label) {
-  // Prefer the resolved dictionary label (e.g. "5-10 ans") when available.
-  if (label && typeof label === "string" && label.trim()) return label.trim();
-
-  if (years === null || years === undefined || years === "") return "Non renseignée";
+function formatExperience(years) {
+  if (years === null || years === undefined || years === "") return t("candidate.not_specified_f");
 
   const value = Number(years);
   if (Number.isNaN(value)) return String(years);
 
-  return `${value} an${value > 1 ? "s" : ""}`;
+  return tCount("candidate.years", value, { count: value });
 }
 
 function formatMatchScore(score) {
-  if (score === null || score === undefined || score === "") return "Score N/A";
+  if (score === null || score === undefined || score === "") return t("match.na");
 
   const value = Number(score);
   if (Number.isNaN(value)) return String(score);
 
   if (CANDIDATE_CONFIG.score_display !== "percentage") return String(value);
 
-  return `${Math.round(value * 100)}% match`;
+  return t("match.percent", { value: Math.round(value * 100) });
 }
 
 function truncateTitle(text) {
@@ -1272,41 +1765,28 @@ function normalizeRole(role) {
 }
 
 function getRoleLabel(role) {
-  if (role === "user") return UI_CONFIG.user_label;
-  if (role === "error") return "Erreur";
-  return UI_CONFIG.assistant_label;
+  if (role === "user") return t("app.user_label");
+  if (role === "error") return t("roles.error");
+  return t("app.assistant_label");
 }
 
 function getErrorMessage(error) {
   if (error instanceof ApiError) {
-    if (error.type === "network") return UI_CONFIG.network_error_message;
-    if (error.type === "timeout") return UI_CONFIG.timeout_error_message;
-    if (error.type === "malformed_response") return UI_CONFIG.malformed_response_message;
-    if (error.type === "auth") return "Vous devez être connecté pour continuer.";
-    return UI_CONFIG.generic_error_message;
+    if (error.type === "abort") return "";
+    if (error.type === "network") return t("errors.network");
+    if (error.type === "timeout") return t("errors.timeout");
+    if (error.type === "malformed_response") return t("errors.malformed");
+    if (error.type === "auth") return t("errors.auth_required");
+    return t("errors.generic");
   }
 
-  return UI_CONFIG.generic_error_message;
+  return t("errors.generic");
 }
 
 function getConversationLoadError(error) {
   if (error instanceof ApiError && error.type === "network") {
-    return UI_CONFIG.backend_offline_message;
+    return t("errors.backend_offline");
   }
 
-  return "Impossible de charger les conversations.";
-}
-
-function formatDate(value) {
-  if (!value) return "";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-
-  return new Intl.DateTimeFormat("fr-FR", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return t("errors.conversations_load");
 }
