@@ -31,6 +31,7 @@ from app.models.tools import McpTool, ToolCall, ToolCallStatus
 from app.services.candidate_mapper import (
     candidate_cards_from_results,
     candidate_cards_with_diagnostics,
+    candidate_full_name,
 )
 from app.services.dictionary_resolver import (
     dictionary_section_entries,
@@ -38,6 +39,7 @@ from app.services.dictionary_resolver import (
     resolve_tool_ids,
 )
 from app.services.search_strategy import (
+    RANKING_CRITERIA,
     build_recall_passes,
     classify_anchors,
     evidence_score,
@@ -70,6 +72,8 @@ class NodeContext:
     max_enrichments: int = DEFAULT_ENRICHMENT_LIMIT
     llm_planner: LlmPlanner | None = None
     max_plan_steps: int = DEFAULT_LLM_PLAN_STEPS
+    use_llm_replan: bool = True
+    replan_skip_score: float = 0.8
     event_emitter: EventEmitter = field(default_factory=NoopEventEmitter)
     debug_mode: bool = False
 
@@ -1021,6 +1025,95 @@ def should_replan(state: GraphState) -> str:
     return "enrich_candidates"
 
 
+def _results_already_strong(state: GraphState, skip_score: float) -> bool:
+    """True when the ranked results are good enough to skip reflection.
+
+    A full match anywhere, or a top score at/above ``skip_score``, means another
+    search is unlikely to help — so we don't spend a reflection LLM call.
+    """
+    if not state.results:
+        return False
+    if any(r.is_full_match for r in state.results):
+        return True
+    return max((r.score for r in state.results), default=0.0) >= skip_score
+
+
+def _reflection_results_summary(state: GraphState, *, limit: int = 8) -> str:
+    """Compact, grounded rows for the reflection prompt (no raw MCP payloads)."""
+    lines: list[str] = []
+    for result in state.results[:limit]:
+        if not result.source_tool.startswith("search"):
+            continue
+        name = candidate_full_name(result) or result.id
+        title = result.title or ""
+        unmet = ", ".join(result.unmet_criteria) if result.unmet_criteria else "none"
+        lines.append(
+            f"- {name} — {title} | score={round(result.score, 3)} "
+            f"| full_match={bool(result.is_full_match)} | unmet=[{unmet}]"
+        )
+    return "\n".join(lines) if lines else "(no candidates returned)"
+
+
+async def reflect_on_results(state: GraphState, ctx: NodeContext) -> GraphState:
+    """LLM-driven replan decision (bounded reflection).
+
+    The LLM judges the ranked candidates and decides whether one more, guided
+    search pass is warranted. Deterministic gates run first so the reflection
+    LLM call is skipped when it cannot or should not help — and the loop can
+    never exceed ``max_replan_attempts`` regardless of what the LLM says.
+    """
+    if not ctx.use_llm_replan:
+        return state
+    if ctx.max_replan_attempts <= 0 or state.replan_count >= ctx.max_replan_attempts:
+        return state
+    reflect = getattr(ctx.llm_planner, "reflect", None)
+    if reflect is None:
+        return state
+    if _results_already_strong(state, ctx.replan_skip_score):
+        return state
+
+    try:
+        verdict = await reflect(
+            query=state.original_query,
+            results_summary=_reflection_results_summary(state),
+            emitter=ctx.event_emitter,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail safe: never loop on error
+        logger.warning("graph.reflect_failed", extra={"error": str(exc)})
+        return state
+
+    guidance = (getattr(verdict, "guidance", "") or "").strip()
+    if not getattr(verdict, "needs_replan", False) or not guidance:
+        return state
+
+    await ctx.event_emitter.emit(
+        "replan_requested",
+        {
+            "reason": (getattr(verdict, "reason", "") or "")[:300],
+            "guidance": guidance[:300],
+            "replan_count": state.replan_count + 1,
+            "decided_by": "llm",
+        },
+    )
+    return _replace(
+        state,
+        replan_count=state.replan_count + 1,
+        replan_feedback=guidance,
+    )
+
+
+def should_replan_llm(state: GraphState) -> str:
+    """Conditional edge: loop back to plan_with_llm when a replan is pending.
+
+    ``replan_feedback`` is the single signal; it is set only by
+    ``reflect_on_results`` under budget and cleared by ``plan_with_llm`` on
+    consumption, so the loop is bounded and cannot spin.
+    """
+    if state.replan_feedback.strip():
+        return "plan_with_llm"
+    return "generate_final_response"
+
+
 # Internal data keys used by enrichment so the mapper can find evidence
 # without inventing fields. Prefixed with `_` so the mapper drops them.
 ENRICHMENT_DETAIL_KEY: Final[str] = "_enrichment_detail"
@@ -1217,6 +1310,25 @@ def _domain_terms(constraints: dict[str, str]) -> tuple[str, ...]:
         if isinstance(value, str) and value.strip() and value.strip() not in terms:
             terms.append(value.strip())
     return tuple(terms)
+
+
+def _ranking_priority(constraints: dict[str, str]) -> tuple[str, ...] | None:
+    """LLM-supplied ranking ordering, parsed and validated.
+
+    ``constraints.ranking_priority`` is a comma-separated, most-important-first
+    list of criterion keys. Keep only known keys (``RANKING_CRITERIA``),
+    de-duplicated in order; return ``None`` when absent/empty so the ranker
+    falls back to its default weights.
+    """
+    raw = constraints.get("ranking_priority")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    ordered: list[str] = []
+    for token in raw.split(","):
+        key = "".join(ch for ch in token.lower() if ch.isalpha())
+        if key in RANKING_CRITERIA and key not in ordered:
+            ordered.append(key)
+    return tuple(ordered) or None
 
 
 def _summary_haystack(result: SearchResult) -> str:
@@ -1425,6 +1537,7 @@ def _evaluate_match(
     domains: tuple[str, ...],
     role: str | None,
     required_years: int | None,
+    requested_name: str | None = None,
 ) -> tuple[bool, list[str]]:
     """Strict per-candidate match from its evidence ``hits``.
 
@@ -1434,6 +1547,8 @@ def _evaluate_match(
     not evidenced — same labels as the aggregate status.
     """
     unmet: list[str] = []
+    if requested_name and "name" not in hits:
+        unmet.append(requested_name)
     for skill in skills:
         if f"skill:{skill.lower()}" not in hits:
             unmet.append(skill)
@@ -1470,7 +1585,11 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     domains = _domain_terms(intent.constraints)
     role = intent.constraints.get("role") or None
     required_years = _int_or_none(intent.constraints.get("min_experience_years"))
-    if not (skills or domains or role or required_years is not None):
+    requested_name = (intent.constraints.get("name") or "").strip()
+    # The LLM may order the criteria by importance; the deterministic ranker
+    # derives its weights from that ordering (off-vocabulary keys are dropped).
+    priority = _ranking_priority(intent.constraints)
+    if not (skills or domains or role or required_years is not None or requested_name):
         await _emit_candidate_cards_partial(ctx, state.results)
         return state
 
@@ -1488,6 +1607,9 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             candidate_min_years=_candidate_min_years(result, haystack),
             required_min_years=required_years,
             domain_haystack=_domain_haystack(result),
+            requested_name=requested_name or None,
+            candidate_name=candidate_full_name(result) if requested_name else None,
+            priority=priority,
         )
         # Tiny tie-break for candidates we actually enriched with evidence.
         if score > 0.0 and ENRICHMENT_TECH_DOC_KEY in result.data:
@@ -1498,6 +1620,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             domains=domains,
             role=role,
             required_years=required_years,
+            requested_name=requested_name or None,
         )
         re_ranked.append(
             result.model_copy(
@@ -1652,14 +1775,25 @@ async def plan_with_llm(state: GraphState, ctx: NodeContext) -> GraphState:
         max_plan_steps=ctx.max_plan_steps,
         max_enrichments=ctx.max_enrichments,
     )
+    # On a reflection-triggered replan, the previous pass left guidance. Consume
+    # it here and clear it immediately so it is used exactly once and the
+    # bounded loop cannot spin. Only pass `feedback` when present, so planners
+    # that don't accept it (e.g. simple test stubs) are unaffected on a first,
+    # feedback-free pass.
+    feedback = state.replan_feedback.strip()
+    if feedback:
+        state = _replace(state, replan_feedback="")
+    plan_kwargs: dict[str, object] = dict(
+        query=state.original_query,
+        filters=dict(state.filters),
+        tools=list(state.available_tools),
+        constraints=constraints,
+        emitter=ctx.event_emitter,
+    )
+    if feedback:
+        plan_kwargs["feedback"] = feedback
     try:
-        plan = await ctx.llm_planner.plan(
-            query=state.original_query,
-            filters=dict(state.filters),
-            tools=list(state.available_tools),
-            constraints=constraints,
-            emitter=ctx.event_emitter,
-        )
+        plan = await ctx.llm_planner.plan(**plan_kwargs)
     except LlmPlannerError as exc:
         logger.warning("graph.plan_with_llm_failed", extra={"error": str(exc)})
         return _replace(
@@ -2021,14 +2155,18 @@ def _prerank_search_results(
     anchors_domains: tuple[str, ...],
     anchors_role: str | None,
     required_years: int | None,
+    requested_name: str | None = None,
+    priority: tuple[str, ...] | None = None,
 ) -> None:
     """Reorder search summaries by visible evidence.
 
     Enrichment is bounded, so it must spend its budget on the candidates
     whose SUMMARY already shows the most evidence (skill/role/domain/
-    seniority) — not the first N in BoondManager order. Seniority comes
+    seniority/name) — not the first N in BoondManager order. Seniority comes
     from the MCP-resolved ``experienceMinYears`` on each summary. Mutates
     ``results`` in place so the downstream fan-out picks the best candidates.
+    Uses the same name/primary signals as final ranking so a named person is
+    enriched, not dropped beyond the budget.
     """
     annotated = list(results)
 
@@ -2044,6 +2182,9 @@ def _prerank_search_results(
             candidate_min_years=_candidate_min_years(result, haystack),
             required_min_years=required_years,
             domain_haystack=_domain_haystack(result),
+            requested_name=requested_name or None,
+            candidate_name=candidate_full_name(result) if requested_name else None,
+            priority=priority,
         )
         return score
 
@@ -2088,7 +2229,12 @@ async def _execute_search_ladder(
     skill_labels = {
         e.lower() for e in entities if tool_entries and resolve_tool_ids(tool_entries, [e])
     }
-    anchors = classify_anchors(intent.entities, intent.constraints, skill_labels)
+    # A named person is the strongest anchor: search by name first, rank the
+    # other criteria within the matches.
+    name = (intent.constraints.get("name") or "").strip()
+    anchors = classify_anchors(
+        intent.entities, intent.constraints, skill_labels, name=name or None
+    )
     if anchors.is_empty():
         return False
 
@@ -2105,6 +2251,7 @@ async def _execute_search_ladder(
 
     start_len = len(tool_calls)
     used_relaxed: bool | None = None
+    matched_label: str | None = None
     for index, search_pass in enumerate(passes):
         if index > 0:
             await ctx.event_emitter.emit(
@@ -2128,7 +2275,13 @@ async def _execute_search_ladder(
                 call, raw_records, tool.name, results, warnings, errors
             )
             used_relaxed = search_pass.relaxed
+            matched_label = search_pass.label
             break
+
+    # A named-person query that was NOT satisfied by the dedicated name pass
+    # means we couldn't find that person and fell through to the criteria
+    # ladder — surface that honestly instead of silently returning look-alikes.
+    name_missed = bool(anchors.name) and matched_label != "name"
 
     if used_relaxed is not None:
         # Found candidates — pre-rank summaries so the best (by visible
@@ -2139,8 +2292,21 @@ async def _execute_search_ladder(
             anchors_domains=anchors.domains,
             anchors_role=anchors.role,
             required_years=required_years,
+            requested_name=anchors.name,
+            priority=_ranking_priority(intent.constraints),
         )
-        if used_relaxed:
+        if name_missed:
+            warnings.append(
+                Warning(
+                    code="name_not_found",
+                    message=(
+                        f"No candidate matching the name '{anchors.name}' was "
+                        "found; showing candidates matching the other criteria "
+                        "instead."
+                    ),
+                )
+            )
+        elif used_relaxed:
             warnings.append(
                 Warning(
                     code="search_broadened",
@@ -2156,15 +2322,27 @@ async def _execute_search_ladder(
             c.status is ToolCallStatus.FAILED for c in tool_calls[start_len:]
         )
         if not any_failure:
-            warnings.append(
-                Warning(
-                    code="no_results_after_fallback",
-                    message=(
-                        "No candidates were found, even after broader "
-                        "fallback searches."
-                    ),
+            if anchors.name:
+                warnings.append(
+                    Warning(
+                        code="name_not_found",
+                        message=(
+                            f"No candidate matching the name '{anchors.name}' "
+                            "was found, and no candidates matched the other "
+                            "criteria either."
+                        ),
+                    )
                 )
-            )
+            else:
+                warnings.append(
+                    Warning(
+                        code="no_results_after_fallback",
+                        message=(
+                            "No candidates were found, even after broader "
+                            "fallback searches."
+                        ),
+                    )
+                )
     return True
 
 

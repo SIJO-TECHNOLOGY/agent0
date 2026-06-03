@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final, Protocol
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.models.intent import LlmToolPlan, PlannedToolCall
 from app.models.tools import McpTool
@@ -76,7 +76,23 @@ class LlmPlanner(Protocol):
         tools: list[McpTool],
         constraints: PlannerConstraints,
         emitter: EventEmitter | None = None,
+        feedback: str = "",
     ) -> LlmToolPlan: ...
+
+    async def reflect(
+        self,
+        *,
+        query: str,
+        results_summary: str,
+        emitter: EventEmitter | None = None,
+    ) -> "ReflectionVerdict":
+        """Judge ranked results; decide whether a guided replan is warranted.
+
+        Optional: implementations that don't support reflection (e.g. test
+        stubs) may omit it — the workflow guards with ``getattr`` and treats a
+        missing ``reflect`` as 'never replan'.
+        """
+        ...
 
 
 _RESULT_SELECTOR_ALLOWED: Final[frozenset[str]] = frozenset({"candidate_ids"})
@@ -247,9 +263,24 @@ def build_planner_prompt(
     filters: dict[str, object],
     tools: list[McpTool],
     constraints: PlannerConstraints,
+    role: str = "",
+    feedback: str = "",
 ) -> tuple[str, str]:
-    """Build the (system_prompt, user_prompt) pair sent to the LLM."""
+    """Build the (system_prompt, user_prompt) pair sent to the LLM.
+
+    ``role`` is an optional, operator-configurable persona preamble. It is
+    prepended for framing only — the mechanical rules and JSON output schema
+    below are fixed and always applied. With ``role=""`` the system prompt is
+    identical to the rules-only prompt.
+
+    ``feedback`` is optional guidance from a prior reflection pass (the LLM
+    decided the first results were inadequate). When set, it is added to the
+    user prompt so this re-plan changes its approach. With ``feedback=""`` the
+    user prompt is identical to a first-pass prompt.
+    """
+    persona = f"{role.strip()}\n\n" if role and role.strip() else ""
     system = (
+        f"{persona}"
         "You are the planning component of an MCP-backed candidate search "
         "agent. You receive a user query and a catalogue of available MCP "
         "tools. You must return a JSON object matching the schema below, "
@@ -296,10 +327,25 @@ def build_planner_prompt(
         "and `min_experience_years`. Keep the user's original acronym/term "
         "verbatim in `domain`. These drive Agent-API-side recall, filter "
         "resolution, and honest scoring/messaging; do not omit a criterion "
-        "you understood.\n\n"
+        "you understood.\n"
+        "11. If the user identifies a SPECIFIC PERSON by name (e.g. \"named "
+        "X\", \"whose name is X\", \"called X\", or a bare proper name), put "
+        "that full name verbatim in `constraints.name`. Keep skills/role/"
+        "domain in their usual places. The Agent API searches by that name "
+        "FIRST and ranks the other criteria within the name matches, so do "
+        "NOT cram the name into `entities` or `keywords`.\n"
+        "12. Optionally set `constraints.ranking_priority` to a comma-separated, "
+        "MOST-IMPORTANT-FIRST ordering of the criteria that matter for this "
+        "query — any of: name, skill, domain, role, seniority. List every "
+        "criterion the user implies, ordered by importance (e.g. a specific "
+        "\"last job in CIB\" and an explicit role outrank a generic seniority "
+        "floor); put `name` first when a specific person is named. Omit it when "
+        "the user gives no sense of relative importance (the Agent API then uses "
+        "its default weights). This only re-weights Agent-API ranking; it never "
+        "changes which records are fetched.\n\n"
         "OUTPUT SCHEMA (return JSON object with these keys exactly):\n"
         "{\n"
-        '  "interpreted_intent": {"entities": ["..."], "constraints": {"...": "..."}},\n'
+        '  "interpreted_intent": {"entities": ["..."], "constraints": {"...": "...", "name": "Full Name (only when a person is named)", "ranking_priority": "domain,role,skill,seniority (optional, ordered most-important-first)"}},\n'
         '  "plan": [\n'
         "    {\n"
         '      "tool_name": "...",\n'
@@ -323,10 +369,19 @@ def build_planner_prompt(
         )
     tool_block = "\n".join(tool_lines) if tool_lines else "(none)"
 
+    feedback_block = ""
+    if feedback and feedback.strip():
+        feedback_block = (
+            "PREVIOUS ATTEMPT — the last search was judged inadequate. "
+            "Incorporate this guidance and change your approach (e.g. adjust "
+            "keywords, `ranking_priority`, or broaden/drop a constraint):\n"
+            f"{feedback.strip()}\n\n"
+        )
     user = (
         f"User query: {query!r}\n"
         f"User filters (raw): {json.dumps(filters, default=str)}\n"
         f"Execution constraints: {json.dumps(constraints.as_dict())}\n\n"
+        f"{feedback_block}"
         f"Available MCP tools:\n{tool_block}\n\n"
         "Produce the JSON plan now."
     )
@@ -366,6 +421,79 @@ def parse_plan_response(text: str) -> LlmToolPlan:
         raise LlmPlannerError(f"LLM JSON failed schema validation: {exc}") from exc
 
 
+class ReflectionVerdict(BaseModel):
+    """LLM judgement on whether the current results warrant another pass."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    needs_replan: bool = Field(default=False)
+    reason: str = Field(default="")
+    guidance: str = Field(default="")
+
+
+def build_reflection_prompt(
+    *,
+    role: str,
+    query: str,
+    results_summary: str,
+) -> tuple[str, str]:
+    """Build the (system, user) prompt for the post-ranking reflection.
+
+    The reflection judges whether the ranked candidates adequately answer the
+    query and, if not, what the next (single, guided) search pass should change.
+    Reuses the configurable persona. Output is a small fixed JSON verdict.
+    """
+    persona = f"{role.strip()}\n\n" if role and role.strip() else ""
+    system = (
+        f"{persona}"
+        "You are reviewing the ranked candidates a search just produced and "
+        "deciding whether ONE more, better-targeted search pass is warranted. "
+        "Return a JSON object and nothing else (no prose, no markdown fences) "
+        "with exactly these keys:\n"
+        '{"needs_replan": true|false, "reason": "...", "guidance": "..."}\n\n'
+        "RULES:\n"
+        "1. Set `needs_replan` true ONLY if another search would plausibly find "
+        "materially better candidates (e.g. the top results miss the core "
+        "requirement, or too few real matches were found). If the results are "
+        "already a reasonable answer, set it false.\n"
+        "2. When true, `guidance` MUST be a short, concrete instruction for the "
+        "next plan — what to change (keywords, ranking_priority, broaden or "
+        "drop a constraint). Do not restate the query verbatim.\n"
+        "3. Be conservative: a replan costs time. Prefer false when unsure.\n"
+        "4. Judge only from the evidence shown; never invent candidate facts."
+    )
+    user = (
+        f"User query: {query!r}\n\n"
+        f"Current ranked candidates (top results):\n{results_summary}\n\n"
+        "Return the JSON verdict now."
+    )
+    return system, user
+
+
+def parse_reflection_response(text: str) -> ReflectionVerdict:
+    """Parse the LLM reflection text into a ``ReflectionVerdict``.
+
+    Tolerant of a single Markdown code fence. On any parse/validation failure
+    returns a safe ``needs_replan=False`` verdict (fail-safe: never loop on a
+    malformed reflection).
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        first_newline = stripped.find("\n")
+        if first_newline != -1:
+            stripped = stripped[first_newline + 1 :]
+        if stripped.rstrip().endswith("```"):
+            stripped = stripped.rstrip()[:-3]
+    stripped = stripped.strip()
+    try:
+        payload = json.loads(stripped)
+        if not isinstance(payload, dict):
+            return ReflectionVerdict()
+        return ReflectionVerdict.model_validate(payload)
+    except (json.JSONDecodeError, ValidationError):
+        return ReflectionVerdict()
+
+
 def serialize_planned_steps(
     plan: list[PlannedToolCall],
 ) -> list[dict[str, object]]:
@@ -397,8 +525,9 @@ class StructuredLlmPlanner(LlmPlanner):
     - ``plan_validated`` once the validator has dropped any bad steps.
     """
 
-    def __init__(self, chat_fn: ChatFn) -> None:
+    def __init__(self, chat_fn: ChatFn, *, role: str = "") -> None:
         self._chat_fn = chat_fn
+        self._role = role
 
     async def plan(
         self,
@@ -408,6 +537,7 @@ class StructuredLlmPlanner(LlmPlanner):
         tools: list[McpTool],
         constraints: PlannerConstraints,
         emitter: EventEmitter | None = None,
+        feedback: str = "",
     ) -> LlmToolPlan:
         sink = emitter or NoopEventEmitter()
         system, user = build_planner_prompt(
@@ -415,6 +545,8 @@ class StructuredLlmPlanner(LlmPlanner):
             filters=filters,
             tools=tools,
             constraints=constraints,
+            role=self._role,
+            feedback=feedback,
         )
         logger.info(
             "llm_planner.request",
@@ -459,3 +591,29 @@ class StructuredLlmPlanner(LlmPlanner):
             },
         )
         return validation.accepted
+
+    async def reflect(
+        self,
+        *,
+        query: str,
+        results_summary: str,
+        emitter: EventEmitter | None = None,
+    ) -> ReflectionVerdict:
+        """Ask the LLM whether the ranked results warrant one more pass.
+
+        Parsing is fail-safe: a malformed reflection yields
+        ``needs_replan=False`` so a bad response can never trigger a loop.
+        """
+        system, user = build_reflection_prompt(
+            role=self._role, query=query, results_summary=results_summary
+        )
+        raw_text = await self._chat_fn(system, user)
+        verdict = parse_reflection_response(raw_text)
+        logger.info(
+            "llm_planner.reflection",
+            extra={
+                "needs_replan": verdict.needs_replan,
+                "reason": verdict.reason[:200],
+            },
+        )
+        return verdict

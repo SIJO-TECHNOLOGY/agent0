@@ -211,6 +211,108 @@ async def test_enrich_is_noop_when_detail_tool_missing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rank_named_person_beats_perfect_criteria_stranger() -> None:
+    # The Taher case: a stranger with perfect criteria but only a shared
+    # surname must NOT outrank the actually-requested person.
+    state = GraphState(
+        original_query="10 years java developer named Taher ben abdallah",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={
+                "role": "developer",
+                "min_experience_years": "10",
+                "name": "Taher ben abdallah",
+                # The LLM ranks the name as the most important criterion.
+                "ranking_priority": "name,skill,seniority,role",
+            },
+        ),
+        results=[
+            # Stranger: perfect criteria, shares only "abdallah".
+            _result(
+                candidate_id="38964",
+                data={
+                    "firstName": "Abdallah",
+                    "lastName": "Khirallah",
+                    "jobTitle": "Java Developer",
+                    "experienceMinYears": 10,
+                    "skills": ["Java"],
+                },
+            ),
+            # The requested person: exact name, Java + 10y, but title is
+            # "Tech Lead" (no literal "developer" token).
+            _result(
+                candidate_id="40278",
+                data={
+                    "firstName": "TAHER",
+                    "lastName": "BEN ABDALLAH",
+                    "jobTitle": "Tech Lead Java backend",
+                    "experienceMinYears": 10,
+                    "skills": ["Java"],
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # The exact-name person ranks first and outscores the stranger.
+    assert result.results[0].id == "40278"
+    assert result.results[0].score > result.results[1].score
+    # The stranger is never labelled a full match and lists the name as unmet.
+    stranger = next(r for r in result.results if r.id == "38964")
+    assert stranger.is_full_match is False
+    assert "Taher ben abdallah" in stranger.unmet_criteria
+
+
+@pytest.mark.asyncio
+async def test_rank_priority_demotes_coach_below_cib_developer() -> None:
+    # The JEROME case end-to-end: with the LLM ranking domain/role above
+    # seniority, a java+10y "coach" (no CIB, not a dev) must rank below a
+    # java+CIB developer that matches fewer of the "easy" criteria.
+    state = GraphState(
+        original_query="java dev with 10 yrs experience whose last job is in CIB",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={
+                "role": "developer",
+                "domain": "CIB",
+                "min_experience_years": "10",
+                "ranking_priority": "domain,role,skill,seniority",
+            },
+        ),
+        results=[
+            _result(
+                candidate_id="40706",
+                data={
+                    "firstName": "Jerome",
+                    "lastName": "Moliere",
+                    "jobTitle": "Coach Craft Java",
+                    "experienceMinYears": 10,
+                    "skills": ["Java"],
+                },
+            ),
+            _result(
+                candidate_id="8378",
+                data={
+                    "firstName": "Antoni",
+                    "lastName": "Galmiche",
+                    "jobTitle": "Java Developer at SGCIB",
+                    "skills": ["Java"],
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # The CIB developer outranks the coach because the LLM ranked domain first.
+    assert result.results[0].id == "8378"
+    assert result.results[0].score > result.results[1].score
+
+
+@pytest.mark.asyncio
 async def test_rank_promotes_candidates_with_matching_evidence() -> None:
     state = GraphState(
         original_query="dev java cib",

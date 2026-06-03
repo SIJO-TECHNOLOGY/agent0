@@ -16,9 +16,11 @@ from app.graph.nodes import (
     generate_final_response,
     plan_with_llm,
     rank_candidates,
+    reflect_on_results,
     replan_if_needed,
     select_tools,
     should_replan,
+    should_replan_llm,
 )
 from app.models.graph_state import GraphState
 
@@ -81,6 +83,12 @@ def build_llm_workflow(ctx: NodeContext):
     is part of the LLM plan, so a separate enrichment node is not
     required here — `rank_candidates` still re-ranks using the merged
     evidence.
+
+    After ranking, `reflect_on_results` lets the LLM decide whether one more
+    guided search pass is warranted (observe-then-replan). The loop back to
+    `plan_with_llm` is bounded by `max_replan_attempts` and gated by
+    `reflect_on_results`/`should_replan_llm`, so it is lightweight reflection,
+    not an open-ended ReAct loop.
     """
     if ctx.llm_planner is None:
         raise RuntimeError(
@@ -95,6 +103,7 @@ def build_llm_workflow(ctx: NodeContext):
     graph.add_node("enrich_candidates", _bind(enrich_candidates, ctx))
     graph.add_node("evaluate_results", _bind(evaluate_results, ctx))
     graph.add_node("rank_candidates", _bind(rank_candidates, ctx))
+    graph.add_node("reflect_on_results", _bind(reflect_on_results, ctx))
     graph.add_node("generate_final_response", _bind(generate_final_response, ctx))
 
     graph.set_entry_point("discover_mcp_tools")
@@ -103,7 +112,15 @@ def build_llm_workflow(ctx: NodeContext):
     graph.add_edge("execute_llm_plan", "enrich_candidates")
     graph.add_edge("enrich_candidates", "evaluate_results")
     graph.add_edge("evaluate_results", "rank_candidates")
-    graph.add_edge("rank_candidates", "generate_final_response")
+    graph.add_edge("rank_candidates", "reflect_on_results")
+    graph.add_conditional_edges(
+        "reflect_on_results",
+        should_replan_llm,
+        {
+            "plan_with_llm": "plan_with_llm",  # bounded loop-back on LLM verdict
+            "generate_final_response": "generate_final_response",
+        },
+    )
     graph.add_edge("generate_final_response", END)
 
     return graph.compile()

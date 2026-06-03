@@ -148,6 +148,10 @@ def _build_service(
         mcp_max_retries=settings.mcp_max_retries,
         llm_planner=llm_planner,
         max_plan_steps=settings.llm_max_plan_steps,
+        use_llm_replan=settings.use_llm_replan,
+        replan_skip_score=settings.replan_skip_score,
+        agent_trace=settings.agent_trace != "off",
+        agent_trace_verbose=settings.agent_trace == "verbose",
     )
 
 

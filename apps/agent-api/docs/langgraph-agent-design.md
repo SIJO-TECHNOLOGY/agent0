@@ -16,7 +16,9 @@ Two workflow shapes coexist in `app/graph/workflow.py`:
   and when LLM credentials are not configured. It uses keyword
   heuristics and the prior plan-by-rules logic.
 
-Reflection is only for evaluating result quality and deciding whether a bounded replan is needed (deterministic path). Neither path implements open-ended autonomous loops.
+Reflection decides whether a **bounded** replan is needed. In the LLM workflow the **LLM makes that
+decision** (`reflect_on_results`); in the deterministic fallback it is rule-based (`replan_if_needed`).
+Neither path implements open-ended autonomous loops — both are hard-capped by `max_replan_attempts`.
 
 ## LLM Workflow
 
@@ -24,9 +26,12 @@ Reflection is only for evaluating result quality and deciding whether a bounded 
 flowchart TD
     A["discover_mcp_tools"] --> B["plan_with_llm"]
     B --> C["execute_llm_plan"]
-    C --> D["evaluate_results"]
-    D --> E["rank_candidates"]
-    E --> F["generate_final_response"]
+    C --> D["enrich_candidates"]
+    D --> E["evaluate_results"]
+    E --> F["rank_candidates"]
+    F --> G["reflect_on_results"]
+    G -->|"LLM: needs_replan (budget left)"| B
+    G -->|"good enough / budget spent"| H["generate_final_response"]
 ```
 
 Key invariants:
@@ -41,6 +46,21 @@ Key invariants:
   prior tool. Fan-out results are merged into the existing
   `SearchResult` rather than appended as new candidates.
 - **MCP-only execution.** No tool runs outside `McpClient.call_tool`.
+- **LLM-driven, bounded replan.** After ranking, `reflect_on_results`
+  asks the LLM (`LlmPlanner.reflect`) whether one more guided search
+  pass is warranted; `should_replan_llm` loops back to `plan_with_llm`
+  with the LLM's `guidance` (carried in `replan_feedback`). Guards make
+  it bounded, never autonomous:
+  - Hard cap `max_replan_attempts` (Settings, default 1, ≤3), checked
+    before each reflection.
+  - Cost gate: the reflection LLM call is skipped when results are
+    already strong (a full match, or top score ≥ `replan_skip_score`).
+  - Fail-safe: any reflection error ⇒ no replan.
+  - Kill switch: `use_llm_replan=false` ⇒ single-shot.
+  - `replan_feedback` is set only by `reflect_on_results` (under budget)
+    and cleared by `plan_with_llm` on consumption, so the loop cannot
+    spin. Re-runs **accumulate** candidates (executor de-dupes by
+    `(source_tool, id)`) — a replan adds better-targeted profiles.
 
 ## Deterministic Workflow (fallback)
 
@@ -66,7 +86,8 @@ flowchart TD
 | `select_tools` | Match plan steps to available MCP tools, preferring dynamically discovered tool metadata. |
 | `execute_mcp_tools` | Execute selected MCP tools asynchronously, collect outputs, and normalize failures. |
 | `evaluate_results` | Assess result quality, coverage, duplicates, confidence, and missing information. |
-| `replan_if_needed` | Decide whether to re-enter planning with bounded retries or proceed to final response. |
+| `replan_if_needed` | Deterministic fallback only: decide whether to re-enter planning with bounded retries or proceed to final response. |
+| `reflect_on_results` | LLM workflow only: ask the LLM whether the ranked results warrant one more guided, bounded replan; set `replan_feedback` under budget. |
 | `generate_final_response` | Aggregate, rank, summarize, normalize MCP results, and produce the UI-oriented API response payload. |
 
 ## State Schema Proposal
@@ -87,7 +108,8 @@ The graph state should be represented with typed Pydantic models or typed dictio
 | `confidence` | Numeric confidence from `0.0` to `1.0`. |
 | `warnings` | User-safe warnings about partial results, ambiguity, or degraded execution. |
 | `errors` | Internal structured errors for workflow control. |
-| `replan_count` | Number of replanning attempts already used. |
+| `replan_count` | Number of replanning attempts already used (hard-capped by `max_replan_attempts`). |
+| `replan_feedback` | LLM reflection guidance for the next plan pass; non-empty = a bounded replan is pending. Set by `reflect_on_results`, consumed/cleared by `plan_with_llm`. |
 | `ui_response` | Final frontend response containing `conversation_id`, `message`, and `ui`. |
 
 ## Transitions
@@ -107,6 +129,11 @@ The graph state should be represented with typed Pydantic models or typed dictio
 - Record retries in `tool_calls` and warnings when they affect output quality.
 
 ## Replanning Conditions
+
+In the **LLM workflow** the replan decision is the LLM's (`reflect_on_results`): it judges the
+ranked candidates against the query and returns `needs_replan` + `guidance`. The conditions below
+describe the intent the LLM is prompted to follow and the deterministic guardrails that bound it;
+the **deterministic fallback** applies them as hard rules in `replan_if_needed`.
 
 Replan only when:
 

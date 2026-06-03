@@ -24,6 +24,7 @@ Before implementation, read these files in order:
 5. [Project Structure](./docs/project-structure.md)
 6. [Testing Strategy](./docs/testing-strategy.md)
 7. [Claude Code Instructions](./CLAUDE.md)
+8. [Bounded ReAct Control-Loop Transition](../../docs/architecture-transitions/bounded-react-control-loop/README.md)
 
 ## Implementation Approach
 
@@ -46,6 +47,20 @@ Before implementation, read these files in order:
 - Test runner: pytest.
 - Architecture style: async-first.
 - Agent pattern: Plan-and-Execute with lightweight reflection.
+
+## Bounded LLM Replan
+
+In the LLM workflow, lightweight reflection means the LLM may observe sanitized ranked results and decide whether one more guided search pass is warranted.
+
+Guardrails:
+
+- `max_replan_attempts` is a deterministic hard cap.
+- `use_llm_replan=false` or `max_replan_attempts=0` disables the loop.
+- `replan_skip_score` and full-match detection skip reflection when results are already strong.
+- Reflection failures, malformed JSON, empty guidance, or missing `reflect` support fail closed and do not replan.
+- `GraphState.replan_feedback` is the only loop signal and is consumed exactly once by `plan_with_llm`.
+- LangGraph still owns state transitions, schema validation, MCP-only execution, and bounded fan-out.
+- This is bounded ReAct, not an open-ended autonomous ReAct loop.
 
 ## Guardrails
 

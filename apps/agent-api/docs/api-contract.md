@@ -4,13 +4,17 @@
 
 ```text
 POST /api/search
+POST /api/search/stream
 POST /api/chat
 ```
 
 `/api/search` executes a natural-language search workflow through the Agent API
-and returns a frontend-oriented response. `/api/chat` is the compatibility
-endpoint consumed by the current web UI; it delegates to the same search
-workflow and returns `{ conversation_id, message, ui, candidates }`.
+and returns a frontend-oriented response. `/api/search/stream` delegates to the
+same workflow and emits sanitized Server-Sent Events style progress, including
+planning, MCP tool execution, result normalization, candidate-card previews, and
+bounded LLM replan decisions. `/api/chat` is the compatibility endpoint consumed
+by the current web UI; it delegates to the same search workflow and returns
+`{ conversation_id, message, ui, candidates }`.
 
 The frontend never consumes raw MCP or BoondManager payloads by default.
 
@@ -180,16 +184,29 @@ Other UI types may be added later, for example:
 
 Do not add them to the default contract until the frontend supports them.
 
-## Future Streaming Compatibility
+## Streaming Search Endpoint
 
-The MVP response is synchronous JSON. Internal workflow events may support future
-SSE or WebSocket streaming for:
+`POST /api/search/stream` returns user-facing progress events for the same
+search workflow used by `/api/search`.
 
-- Intent interpretation.
-- Plan creation.
-- Tool call progress.
-- Partial candidate-card emission.
-- Final summary.
+Expected event categories include:
+
+- `search_started`
+- `tools_discovered`
+- `plan_created`
+- `plan_validated`
+- `tool_call_started`
+- `tool_call_completed`
+- `results_normalized`
+- `candidate_cards_partial`
+- `replan_requested`
+- `final_response`
+- `search_failed`
+
+When the bounded LLM reflection loop elects to replan, the stream emits
+`replan_requested` with `decided_by: "llm"` and then emits the next plan
+lifecycle. Streaming events must not expose raw MCP payloads, raw BoondManager
+payloads, secrets, stack traces, or chain-of-thought.
 
 ## Operational API Decisions
 
