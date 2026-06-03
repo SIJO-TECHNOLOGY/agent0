@@ -38,6 +38,8 @@ const state = {
   uiState: "empty",
   abortController: null,
   renderedResults: [],
+  drawerTrigger: null,
+  conversationQuery: "",
 };
 
 const elements = {
@@ -48,11 +50,19 @@ const elements = {
   loginBtn: document.getElementById("loginBtn"),
   loginError: document.getElementById("loginError"),
   logoutBtn: document.getElementById("logoutBtn"),
-  currentUser: document.getElementById("currentUser"),
   conversationTitle: document.getElementById("conversationTitle"),
   conversationList: document.getElementById("conversationList"),
   sidebarStatus: document.getElementById("sidebarStatus"),
   newChatBtn: document.getElementById("newChatBtn"),
+  searchBtn: document.getElementById("searchBtn"),
+  conversationSearch: document.getElementById("conversationSearch"),
+  clearAllBtn: document.getElementById("clearAllBtn"),
+  settingsBtn: document.getElementById("settingsBtn"),
+  settingsMenu: document.getElementById("settingsMenu"),
+  userBtn: document.getElementById("userBtn"),
+  userMenu: document.getElementById("userMenu"),
+  sidebarUser: document.getElementById("sidebarUser"),
+  sidebarAvatar: document.getElementById("sidebarAvatar"),
   messagesArea: document.getElementById("messagesArea"),
   emptyState: document.getElementById("emptyState"),
   messages: document.getElementById("messages"),
@@ -73,6 +83,7 @@ const elements = {
   drawerExtra: document.getElementById("drawerExtra"),
   drawerBoondBtn: document.getElementById("drawerBoondBtn"),
   langSwitcher: document.getElementById("langSwitcher"),
+  srStatus: document.getElementById("srStatus"),
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -153,6 +164,54 @@ function bindEvents() {
 
   elements.newChatBtn.addEventListener("click", newChat);
   elements.sendBtn.addEventListener("click", send);
+
+  if (elements.searchBtn) {
+    elements.searchBtn.addEventListener("click", toggleConversationSearch);
+  }
+  if (elements.conversationSearch) {
+    elements.conversationSearch.addEventListener("input", (event) => {
+      state.conversationQuery = event.target.value.trim().toLowerCase();
+      renderConversationList();
+    });
+  }
+  if (elements.clearAllBtn) {
+    elements.clearAllBtn.addEventListener("click", clearAllConversations);
+  }
+  if (elements.settingsBtn && elements.settingsMenu) {
+    elements.settingsBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleMenu(elements.settingsMenu, elements.settingsBtn, [
+        [elements.userMenu, elements.userBtn],
+      ]);
+    });
+  }
+  if (elements.userBtn && elements.userMenu) {
+    elements.userBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleMenu(elements.userMenu, elements.userBtn, [
+        [elements.settingsMenu, elements.settingsBtn],
+      ]);
+    });
+  }
+  document.addEventListener("click", (event) => {
+    if (
+      elements.settingsMenu
+      && !elements.settingsMenu.hidden
+      && !elements.settingsMenu.contains(event.target)
+      && !elements.settingsBtn?.contains(event.target)
+    ) {
+      closeMenu(elements.settingsMenu, elements.settingsBtn);
+    }
+    if (
+      elements.userMenu
+      && !elements.userMenu.hidden
+      && !elements.userMenu.contains(event.target)
+      && !elements.userBtn?.contains(event.target)
+    ) {
+      closeMenu(elements.userMenu, elements.userBtn);
+    }
+  });
+
   elements.drawerCloseBtn.addEventListener("click", closeCandidateDrawer);
   elements.drawerOverlay.addEventListener("click", closeCandidateDrawer);
   elements.drawerBoondBtn.addEventListener("click", () => {
@@ -160,7 +219,17 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeCandidateDrawer();
+    if (event.key === "Escape") {
+      closeCandidateDrawer();
+      if (elements.settingsMenu && !elements.settingsMenu.hidden) {
+        closeMenu(elements.settingsMenu, elements.settingsBtn);
+        elements.settingsBtn?.focus();
+      }
+      if (elements.userMenu && !elements.userMenu.hidden) {
+        closeMenu(elements.userMenu, elements.userBtn);
+        elements.userBtn?.focus();
+      }
+    }
   });
 
   elements.messageInput.addEventListener("input", () => {
@@ -235,7 +304,8 @@ function showChat() {
   elements.loginScreen.hidden = true;
   elements.loadingScreen.hidden = true;
   elements.appShell.hidden = false;
-  elements.currentUser.textContent = displayName;
+  if (elements.sidebarUser) elements.sidebarUser.textContent = displayName;
+  if (elements.sidebarAvatar) elements.sidebarAvatar.textContent = initials(displayName);
   elements.conversationTitle.textContent ||= t("conversations.default_title");
   elements.loginBtn.disabled = false;
   setUiState("empty");
@@ -276,10 +346,20 @@ async function loadConversations() {
     : t("conversations.empty");
 }
 
+const CONVERSATION_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7A8.4 8.4 0 0 1 4 11.5 8.4 8.4 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5z"></path></svg>';
+
 function renderConversationList() {
   elements.conversationList.innerHTML = "";
 
-  state.conversations.forEach((conversation) => {
+  const query = state.conversationQuery;
+  const visible = query
+    ? state.conversations.filter((conversation) =>
+        (conversation.title || t("conversations.untitled")).toLowerCase().includes(query),
+      )
+    : state.conversations;
+
+  visible.forEach((conversation) => {
     const row = document.createElement("div");
     row.className = "conversation-row";
 
@@ -289,6 +369,13 @@ function renderConversationList() {
     item.classList.toggle("active", conversation.id === state.currentConversationId);
     item.addEventListener("click", () => openConversation(conversation.id));
 
+    const icon = document.createElement("span");
+    icon.className = "conv-icon";
+    icon.innerHTML = CONVERSATION_ICON_SVG;
+
+    const textCol = document.createElement("span");
+    textCol.className = "conv-text";
+
     const title = document.createElement("span");
     title.className = "conversation-title";
     title.textContent = conversation.title || t("conversations.untitled");
@@ -297,7 +384,8 @@ function renderConversationList() {
     date.className = "conversation-date";
     date.textContent = formatDate(conversation.updated_at || conversation.created_at);
 
-    item.append(title, date);
+    textCol.append(title, date);
+    item.append(icon, textCol);
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -312,6 +400,82 @@ function renderConversationList() {
     row.append(item, remove);
     elements.conversationList.appendChild(row);
   });
+}
+
+function openMenu(menu, btn) {
+  if (!menu) return;
+  menu.hidden = false;
+  btn?.setAttribute("aria-expanded", "true");
+}
+
+function closeMenu(menu, btn) {
+  if (!menu) return;
+  menu.hidden = true;
+  btn?.setAttribute("aria-expanded", "false");
+}
+
+function toggleMenu(menu, btn, others = []) {
+  if (!menu) return;
+  others.forEach(([otherMenu, otherBtn]) => closeMenu(otherMenu, otherBtn));
+  if (menu.hidden) {
+    openMenu(menu, btn);
+  } else {
+    closeMenu(menu, btn);
+  }
+}
+
+function toggleConversationSearch() {
+  const input = elements.conversationSearch;
+  if (!input) return;
+
+  const willShow = input.hidden;
+  input.hidden = !willShow;
+  elements.searchBtn?.setAttribute("aria-expanded", String(willShow));
+  elements.searchBtn?.classList.toggle("active", willShow);
+
+  if (willShow) {
+    input.focus();
+  } else {
+    input.value = "";
+    state.conversationQuery = "";
+    renderConversationList();
+  }
+}
+
+async function clearAllConversations() {
+  if (state.isLoading || !state.conversations.length) return;
+  if (!window.confirm(t("sidebar.clear_all_confirm"))) return;
+
+  if (state.abortController) state.abortController.abort();
+  setLoading(true);
+  showInputError("");
+
+  try {
+    const ids = state.conversations.map((conversation) => conversation.id);
+    for (const id of ids) {
+      await deleteConversation(id);
+    }
+    state.conversations = [];
+    state.currentConversationId = null;
+    clearMessages();
+    closeCandidateDrawer();
+    elements.conversationTitle.textContent = t("conversations.default_title");
+    setUiState("empty");
+    renderConversationList();
+    elements.sidebarStatus.textContent = t("conversations.empty");
+  } catch (error) {
+    console.error(error);
+    showInputError(getErrorMessage(error));
+  } finally {
+    setLoading(false);
+  }
+}
+
+function initials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 async function openConversation(conversationId) {
@@ -410,19 +574,39 @@ async function removeConversation(conversationId) {
   }
 }
 
+function buildMessageHead(role) {
+  const head = document.createElement("div");
+  head.className = "msg-head";
+
+  const avatar = document.createElement("span");
+  const name = document.createElement("span");
+  name.className = "msg-name";
+
+  if (role === "user") {
+    avatar.className = "msg-avatar user";
+    const displayName = getCurrentUser()?.name || getCurrentUser()?.username || t("app.user_label");
+    avatar.textContent = initials(displayName);
+    name.textContent = displayName;
+  } else {
+    avatar.className = "msg-avatar assistant";
+    avatar.textContent = "S";
+    name.textContent = t("app.assistant_label");
+  }
+
+  avatar.setAttribute("aria-hidden", "true");
+  head.append(avatar, name);
+  return head;
+}
+
 function renderMessage(role, text) {
   const message = document.createElement("div");
   message.className = `message ${role}`;
 
-  const label = document.createElement("div");
-  label.className = "msg-label";
-  label.textContent = getRoleLabel(role);
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  body.textContent = text;
 
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = text;
-
-  message.append(label, bubble);
+  message.append(buildMessageHead(role), body);
   elements.messages.appendChild(message);
   setUiState(role === "error" ? "error" : "active");
   scrollToBottom();
@@ -470,6 +654,7 @@ function renderStreamFinalResponse(data) {
 
   if (typeof data?.message === "string" && data.message.trim()) {
     renderMessage("assistant", data.message);
+    if (elements.srStatus) elements.srStatus.textContent = data.message;
   }
 
   if (
@@ -778,6 +963,8 @@ function renderCandidateCard(candidate) {
   detailsBtn.type = "button";
   detailsBtn.className = "candidate-btn secondary";
   detailsBtn.textContent = t("candidate.see_more");
+  detailsBtn.setAttribute("aria-controls", "candidateDrawer");
+  detailsBtn.setAttribute("aria-expanded", "false");
   detailsBtn.addEventListener("click", () => openCandidateDrawer(candidate));
 
   const boondBtn = document.createElement("button");
@@ -835,22 +1022,68 @@ function openCandidateDrawer(candidate) {
   elements.drawerBoondBtn.hidden = !FEATURES.boond_redirect || !candidate.boond_url;
   elements.drawerBoondBtn.disabled = !FEATURES.boond_redirect || !candidate.boond_url;
 
+  // Remember what to restore focus to, then move focus into the drawer.
+  state.drawerTrigger = document.activeElement;
+
   elements.drawerOverlay.hidden = false;
   elements.candidateDrawer.hidden = false;
+  document.body.style.overflow = "hidden";
+  elements.appShell.setAttribute("aria-hidden", "true");
+  document
+    .querySelectorAll('[aria-controls="candidateDrawer"]')
+    .forEach((btn) => btn.setAttribute("aria-expanded", "true"));
+  elements.candidateDrawer.addEventListener("keydown", trapDrawerFocus);
+
   requestAnimationFrame(() => {
     elements.drawerOverlay.classList.add("open");
     elements.candidateDrawer.classList.add("open");
+    elements.drawerCloseBtn.focus();
   });
+}
+
+function trapDrawerFocus(event) {
+  if (event.key !== "Tab") return;
+
+  const focusables = elements.candidateDrawer.querySelectorAll(
+    'button:not([hidden]):not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+  );
+  if (!focusables.length) return;
+
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function closeCandidateDrawer() {
   if (!elements.candidateDrawer || !elements.drawerOverlay) return;
+
+  const wasOpen = elements.candidateDrawer.classList.contains("open");
 
   state.currentDrawerCandidate = null;
   elements.drawerOverlay.classList.remove("open");
   elements.candidateDrawer.classList.remove("open");
   elements.drawerOverlay.hidden = true;
   elements.candidateDrawer.hidden = true;
+  elements.candidateDrawer.removeEventListener("keydown", trapDrawerFocus);
+
+  document.body.style.overflow = "";
+  elements.appShell.removeAttribute("aria-hidden");
+  document
+    .querySelectorAll('[aria-controls="candidateDrawer"]')
+    .forEach((btn) => btn.setAttribute("aria-expanded", "false"));
+
+  // Return focus to the element that opened the drawer.
+  if (wasOpen && state.drawerTrigger && typeof state.drawerTrigger.focus === "function") {
+    state.drawerTrigger.focus();
+  }
+  state.drawerTrigger = null;
 }
 
 function openBoondManager(url) {
@@ -869,12 +1102,8 @@ function renderLoading() {
   message.className = "message assistant";
   message.dataset.loading = "true";
 
-  const label = document.createElement("div");
-  label.className = "msg-label";
-  label.textContent = t("app.assistant_label");
-
-  const bubble = document.createElement("div");
-  bubble.className = "bubble loading-bubble";
+  const body = document.createElement("div");
+  body.className = "msg-body loading-row";
 
   const spinner = document.createElement("span");
   spinner.className = "spinner";
@@ -883,8 +1112,8 @@ function renderLoading() {
   const text = document.createElement("span");
   text.textContent = t("loading.reflecting");
 
-  bubble.append(spinner, text);
-  message.append(label, bubble);
+  body.append(spinner, text);
+  message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
   scrollToBottom();
@@ -897,22 +1126,16 @@ function renderThinking() {
   message.className = "message assistant";
   message.dataset.loading = "true";
 
-  const label = document.createElement("div");
-  label.className = "msg-label";
-  label.textContent = t("app.assistant_label");
-
-  const bubble = document.createElement("div");
-  bubble.className = "bubble thinking-bubble";
-
-  const header = document.createElement("div");
-  header.className = "thinking-header";
-  header.textContent = t("loading.thinking");
+  const body = document.createElement("div");
+  body.className = "msg-body";
 
   const steps = document.createElement("ul");
   steps.className = "thinking-steps";
+  steps.setAttribute("role", "status");
+  steps.setAttribute("aria-live", "polite");
 
-  bubble.append(header, steps);
-  message.append(label, bubble);
+  body.append(steps);
+  message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
   scrollToBottom();
