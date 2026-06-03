@@ -33,11 +33,74 @@ from app.services.llm_planner import StructuredLlmPlanner
 logger = logging.getLogger(__name__)
 
 
-def _configure_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+# Third-party loggers that emit one-or-more INFO lines per MCP/LLM call and
+# drown the agent's own decision logs. Quieted to WARNING regardless of level.
+_NOISY_LOGGERS: tuple[str, ...] = (
+    "httpx",
+    "httpcore",
+    "mcp",
+    "mcp.client",
+    "mcp.client.streamable_http",
+    "openai",
+    "uvicorn.access",
+)
+
+# Standard LogRecord attributes — anything else on the record is `extra=` data
+# the call site attached (the actual decision payload), which the default
+# formatter silently drops.
+_RESERVED_LOG_ATTRS = frozenset(vars(logging.makeLogRecord({})).keys()) | {
+    "message",
+    "asctime",
+    "taskName",
+}
+
+
+def _short_value(value: object, limit: int = 400) -> str:
+    import json
+
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+class _ExtraRenderingFormatter(logging.Formatter):
+    """Append `extra={}` fields to each line so structured logs show content.
+
+    The app logs decisions via ``logger.info("graph.plan_with_llm",
+    extra={...})``; the default formatter prints only the static message and
+    drops the dict. This renders those fields as ``key=value`` so the console
+    actually shows what the agent decided.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        extras = {
+            key: val
+            for key, val in record.__dict__.items()
+            if key not in _RESERVED_LOG_ATTRS and not key.startswith("_")
+        }
+        if not extras:
+            return base
+        rendered = " ".join(f"{k}={_short_value(v)}" for k, v in extras.items())
+        return f"{base} | {rendered}"
+
+
+def _configure_logging(level: str, *, verbose: bool = False) -> None:
+    fmt = "%(asctime)s %(levelname)s %(name)s %(message)s"
+    # Verbose mode renders the structured extra={} payloads as JSON on every
+    # app log line; default mode keeps lines plain (the readable decision chain
+    # comes from the agent.trace logger instead).
+    formatter: logging.Formatter = (
+        _ExtraRenderingFormatter(fmt) if verbose else logging.Formatter(fmt)
     )
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    # Third-party noise is quieted in every mode.
+    for noisy in _NOISY_LOGGERS:
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 async def _close_client(client: object) -> None:
@@ -60,7 +123,9 @@ def _sanitize_connect_error(exc: BaseException) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    _configure_logging(settings.log_level)
+    _configure_logging(
+        settings.log_level, verbose=settings.agent_trace == "verbose"
+    )
 
     # The factory itself may raise McpClientNotImplementedError on a
     # configuration error (e.g. unsupported transport). That is a real
@@ -121,7 +186,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except LlmBackendError:
             logger.exception("llm_planner.init_failed")
             raise
-        app.state.llm_planner = StructuredLlmPlanner(chat_fn=chat_fn)
+        app.state.llm_planner = StructuredLlmPlanner(
+            chat_fn=chat_fn, role=settings.llm_planner_role
+        )
         logger.info(
             "llm_planner.ready",
             extra={

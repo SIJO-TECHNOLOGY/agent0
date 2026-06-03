@@ -50,10 +50,30 @@ sequenceDiagram
     MCP->>Boond: Execute deterministic API requests
     Boond-->>MCP: Return paginated data
     MCP-->>Agent: Return validated normalized results
-    Agent->>Agent: Aggregate, rank, and summarize
+    Agent->>Agent: Aggregate, normalize, and rank
+    Agent->>LLM: Reflect on sanitized ranked results
+    LLM-->>Agent: Stop or bounded replan guidance
+    opt Replan budget remains
+        Agent->>MCP: Execute guided MCP search pass
+        MCP->>Boond: Execute deterministic API requests
+        Boond-->>MCP: Return paginated data
+        MCP-->>Agent: Return validated normalized results
+        Agent->>Agent: Merge, deduplicate, and rank
+    end
+    Agent->>Agent: Summarize
     Agent-->>UI: Structured results and AI summary
     UI-->>User: Display results and reasoning
 ```
+
+## Agent Control Loop
+
+The Agent API is migrating from a single-shot plan-and-execute workflow to a bounded ReAct-style control loop:
+
+```text
+plan -> act through MCP -> observe sanitized results -> reflect -> replan or stop
+```
+
+This is not an open-ended autonomous ReAct loop. The LLM owns planning and bounded replan decisions, while LangGraph owns validation, state transitions, loop caps, and MCP-only execution. The transition is tracked in [Architectural Paradigm Shift: From Single-Shot Planning to Bounded ReAct Control Loop](../architecture-transitions/bounded-react-control-loop/README.md).
 
 ## Component Responsibilities
 
@@ -79,7 +99,7 @@ Responsibilities:
 
 - Receive user intent from the frontend.
 - Use LangGraph to manage agent state and execution flow.
-- Connect to an LLM for intent understanding, planning, and summarization.
+- Connect to an LLM for intent understanding, planning, bounded reflection, and summarization.
 - Select the appropriate MCP tools.
 - Execute tool calls through the MCP server.
 - Aggregate, rank, deduplicate, and summarize results.
@@ -188,6 +208,7 @@ This structure keeps the UI, agent orchestration, and MCP server independent whi
 
 - Add validation and integration tests around MCP tools.
 - Add logging for tool calls and agent decisions.
+- Add bounded observe-then-replan visibility for LLM workflow decisions.
 - Add pagination handling for larger result sets.
 - Add safeguards for sensitive data and excessive queries.
 
@@ -195,6 +216,7 @@ This structure keeps the UI, agent orchestration, and MCP server independent whi
 
 - Keep the MCP server deterministic.
 - Keep LLM reasoning in the agent backend.
+- Keep LLM control loops bounded by deterministic guardrails.
 - Prefer explicit tools over generic API pass-through.
 - Normalize external API responses before they reach the agent.
 - Make results explainable, not just returned.
@@ -219,6 +241,7 @@ The MVP should include enough logging to understand:
 - Tool inputs, excluding secrets.
 - Tool execution status.
 - Result counts.
+- Bounded replan decisions and guidance summaries.
 - Summary generation status.
 
 Logs should support debugging and audit needs without exposing sensitive data unnecessarily.
@@ -247,7 +270,10 @@ The global architecture is the system context for the Agent API implementation. 
 - [ADR-007 - LLM Tool Plan Execution Semantics](../decisions/adr-007-llm-tool-plan-execution-semantics.md) records the ordering-vs-fan-out distinction and the candidate-producing tool allowlist that keep LLM plans honest at execution time.
 - [ADR-008 - MCP Result Envelope Normalization Boundary](../decisions/adr-008-mcp-result-envelope-normalization-boundary.md) places envelope normalization at the MCP client boundary so wrapper shapes like `{"candidates": [...], "meta": {...}}` reach the workflow as a clean record list.
 - [ADR-009 - Agent API Milestone 1 Boundary And Evidence Verification](../decisions/adr-009-agent-api-milestone-1-boundary.md) draws the line between Agent API orchestration delivery (done) and criterion-evidence verification (deferred to a later milestone).
+- [ADR-010 - LLM-Driven Bounded Replan](../decisions/adr-010-llm-driven-bounded-replan.md) records the shift from single-shot LLM planning to bounded observe-then-replan in the LLM workflow.
+- [Architectural Paradigm Shift: From Single-Shot Planning to Bounded ReAct Control Loop](../architecture-transitions/bounded-react-control-loop/README.md) drives the cross-document transition from the old control-loop model to the new bounded ReAct model.
 - [Milestone 001 - Agent API MCP Fuzzy Search](../milestones/milestone-001-agent-api-mcp-fuzzy-search.md) certifies the orchestration milestone with reproducible verification evidence.
+- [Milestone 002 - Bounded ReAct Control Loop](../milestones/milestone-002-bounded-react-control-loop.md) will certify the LLM observe-then-replan behavior with reproducible evidence.
 
 ## Implementation Notes For AI Coding Agents
 

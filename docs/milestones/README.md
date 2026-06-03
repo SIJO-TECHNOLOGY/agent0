@@ -19,3 +19,4 @@ Each milestone uses the same lightweight template:
 ## Milestones
 
 - [Milestone 001 - Agent API MCP Fuzzy Search](./milestone-001-agent-api-mcp-fuzzy-search.md) — fuzzy natural-language queries reach the Agent API, an LLM plans MCP tool calls over a discovered catalogue, LangGraph executes them, and the frontend receives normalized candidate cards.
+- [Milestone 002 - Bounded ReAct Control Loop](./milestone-002-bounded-react-control-loop.md) — planned certification for LLM observe-then-replan under LangGraph guardrails, including one-time guidance consumption, loop caps, fail-safe reflection, and safe streaming evidence.

@@ -1151,7 +1151,7 @@ function renderThinking() {
 
   return {
     element: message,
-    addStep(text) {
+    addStep(text, detail) {
       if (!text) return;
       completeStep(currentStep);
 
@@ -1167,6 +1167,14 @@ function renderThinking() {
       stepText.textContent = text;
 
       li.append(icon, stepText);
+      // Optional dynamic detail (the agent's actual reasoning) under the
+      // localized step label — secondary, muted.
+      if (detail) {
+        const stepDetail = document.createElement("span");
+        stepDetail.className = "step-detail";
+        stepDetail.textContent = detail;
+        li.append(stepDetail);
+      }
       steps.appendChild(li);
       currentStep = { li, icon };
       scrollToBottom();
@@ -1181,6 +1189,20 @@ function renderThinking() {
   };
 }
 
+function clip(text, max = 160) {
+  if (!text) return "";
+  const flat = String(text).replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+function planSearchReason(data) {
+  const steps = Array.isArray(data?.plan) ? data.plan : [];
+  const search = steps.find(
+    (s) => (s?.tool_name || s?.tool) === "searchCandidates",
+  );
+  return clip(search?.reason);
+}
+
 function stepDescriptorForEvent(type, data) {
   const label = (key) => t(`stream.step_labels.${key}`);
 
@@ -1190,7 +1212,17 @@ function stepDescriptorForEvent(type, data) {
 
     case "plan_created":
     case "replan_created":
-      return { key: "plan", label: label("plan") };
+      // Surface the LLM's actual search intent as a secondary detail line.
+      return { key: "plan", label: label("plan"), detail: planSearchReason(data) };
+
+    case "replan_requested":
+      // The headline sync: the LLM's observe-then-replan decision, with its
+      // reason. `decided_by` is "llm".
+      return {
+        key: "replan",
+        label: label("replan"),
+        detail: clip(data?.reason || data?.guidance),
+      };
 
     case "plan_validated":
       return { key: "plan_validated", label: label("plan_validated") };
@@ -1223,6 +1255,7 @@ function stepDescriptorForEvent(type, data) {
 async function runSearchStream(text, thinking) {
   let finalResponse = null;
   let failure = null;
+  let round = 0;
   const shownSteps = new Set();
 
   await streamSearch(
@@ -1242,10 +1275,16 @@ async function runSearchStream(text, thinking) {
         return;
       }
 
+      // A replan opens a new round, so the second pass's steps show again
+      // instead of being de-duped away (which made the bubble look frozen).
+      if (type === "replan_requested") round += 1;
+
       const step = stepDescriptorForEvent(type, data);
-      if (step && !shownSteps.has(step.key)) {
-        shownSteps.add(step.key);
-        thinking.addStep(step.label);
+      if (!step) return;
+      const key = `${round}:${step.key}`;
+      if (!shownSteps.has(key)) {
+        shownSteps.add(key);
+        thinking.addStep(step.label, step.detail);
       }
     },
     { signal: state.abortController.signal },

@@ -32,3 +32,11 @@ class GraphState(BaseModel):
     warnings: list[Warning] = Field(default_factory=list)
     errors: list[AgentError] = Field(default_factory=list)
     replan_count: int = Field(ge=0, default=0)
+    replan_feedback: str = Field(
+        default="",
+        description=(
+            "LLM reflection guidance for the next plan pass. Non-empty is the "
+            "single signal that an LLM-decided replan is pending; consumed and "
+            "cleared by plan_with_llm so the bounded loop cannot spin."
+        ),
+    )

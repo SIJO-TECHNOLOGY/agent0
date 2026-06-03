@@ -80,10 +80,17 @@ class Anchors:
     skills: tuple[str, ...]
     role: str | None
     domains: tuple[str, ...]
+    name: str | None = None
 
     @property
     def primary(self) -> str | None:
-        """The single strongest anchor for the first recall pass."""
+        """The single strongest anchor for the first recall pass.
+
+        Note: a person ``name`` is searched by its own dedicated first pass in
+        ``build_recall_passes`` (it is the strongest possible anchor), so it is
+        intentionally NOT folded into ``primary`` — that keeps the skill/role/
+        domain ladder ordering identical for non-name queries.
+        """
         if self.skills:
             return self.skills[0]
         if self.role:
@@ -93,7 +100,7 @@ class Anchors:
         return None
 
     def is_empty(self) -> bool:
-        return not (self.skills or self.role or self.domains)
+        return not (self.skills or self.role or self.domains or self.name)
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,31 @@ def safe_keywords(term: str) -> str:
     return _WS_RE.sub(" ", cleaned).strip()
 
 
+_NAME_WORD_RE: Final[re.Pattern[str]] = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def _name_token_set(text: str) -> set[str]:
+    return {tok.lower() for tok in _NAME_WORD_RE.findall(text or "")}
+
+
+def name_match_score(requested: str, candidate: str | None) -> float:
+    """Fraction of the requested name's tokens present in a candidate's name.
+
+    Token-set recall, case/accent-insensitive on case. An exact name (all
+    requested tokens present) scores 1.0; a single shared surname scores
+    proportionally less. Used to make a requested person the primary ranking
+    signal — see ``rank_candidates``.
+    """
+    requested_tokens = _name_token_set(requested)
+    if not requested_tokens:
+        return 0.0
+    candidate_tokens = _name_token_set(candidate or "")
+    if not candidate_tokens:
+        return 0.0
+    matched = sum(1 for tok in requested_tokens if tok in candidate_tokens)
+    return matched / len(requested_tokens)
+
+
 def _looks_like_role(entity: str) -> bool:
     low = entity.lower()
     return any(suffix in low for suffix in _ROLE_SUFFIXES)
@@ -121,6 +153,8 @@ def classify_anchors(
     entities: list[object],
     constraints: dict[str, str],
     skill_labels: set[str],
+    *,
+    name: str | None = None,
 ) -> Anchors:
     """Classify intent entities/constraints into skill / role / domain anchors.
 
@@ -128,6 +162,10 @@ def classify_anchors(
     labels; entities matching one are treated as concrete (server-side
     filterable) skills. Everything else stays a free-text recall anchor.
     No skill/role/domain value is hardcoded.
+
+    ``name`` is an optional person name (from ``constraints.name``). It is kept
+    separate from skills/role/domains so it never pollutes domain ranking; the
+    ladder searches it first via a dedicated pass.
     """
     ents = [str(e).strip() for e in entities if str(e).strip()]
     skill_set = {label.strip().lower() for label in skill_labels if label.strip()}
@@ -155,7 +193,8 @@ def classify_anchors(
             continue
         domains.append(entity)
 
-    return Anchors(skills=skills, role=role, domains=tuple(domains))
+    clean_name = name.strip() if isinstance(name, str) and name.strip() else None
+    return Anchors(skills=skills, role=role, domains=tuple(domains), name=clean_name)
 
 
 def _size_field(fields: set[str]) -> str | None:
@@ -225,6 +264,19 @@ def build_recall_passes(
         passes.append(SearchPass(label=label, inputs=inputs, relaxed=relaxed))
 
     primary = anchors.primary
+
+    # Pass 0 — a named person is the strongest possible anchor, so search the
+    # name FIRST (not relaxed). The default full-text type (`resumeTd`) is what
+    # actually surfaces a named candidate in BoondManager — `fullName` is
+    # unreliable on this data. If this pass returns candidates the ladder stops
+    # here; otherwise the skill/role/domain passes below act as a labeled
+    # relaxation.
+    if anchors.name:
+        add(
+            "name",
+            _keyword_inputs(anchors.name, fields, keywords_type="resumeTd"),
+            relaxed=False,
+        )
 
     # Pass 1 — strongest anchor as plain keywords (broad enough for recall).
     if primary is not None:
@@ -296,9 +348,19 @@ class EvidenceWeights:
     domain: float = 0.3
     seniority: float = 0.3
     role: float = 0.2
+    name: float = 0.4
 
 
 _WEIGHTS = EvidenceWeights()
+
+# Closed vocabulary of criterion keys the LLM may order in `ranking_priority`.
+RANKING_CRITERIA: Final[frozenset[str]] = frozenset(
+    {"skill", "domain", "role", "seniority", "name"}
+)
+# Weight given to a dimension the LLM left OFF its priority ordering (so a
+# listed criterion always outweighs an unlisted one). Only used when the LLM
+# emits an ordering; otherwise the default EvidenceWeights apply.
+PRIORITY_BASELINE: Final[float] = 0.25
 
 _TOKEN_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"[^0-9a-zA-Z]+")
 # Grammatical words only — never domain vocabulary (so "banking"/"finance"
@@ -358,6 +420,9 @@ def evidence_score(
     candidate_min_years: int | None,
     required_min_years: int | None,
     domain_haystack: str | None = None,
+    requested_name: str | None = None,
+    candidate_name: str | None = None,
+    priority: tuple[str, ...] | None = None,
     weights: EvidenceWeights = _WEIGHTS,
 ) -> tuple[float, set[str]]:
     """Weighted multi-criteria evidence score in ``[0, 1]`` plus matched keys.
@@ -373,10 +438,20 @@ def evidence_score(
     ``domain_haystack`` (when given) restricts the domain dimension to a
     high-signal surface (title + technical-document summary) so an incidental
     business word buried in a noisy skills blob does not earn domain credit.
+
+    ``requested_name``/``candidate_name`` add a ``name`` dimension (token recall
+    of the requested person's name against the candidate's), present only when a
+    name was requested. ``priority`` is an LLM-supplied ordering of criterion
+    keys (most important first, from ``RANKING_CRITERIA``); when given, each
+    dimension's weight is taken FROM that ordering (``len-index`` for listed
+    keys, ``PRIORITY_BASELINE`` for the rest) so the LLM — not a hardcoded weight
+    table — decides relative importance. With ``requested_name`` and ``priority``
+    both ``None`` the result is identical to the criteria-only score.
     """
     hay = haystack.lower()
     domain_hay = (domain_haystack if domain_haystack is not None else haystack).lower()
-    dims: list[tuple[float, float]] = []
+    # (key, weight, fraction-evidenced) per requested dimension.
+    dims: list[tuple[str, float, float]] = []
     hits: set[str] = set()
 
     norm_skills = [s.lower() for s in skills if s and s.strip()]
@@ -384,7 +459,7 @@ def evidence_score(
         found = [s for s in norm_skills if _term_present(s, hay)]
         for skill in found:
             hits.add(f"skill:{skill}")
-        dims.append((weights.skill, len(found) / len(norm_skills)))
+        dims.append(("skill", weights.skill, len(found) / len(norm_skills)))
 
     norm_domains = [d for d in domains if d and d.strip()]
     if norm_domains:
@@ -396,14 +471,14 @@ def evidence_score(
         domain_found = any(token in domain_hay for token in tokens)
         if domain_found:
             hits.add("domain")
-        dims.append((weights.domain, 1.0 if domain_found else 0.0))
+        dims.append(("domain", weights.domain, 1.0 if domain_found else 0.0))
 
     if role and role.strip():
         low = role.lower()
         role_found = low in hay or all(tok in hay for tok in low.split())
         if role_found:
             hits.add("role")
-        dims.append((weights.role, 1.0 if role_found else 0.0))
+        dims.append(("role", weights.role, 1.0 if role_found else 0.0))
 
     if required_min_years is not None:
         meets = (
@@ -412,10 +487,33 @@ def evidence_score(
         )
         if meets:
             hits.add("seniority")
-        dims.append((weights.seniority, 1.0 if meets else 0.0))
+        dims.append(("seniority", weights.seniority, 1.0 if meets else 0.0))
+
+    if requested_name and requested_name.strip():
+        name_frac = name_match_score(requested_name, candidate_name)
+        # Only an exact (all-tokens) name match counts as evidenced, so a
+        # look-alike sharing one surname can never be a full match.
+        if name_frac >= 1.0:
+            hits.add("name")
+        dims.append(("name", weights.name, name_frac))
 
     if not dims:
         return 0.0, hits
-    total_weight = sum(weight for weight, _ in dims)
-    score = sum(weight * hit for weight, hit in dims) / total_weight
+    # When the LLM supplies a priority ordering, the dimension weights come from
+    # that ordering (listed -> len-index, unlisted -> baseline). Otherwise the
+    # default EvidenceWeights apply unchanged. Generic over every dimension.
+    if priority:
+        weighted = [
+            (
+                float(len(priority) - priority.index(key))
+                if key in priority
+                else PRIORITY_BASELINE,
+                fraction,
+            )
+            for key, _weight, fraction in dims
+        ]
+    else:
+        weighted = [(weight, fraction) for _key, weight, fraction in dims]
+    total_weight = sum(weight for weight, _ in weighted)
+    score = sum(weight * fraction for weight, fraction in weighted) / total_weight
     return score, hits

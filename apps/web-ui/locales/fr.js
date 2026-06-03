@@ -70,6 +70,7 @@ export default {
     step_labels: {
       start: "Analyse de votre demande",
       plan: "Élaboration de la stratégie de recherche",
+      replan: "Affinage de la recherche",
       plan_validated: "Vérification du plan",
       searching: "Recherche des profils dans la base de talents",
       reading_docs: "Lecture des dossiers techniques",

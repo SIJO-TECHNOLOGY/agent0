@@ -1446,12 +1446,28 @@ button.footer-pill:hover {
 
 .thinking-step {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
   font-size: var(--fs-sm);
   line-height: var(--lh-base);
   color: var(--text-secondary);
   transition: color 0.2s ease;
+}
+
+.step-text {
+  flex: 1 1 auto;
+}
+
+/* The agent's actual reasoning, wrapped to a muted second line under the
+   localized step label. */
+.step-detail {
+  flex-basis: 100%;
+  margin-left: 22px; /* step-icon width (13) + gap (9) */
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--text-muted);
+  line-height: var(--lh-base);
 }
 
 .step-icon {

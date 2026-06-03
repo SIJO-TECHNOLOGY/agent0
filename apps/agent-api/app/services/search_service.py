@@ -17,7 +17,11 @@ from app.models.api import (
 from app.models.graph_state import GraphState
 from app.models.tools import ToolCallStatus
 from app.services.candidate_mapper import candidate_cards_from_results
-from app.services.event_emitter import EventEmitter, NoopEventEmitter
+from app.services.event_emitter import (
+    DecisionTraceEmitter,
+    EventEmitter,
+    NoopEventEmitter,
+)
 from app.services.llm_planner import LlmPlanner
 
 logger = logging.getLogger(__name__)
@@ -34,12 +38,20 @@ class SearchService:
         mcp_max_retries: int = 2,
         llm_planner: LlmPlanner | None = None,
         max_plan_steps: int = DEFAULT_LLM_PLAN_STEPS,
+        use_llm_replan: bool = True,
+        replan_skip_score: float = 0.8,
+        agent_trace: bool = False,
+        agent_trace_verbose: bool = False,
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
         self._mcp_max_retries = mcp_max_retries
         self._llm_planner = llm_planner
         self._max_plan_steps = max_plan_steps
+        self._use_llm_replan = use_llm_replan
+        self._replan_skip_score = replan_skip_score
+        self._agent_trace = agent_trace
+        self._agent_trace_verbose = agent_trace_verbose
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -54,6 +66,8 @@ class SearchService:
             mcp_max_retries=self._mcp_max_retries,
             llm_planner=self._llm_planner,
             max_plan_steps=self._max_plan_steps,
+            use_llm_replan=self._use_llm_replan,
+            replan_skip_score=self._replan_skip_score,
             event_emitter=emitter,
             debug_mode=debug_mode,
         )
@@ -77,6 +91,12 @@ class SearchService:
         """
         conversation_id = f"conv_{uuid.uuid4().hex}"
         planner_mode = "llm" if self._llm_planner is not None else "deterministic"
+        # Wrap at the outermost point so the readable decision trace also
+        # captures the search header and final result, not just node events.
+        if self._agent_trace:
+            emitter = DecisionTraceEmitter(
+                emitter, verbose=self._agent_trace_verbose
+            )
         logger.info(
             "search.start",
             extra={
@@ -149,9 +169,20 @@ def _build_message(
     """
     base = _base_message(candidates, final_state)
     hint = _limited_search_hint(final_state)
-    if hint:
-        return f"{base} {hint}"
-    return base
+    message = f"{base} {hint}" if hint else base
+    # A named-person miss is the most important context — lead with it so the
+    # user knows these are fallback results, not the person they asked for.
+    name_note = next(
+        (
+            w.message
+            for w in final_state.warnings
+            if w.code == "name_not_found" and w.message
+        ),
+        None,
+    )
+    if name_note:
+        return f"{name_note} {message}"
+    return message
 
 
 # Tools whose execution counts as "we actually ran a candidate search"
@@ -218,6 +249,7 @@ def _base_message(
         _has_warning(final_state, "criteria_unverified")
         or _has_warning(final_state, "criteria_visible")
         or _has_warning(final_state, "search_broadened")
+        or _has_warning(final_state, "name_not_found")
     )
     if count == 1:
         name = candidates[0].full_name or candidates[0].id
