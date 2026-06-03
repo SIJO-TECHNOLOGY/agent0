@@ -6,9 +6,7 @@ The Agent API receives natural-language search requests from the web UI, orchest
 
 ## Status
 
-Documentation-only guidance for the MVP.
-
-No application source code, framework boilerplate, or `pyproject.toml` has been generated yet.
+Implemented backend service for the candidate-search POC.
 
 ## Stack
 
@@ -30,6 +28,9 @@ No application source code, framework boilerplate, or `pyproject.toml` has been 
 - Select MCP tools.
 - Orchestrate LangGraph nodes.
 - Aggregate, deduplicate, rank, and summarize results.
+- Enrich candidates with technical-document and CV data returned by MCP tools.
+- Generate short, natural CV summaries through the configured LLM when parsed CV
+  text is available.
 - Normalize BoondManager MCP results into UI-friendly response models.
 - Return `conversation_id`, `message`, and `ui` to the web UI by default.
 
@@ -44,10 +45,15 @@ No application source code, framework boilerplate, or `pyproject.toml` has been 
 
 ```text
 POST /api/search
+POST /api/search/stream
+POST /api/chat
 ```
 
-The endpoint accepts a natural-language query and optional filters, then returns interpreted intent, execution plan, tool calls, results, summary, confidence, and warnings.
-The endpoint accepts a natural-language query and optional filters, then returns a UI-oriented response.
+`/api/search/stream` is the preferred web UI path. It accepts a natural-language
+query and optional filters, emits sanitized SSE progress events, and finishes
+with a `final_response` event containing the same UI-oriented response shape as
+`/api/search`. `/api/chat` remains available for compatibility and structured
+clarification interactions.
 
 Example:
 
@@ -67,7 +73,7 @@ Example:
         "availability": "Available immediately",
         "skills": ["Java", "Spring", "Kafka"],
         "match_score": 0.86,
-        "summary": "Confirmed backend profile.",
+        "summary": "Backend Java engineer with 7 years of experience in Spring APIs, Kafka integrations, and production support for banking platforms.",
         "boond_url": "https://ui.boondmanager.com/",
         "state_label": "Vivier",
         "technical_summary": "Solid Java/Spring backend profile.",
@@ -87,8 +93,10 @@ Internal metadata such as interpreted intent, execution plan, tool calls, confid
 Candidate cards may include enriched profile metadata from BoondManager MCP
 results: resolved experience, availability, state and mobility labels, diplomas,
 expertise/activity areas, tools with levels, languages with levels, technical
-summary, source, and last update. Unknown scalar fields stay `null`; unknown
-list fields stay `[]`.
+summary, source, and last update. When a candidate CV is available through
+`getCandidateCV`, the MCP server extracts the PDF text and the Agent API can ask
+the configured LLM to produce a complete short `summary` grounded in that CV.
+Unknown scalar fields stay `null`; unknown list fields stay `[]`.
 
 User-facing search messages should be natural and honest. When not every
 criterion can be fully confirmed from evidence, describe returned records as

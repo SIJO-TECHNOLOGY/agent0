@@ -15,7 +15,7 @@ spring:
           mcp-endpoint: /mcp
 
 boondmanager:
-  base-url: ${BOONDMANAGER_BASE_URL}
+  base-url: ${BOONDMANAGER_BASE_URL:https://ui.boondmanager.com/api/}
   jwt-client: ${BOONDMANAGER_JWT_CLIENT}
   timeout: ${BOONDMANAGER_TIMEOUT:15s}
 

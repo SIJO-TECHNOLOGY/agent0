@@ -29,6 +29,7 @@ from app.mcp.factory import create_mcp_client
 from app.models.api import ErrorEnvelope, ErrorPayload, McpDependencyStatus
 from app.services.llm_backends import LlmBackendError, build_chat_fn
 from app.services.llm_planner import StructuredLlmPlanner
+from app.services.resume_summarizer import ResumeSummarizer
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.exception("llm_planner.init_failed")
             raise
         app.state.llm_planner = StructuredLlmPlanner(chat_fn=chat_fn)
+        app.state.resume_summarizer = ResumeSummarizer(chat_fn=chat_fn)
         logger.info(
             "llm_planner.ready",
             extra={
@@ -131,6 +133,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     else:
         app.state.llm_planner = None
+        app.state.resume_summarizer = None
 
     try:
         yield
@@ -144,6 +147,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.mcp_client = None
         app.state.mcp_status = None
         app.state.llm_planner = None
+        app.state.resume_summarizer = None
 
 
 def create_app() -> FastAPI:

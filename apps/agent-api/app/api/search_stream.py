@@ -142,11 +142,13 @@ def _build_service(
         return None
 
     llm_planner = getattr(request.app.state, "llm_planner", None)
+    resume_summarizer = getattr(request.app.state, "resume_summarizer", None)
     return SearchService(
         mcp_client=mcp_client,
         max_replan_attempts=settings.max_replan_attempts,
         mcp_max_retries=settings.mcp_max_retries,
         llm_planner=llm_planner,
+        resume_summarizer=resume_summarizer,
         max_plan_steps=settings.llm_max_plan_steps,
     )
 

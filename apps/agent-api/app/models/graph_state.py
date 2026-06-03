@@ -26,6 +26,7 @@ class GraphState(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     results: list[SearchResult] = Field(default_factory=list)
     llm_plan: LlmToolPlan | None = None
+    dictionary_raw: list[dict[str, object]] = Field(default_factory=list)
 
     summary: str = ""
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)

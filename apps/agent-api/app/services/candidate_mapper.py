@@ -323,6 +323,9 @@ def _flatten_record(data: dict[str, object]) -> dict[str, object]:
         if is_resume:
             # The CV enrichment carries the raw extracted PDF text.
             # Surface it as a searchable text field and extract skill hints.
+            generated_summary = enrichment.get("generatedSummary")
+            if isinstance(generated_summary, str) and generated_summary.strip():
+                flat["_resumeGeneratedSummary"] = generated_summary.strip()
             cv_text = enrichment.get("extractedText") or enrichment.get("text") or ""
             if isinstance(cv_text, str) and cv_text.strip():
                 flat.setdefault("_resumeText", cv_text.strip())
@@ -705,7 +708,13 @@ def _build_technical_summary(data: dict[str, object]) -> str | None:
         summary = _first_non_empty_str(tech, _TECHNICAL_SUMMARY_FIELDS)
         if summary:
             return summary
-    return _first_non_empty_str(data, ("technicalSummary", "technical_summary"))
+    summary = _first_non_empty_str(data, ("technicalSummary", "technical_summary"))
+    if summary:
+        return summary
+    generated = _first_non_empty_str(data, ("_resumeGeneratedSummary",))
+    if generated:
+        return generated
+    return _extract_resume_profile_summary(data)
 
 
 def _extract_experiences(data: dict[str, object]) -> list[dict[str, object]]:
@@ -768,7 +777,14 @@ def _match_score(result: SearchResult) -> float | None:
 def _build_summary(
     full_name: str | None, title: str | None, data: dict[str, object]
 ) -> str | None:
-    # Prefer structured fields over the raw CV text.
+    generated = _first_non_empty_str(data, ("_resumeGeneratedSummary",))
+    if generated:
+        return generated
+
+    resume_summary = _extract_resume_profile_summary(data)
+    if resume_summary:
+        return resume_summary
+
     snippet = _first_non_empty_str(data, ("snippet", "summary", "description"))
     if snippet:
         return snippet
@@ -779,6 +795,117 @@ def _build_summary(
     if title:
         return f"Candidat correspondant au profil : {title}."
     return "Profil candidat trouvé dans BoondManager."
+
+
+def _extract_resume_profile_summary(data: dict[str, object]) -> str | None:
+    """Extract a concise profile synthesis from the parsed CV PDF text."""
+    resume_text = data.get("_resumeText")
+    if not isinstance(resume_text, str) or not resume_text.strip():
+        return None
+
+    normalized = re.sub(r"\r\n?", "\n", resume_text.strip())
+    limit = 260
+    patterns = (
+        r"(?is)\bsynth[eè]se\s+de\s+profil\b\s*(.+?)(?=\n\s*(?:comp[eé]tences|exp[eé]rience|formation|dipl[oô]mes?|langues?|outils?|missions?)\b)",
+        r"(?is)\bprofil\b\s*(.+?)(?=\n\s*(?:comp[eé]tences|exp[eé]rience|formation|dipl[oô]mes?|langues?|outils?|missions?)\b)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            summary = _compact_resume_text(match.group(1), limit=limit)
+            if summary:
+                return summary
+
+    professional_lines = [
+        _clean_resume_summary_line(line)
+        for line in normalized.split("\n")
+        if _is_resume_summary_line(line) and _looks_like_profile_line(line)
+    ]
+    profile_summary = _summary_from_lines(professional_lines, limit=limit)
+    if profile_summary:
+        return profile_summary
+
+    lines = [
+        _clean_resume_summary_line(line)
+        for line in normalized.split("\n")
+        if _is_resume_summary_line(line)
+    ]
+    return _summary_from_lines(lines, limit=limit)
+
+
+def _summary_from_lines(lines: list[str], *, limit: int) -> str | None:
+    summary_parts: list[str] = []
+    for line in lines[:8]:
+        summary_parts.append(line)
+        compact = _compact_resume_text(" ".join(summary_parts), limit=limit)
+        if compact and len(compact) >= 120:
+            return compact
+    if summary_parts:
+        return _compact_resume_text(" ".join(summary_parts), limit=limit)
+    return None
+
+
+def _is_resume_summary_line(value: str) -> bool:
+    text = _clean_resume_summary_line(value)
+    if len(text) < 25:
+        return False
+    if re.search(r"@|linkedin|github\.com|^\+?\d|www\.|https?://", text, flags=re.IGNORECASE):
+        return False
+    if re.search(
+        r"\b(native or bilingual|professional working|full professional|limited working|toeic|certified|certification)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return False
+    if re.search(
+        r"^(coordonn[eé]es|contact|r[eé]seaux sociaux|langues?|languages?|principales comp[eé]tences|comp[eé]tences|formation|education|exp[eé]rience)$",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return False
+    return True
+
+
+def _clean_resume_summary_line(value: str) -> str:
+    text = re.sub(r"\s+", " ", value).strip(" -:;")
+    text = re.sub(
+        r"\bERROR!\s*UNKNOWN\s+DOCUMENT\s+PROPERTY\s+NAME\.?\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\bAdresse\s*:.*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" -:;")
+    return text
+
+
+def _looks_like_profile_line(value: str) -> bool:
+    return bool(
+        re.search(
+            r"\b("
+            r"analyst|analyste|application owner|business|consultant|developer|"
+            r"d[eé]veloppeur|engineer|ing[eé]nieur|architect|software|data|"
+            r"product owner|scrum|chef de projet|project manager|lead|manager"
+            r")\b",
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _compact_resume_text(value: str, *, limit: int = 260) -> str | None:
+    text = re.sub(r"\s+", " ", value).strip(" -:;")
+    if len(text) < 40:
+        return None
+    return _truncate_text(text, limit)
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    truncated = text[: limit - 1].rsplit(" ", 1)[0].strip()
+    return f"{truncated}..."
 
 
 def candidate_card_from_result(

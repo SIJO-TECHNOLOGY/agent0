@@ -1,5 +1,7 @@
 package com.sijo.mcpboondmanager.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sijo.mcpboondmanager.client.BoondManagerClient;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateDetailAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateSummaryAttributes;
@@ -11,6 +13,7 @@ import com.sijo.mcpboondmanager.dto.boond.BoondMeta;
 import com.sijo.mcpboondmanager.dto.boond.BoondSingleEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondTechnicalDocumentAttributes;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateDetailDto;
+import com.sijo.mcpboondmanager.dto.candidate.CandidateCvDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchResponseDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSummaryDto;
@@ -22,12 +25,18 @@ import com.sijo.mcpboondmanager.exception.BoondApiException;
 import com.sijo.mcpboondmanager.exception.CandidateNotFoundException;
 import com.sijo.mcpboondmanager.exception.DictionaryResolutionException;
 import com.sijo.mcpboondmanager.exception.ExternalServiceException;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriBuilder;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 
 @Service
@@ -46,6 +55,7 @@ public class BoondManagerCandidateService {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<BoondListEnvelope<BoondTechnicalDocumentAttributes>> TD_LIST_TYPE =
             new ParameterizedTypeReference<>() {};
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final BoondManagerClient client;
 
@@ -132,9 +142,144 @@ public class BoondManagerCandidateService {
         }
     }
 
+    public CandidateCvDto getCandidateCV(Integer candidateId) {
+        String informationPath = CANDIDATES_PATH + "/" + candidateId + "/information";
+        JsonNode candidateInformation = readJson(client.getBytes(informationPath), informationPath);
+        DocumentCandidate document = selectResumeDocument(candidateInformation);
+
+        if (document == null) {
+            return new CandidateCvDto(candidateId, null, null, null, 0, false, "");
+        }
+
+        String documentPath = "/documents/" + document.id();
+        byte[] bytes = client.getBytes(documentPath);
+        String text = extractPdfText(bytes);
+        String normalizedText = text == null ? "" : text.trim();
+
+        return new CandidateCvDto(
+                candidateId,
+                document.id(),
+                document.fileName(),
+                document.contentType(),
+                bytes == null ? 0 : bytes.length,
+                !normalizedText.isBlank(),
+                normalizedText
+        );
+    }
+
+    private static JsonNode readJson(byte[] bytes, String path) {
+        if (bytes == null || bytes.length == 0) {
+            throw new ExternalServiceException("BoondManager returned an empty JSON payload", path, null);
+        }
+        try {
+            return OBJECT_MAPPER.readTree(bytes);
+        } catch (IOException ex) {
+            throw new ExternalServiceException("Unable to parse BoondManager JSON payload", path, ex);
+        }
+    }
+
     private static boolean isNotFound(RuntimeException ex) {
         return ex instanceof BoondApiException boondEx
                 && HttpStatus.NOT_FOUND.value() == boondEx.status().value();
+    }
+
+    private static String extractPdfText(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return "";
+        }
+        try (PDDocument document = Loader.loadPDF(bytes)) {
+            return new PDFTextStripper().getText(document);
+        } catch (IOException ex) {
+            throw new ExternalServiceException("Unable to extract text from candidate CV PDF",
+                    "/documents", ex);
+        }
+    }
+
+    private static DocumentCandidate selectResumeDocument(JsonNode root) {
+        List<DocumentCandidate> documents = new ArrayList<>();
+        collectDocumentCandidates(root, documents);
+        return documents.stream()
+                .filter(DocumentCandidate::looksLikeResume)
+                .findFirst()
+                .or(() -> documents.stream().filter(DocumentCandidate::looksLikePdf).findFirst())
+                .orElse(null);
+    }
+
+    private static void collectDocumentCandidates(JsonNode node, List<DocumentCandidate> sink) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node.isObject()) {
+            DocumentCandidate candidate = documentCandidateFrom(node);
+            if (candidate != null) {
+                sink.add(candidate);
+            }
+            node.fields().forEachRemaining(entry -> collectDocumentCandidates(entry.getValue(), sink));
+        } else if (node.isArray()) {
+            node.forEach(child -> collectDocumentCandidates(child, sink));
+        }
+    }
+
+    private static DocumentCandidate documentCandidateFrom(JsonNode node) {
+        String id = textValue(node, "id");
+        JsonNode attrs = node.get("attributes");
+        String fileName = firstTextValue(node, attrs, "fileName", "filename", "name", "title", "label");
+        String contentType = firstTextValue(node, attrs, "contentType", "mimeType", "mime", "type");
+
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+
+        String lowerHaystack = (id + " " + nullToBlank(fileName) + " " + nullToBlank(contentType))
+                .toLowerCase(Locale.ROOT);
+        boolean documentLike = lowerHaystack.contains("resume")
+                || lowerHaystack.contains("cv")
+                || lowerHaystack.contains("pdf")
+                || lowerHaystack.contains("document");
+
+        return documentLike ? new DocumentCandidate(id, fileName, contentType) : null;
+    }
+
+    private static String firstTextValue(JsonNode primary, JsonNode secondary, String... fields) {
+        for (String field : fields) {
+            String value = textValue(primary, field);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+            value = textValue(secondary, field);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String textValue(JsonNode node, String field) {
+        if (node == null || field == null) {
+            return null;
+        }
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull() || !value.isValueNode()) {
+            return null;
+        }
+        return value.asText();
+    }
+
+    private static String nullToBlank(String value) {
+        return value == null ? "" : value;
+    }
+
+    private record DocumentCandidate(String id, String fileName, String contentType) {
+        boolean looksLikeResume() {
+            String haystack = (id + " " + nullToBlank(fileName)).toLowerCase(Locale.ROOT);
+            return haystack.contains("resume") || haystack.contains("cv");
+        }
+
+        boolean looksLikePdf() {
+            String haystack = (id + " " + nullToBlank(fileName) + " " + nullToBlank(contentType))
+                    .toLowerCase(Locale.ROOT);
+            return haystack.contains("pdf");
+        }
     }
 
     private TechnicalDocumentDto getCandidateTechnicalDocumentAtPath(String path, Integer candidateId) {

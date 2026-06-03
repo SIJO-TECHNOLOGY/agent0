@@ -86,7 +86,7 @@ _RESULT_SELECTOR_ALLOWED: Final[frozenset[str]] = frozenset({"candidate_ids"})
 # ``searchCandidates``, ``getDictionary``) MUST NOT request that
 # selector — it makes no semantic sense for them.
 _FANOUT_ELIGIBLE_TOOLS: Final[frozenset[str]] = frozenset(
-    {"getCandidateDetail", "getCandidateTechnicalDocument"}
+    {"getCandidateDetail", "getCandidateTechnicalDocument", "getCandidateCV"}
 )
 
 
@@ -276,9 +276,10 @@ def build_planner_prompt(
         "`keywords` (only `+term` / \"exact phrase\" are supported). A "
         "single searchCandidates step is enough.\n"
         "8. For deeper criteria (skills depth, seniority, domain/last "
-        "experience), enrich with `getCandidateTechnicalDocument` via "
-        "`depends_on` + `result_selector='candidate_ids'` (the technical "
-        "document is the evidence source). Do NOT use `getCandidateDetail` "
+        "experience), enrich with `getCandidateTechnicalDocument` and, when "
+        "available, `getCandidateCV` via `depends_on` + "
+        "`result_selector='candidate_ids'` (technical document and CV text "
+        "are evidence sources). Do NOT use `getCandidateDetail` "
         "for criteria — it only holds contact/admin data.\n"
         "9. Use `depends_on` + `result_selector='candidate_ids'` ONLY for "
         "per-candidate enrichment that runs once per candidate id returned "

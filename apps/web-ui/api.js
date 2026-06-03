@@ -101,6 +101,117 @@ async function request(path, options = {}) {
   }
 }
 
+async function streamRequest(path, payload, onEvent = () => {}) {
+  if (DEV_MODE && DEV_API_MOCKS) {
+    const response = await devRequest(buildEndpoint("chat"), {
+      method: "POST",
+      body: JSON.stringify({ message: payload.query }),
+    });
+    onEvent({ type: "final_response", data: response });
+    return normalizeChatResponse(response);
+  }
+
+  const headers = {
+    ...(DEV_MODE ? { "Content-Type": "application/json" } : await authHeaders()),
+    Accept: "text/event-stream",
+  };
+
+  let response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    throw new ApiError(UI_CONFIG.network_error_message, "network");
+  }
+
+  if (!response.ok) {
+    throw new ApiError(UI_CONFIG.generic_error_message, "backend", response.status);
+  }
+
+  if (!response.body) {
+    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response", response.status);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResponse = null;
+  let failure = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() || "";
+
+    for (const part of parts) {
+      const event = parseSseEvent(part);
+      if (!event) continue;
+
+      onEvent(event);
+
+      if (event.type === "final_response") {
+        finalResponse = event.data;
+      }
+
+      if (event.type === "search_failed") {
+        failure = event.data;
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const event = parseSseEvent(buffer);
+    if (event) {
+      onEvent(event);
+      if (event.type === "final_response") finalResponse = event.data;
+      if (event.type === "search_failed") failure = event.data;
+    }
+  }
+
+  if (failure) {
+    const message = failure.error?.message || UI_CONFIG.generic_error_message;
+    throw new ApiError(message, "backend", response.status);
+  }
+
+  if (!finalResponse) {
+    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response", response.status);
+  }
+
+  return normalizeChatResponse(finalResponse);
+}
+
+function parseSseEvent(rawEvent) {
+  const lines = rawEvent.split(/\r?\n/);
+  let type = "message";
+  const dataLines = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      type = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0) return null;
+
+  try {
+    return {
+      type,
+      data: JSON.parse(dataLines.join("\n")),
+    };
+  } catch (error) {
+    throw new ApiError(UI_CONFIG.malformed_response_message, "malformed_response");
+  }
+}
+
 async function devRequest(path, options = {}) {
   await getAccessToken();
   await delay(180);
@@ -458,6 +569,13 @@ export async function sendMessage(message, conversationId = null) {
   });
 
   return normalizeChatResponse(response);
+}
+
+export async function searchStream(message, onEvent = () => {}) {
+  return streamRequest(buildEndpoint("search_stream"), {
+    query: message,
+    filters: {},
+  }, onEvent);
 }
 
 export async function sendClarification(interaction, conversationId = null) {

@@ -65,6 +65,7 @@ from app.services.llm_planner import (
     LlmPlannerError,
     PlannerConstraints,
 )
+from app.services.resume_summarizer import ResumeSummarizer
 from app.models.warnings import Warning
 
 
@@ -81,6 +82,7 @@ class NodeContext:
     mcp_max_retries: int = 2
     max_enrichments: int = DEFAULT_ENRICHMENT_LIMIT
     llm_planner: LlmPlanner | None = None
+    resume_summarizer: ResumeSummarizer | None = None
     max_plan_steps: int = DEFAULT_LLM_PLAN_STEPS
     event_emitter: EventEmitter = field(default_factory=NoopEventEmitter)
     debug_mode: bool = False
@@ -1411,7 +1413,16 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
                 and isinstance(resume_raw[0], dict)
                 and resume_raw[0].get("hasContent")
             ):
-                merged_data[ENRICHMENT_RESUME_KEY] = resume_raw[0]
+                resume_enrichment = dict(resume_raw[0])
+                if ctx.resume_summarizer is not None:
+                    generated_summary = await ctx.resume_summarizer.summarize(
+                        candidate_name=str(result.title or result.id),
+                        title=_candidate_title_from_data(merged_data),
+                        resume_text=str(resume_enrichment.get("extractedText") or ""),
+                    )
+                    if generated_summary:
+                        resume_enrichment["generatedSummary"] = generated_summary
+                merged_data[ENRICHMENT_RESUME_KEY] = resume_enrichment
 
         # Resolve all BoondManager integer/opaque IDs to human-readable labels.
         _inject_resolved_labels(
@@ -1453,6 +1464,14 @@ def _collect_strings(value: object, sink: list[str]) -> None:
     elif isinstance(value, list):
         for inner in value:
             _collect_strings(inner, sink)
+
+
+def _candidate_title_from_data(data: dict[str, object]) -> str | None:
+    for key in ("jobTitle", "title", "headline", "position", "role"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _evidence_haystack(result: SearchResult) -> str:

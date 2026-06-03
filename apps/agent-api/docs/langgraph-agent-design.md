@@ -24,9 +24,10 @@ Reflection is only for evaluating result quality and deciding whether a bounded 
 flowchart TD
     A["discover_mcp_tools"] --> B["plan_with_llm"]
     B --> C["execute_llm_plan"]
-    C --> D["evaluate_results"]
-    D --> E["rank_candidates"]
-    E --> F["generate_final_response"]
+    C --> D["enrich_candidates"]
+    D --> E["evaluate_results"]
+    E --> F["rank_candidates"]
+    F --> G["generate_final_response"]
 ```
 
 Key invariants:
@@ -40,6 +41,11 @@ Key invariants:
   `max_enrichments` times — once per candidate id returned by the
   prior tool. Fan-out results are merged into the existing
   `SearchResult` rather than appended as new candidates.
+- **CV enrichment stays backend-owned.** `getCandidateCV` is an MCP tool that
+  downloads and extracts readable CV text. When the Agent API has an LLM
+  backend configured, `enrich_candidates` asks `ResumeSummarizer` to analyze
+  that text and produce a short, complete candidate summary. The frontend only
+  receives the normalized `summary` field.
 - **MCP-only execution.** No tool runs outside `McpClient.call_tool`.
 
 ## Deterministic Workflow (fallback)
@@ -65,6 +71,7 @@ flowchart TD
 | `build_plan` | Produce a bounded execution plan with clear steps and expected tool needs. |
 | `select_tools` | Match plan steps to available MCP tools, preferring dynamically discovered tool metadata. |
 | `execute_mcp_tools` | Execute selected MCP tools asynchronously, collect outputs, and normalize failures. |
+| `enrich_candidates` | Merge per-candidate detail, technical-document, dictionary, and CV data; generate LLM-backed CV summaries when available. |
 | `evaluate_results` | Assess result quality, coverage, duplicates, confidence, and missing information. |
 | `replan_if_needed` | Decide whether to re-enter planning with bounded retries or proceed to final response. |
 | `generate_final_response` | Aggregate, rank, summarize, normalize MCP results, and produce the UI-oriented API response payload. |
@@ -174,8 +181,9 @@ Candidate card fields:
 The card values must be adapted from BoondManager MCP results. Missing scalar
 or numeric fields should be `null`; missing list fields should be `[]`. Do not
 invent candidate data. LLM-generated summaries are allowed only when grounded in
-MCP result fields. Dictionary-backed BoondManager IDs should be resolved into
-labels before display whenever possible.
+MCP result fields, including parsed CV text returned by `getCandidateCV`.
+Dictionary-backed BoondManager IDs should be resolved into labels before display
+whenever possible.
 
 ## Internal Metadata
 

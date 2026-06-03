@@ -4,8 +4,8 @@ import {
   deleteConversation,
   getConversation,
   getConversations,
+  searchStream,
   sendClarification,
-  sendMessage,
 } from "./api.js";
 import {
   handleRedirect,
@@ -820,7 +820,7 @@ async function send() {
   setLoading(true);
 
   try {
-    const response = await sendMessage(text, state.currentConversationId);
+    const response = await searchStream(text);
     loadingMessage.remove();
 
     if (response.conversation_id) {

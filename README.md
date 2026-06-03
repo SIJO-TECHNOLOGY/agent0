@@ -6,9 +6,13 @@ The project connects an LLM-powered agent to BoondManager through an MCP server,
 
 ## Current Status
 
-This repository is documentation-first and scaffold-only.
+This repository contains the current candidate-search POC:
 
-No implementation code or framework boilerplate has been generated yet.
+- `apps/web-ui` displays candidate search results from the Agent API.
+- `apps/agent-api` orchestrates LangGraph, LLM planning, MCP calls, ranking, and
+  UI response normalization.
+- `apps/mcp-boondmanager` exposes deterministic BoondManager tools, including
+  candidate CV download and PDF text extraction.
 
 ## Repository Structure
 
@@ -38,9 +42,9 @@ No implementation code or framework boilerplate has been generated yet.
 
 ## Folder Guide
 
-- `apps/web-ui`: Simple HTML, CSS, and JavaScript frontend for user searches and result display.
-- `apps/agent-api`: LangGraph-based agent backend connected to an LLM and MCP tools.
-- `apps/mcp-boondmanager`: Spring Boot MCP server exposing deterministic BoondManager tools.
+- `apps/web-ui`: Simple HTML, CSS, and JavaScript frontend for user searches and display-only result rendering.
+- `apps/agent-api`: LangGraph-based agent backend connected to an LLM and MCP tools. It owns search planning, result normalization, dictionary resolution, and LLM-backed CV summaries.
+- `apps/mcp-boondmanager`: Spring Boot MCP server exposing deterministic BoondManager tools, including CV PDF extraction via `getCandidateCV`.
 - `packages/shared-contracts`: Shared schemas, API contracts, and response formats.
 - `packages/prompts`: Prompt templates and agent instructions.
 - `docs/architecture`: Architecture documents and system design notes.

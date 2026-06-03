@@ -19,6 +19,7 @@ from app.models.tools import ToolCallStatus
 from app.services.candidate_mapper import candidate_cards_from_results
 from app.services.event_emitter import EventEmitter, NoopEventEmitter
 from app.services.llm_planner import LlmPlanner
+from app.services.resume_summarizer import ResumeSummarizer
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class SearchService:
         max_replan_attempts: int = 1,
         mcp_max_retries: int = 2,
         llm_planner: LlmPlanner | None = None,
+        resume_summarizer: ResumeSummarizer | None = None,
         max_plan_steps: int = DEFAULT_LLM_PLAN_STEPS,
         boond_base_url: str = "https://ui.boondmanager.com",
     ) -> None:
@@ -40,6 +42,7 @@ class SearchService:
         self._max_replan_attempts = max_replan_attempts
         self._mcp_max_retries = mcp_max_retries
         self._llm_planner = llm_planner
+        self._resume_summarizer = resume_summarizer
         self._max_plan_steps = max_plan_steps
         self._boond_base_url = boond_base_url
 
@@ -55,6 +58,7 @@ class SearchService:
             max_replan_attempts=self._max_replan_attempts,
             mcp_max_retries=self._mcp_max_retries,
             llm_planner=self._llm_planner,
+            resume_summarizer=self._resume_summarizer,
             max_plan_steps=self._max_plan_steps,
             event_emitter=emitter,
             debug_mode=debug_mode,
