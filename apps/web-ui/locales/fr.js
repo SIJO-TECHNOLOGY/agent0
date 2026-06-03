@@ -16,6 +16,15 @@ export default {
   nav: {
     conversations: "Conversations",
   },
+  sidebar: {
+    conversations_heading: "Vos conversations",
+    clear_all: "Tout effacer",
+    clear_all_confirm: "Supprimer toutes les conversations ?",
+    settings: "Paramètres",
+    language: "Langue",
+    search_placeholder: "Rechercher une conversation",
+    search_aria: "Rechercher dans les conversations",
+  },
   auth: {
     intro: "Connectez-vous avec votre compte Microsoft professionnel pour accéder au chatbot interne.",
     login_cta: "Se connecter avec Microsoft",
@@ -79,6 +88,7 @@ export default {
   },
   input: {
     placeholder: "Décrivez le profil recherché : poste, localisation, compétences, secteur, disponibilité...",
+    aria_label: "Décrivez le profil candidat recherché",
     send_aria: "Envoyer",
     criteria_aria: "Critères utiles pour votre recherche",
     kbd_enter: "Entrée",
