@@ -1451,7 +1451,7 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
 
         merged_data = dict(result.data)
 
-        if ctx.llm_planner is None and detail_tool is not None and ENRICHMENT_DETAIL_KEY not in merged_data:
+        if detail_tool is not None and ENRICHMENT_DETAIL_KEY not in merged_data:
             detail_inputs = _candidate_id_inputs(result.id, detail_tool.input_schema)
             detail_call, detail_raw = await _execute_single_tool(
                 ctx, CANDIDATE_DETAIL_TOOL, detail_inputs

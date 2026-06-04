@@ -1,8 +1,8 @@
 """Executor-level tests for the recall-first relaxation ladder.
 
 The ladder runs when the interpreted intent yields anchors: it starts
-focused, broadens on empty results, enriches via the technical document
-(never getCandidateDetail), and stays honest about broadening / no results.
+focused, broadens on empty results, enriches criteria via the technical
+document, and stays honest about broadening / no results.
 """
 
 from __future__ import annotations

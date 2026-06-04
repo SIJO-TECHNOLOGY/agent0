@@ -636,10 +636,12 @@ async def test_dictionary_before_search_fans_out_tech_doc_from_candidates_only(
         int(args.get("candidateId") or args.get("id") or 0) for args in tech_calls
     }
     assert tech_ids == {41924}  # the id from _SEARCH_RECORDS
-    # getCandidateDetail is not used for criteria enrichment.
-    assert not any(
-        name == "getCandidateDetail" for name, _ in _dictionary_plan_calls
-    )
+    detail_ids = {
+        int(args.get("candidateId") or args.get("id") or 0)
+        for name, args in _dictionary_plan_calls
+        if name == "getCandidateDetail"
+    }
+    assert detail_ids == {41924}
 
 
 @pytest.mark.asyncio
