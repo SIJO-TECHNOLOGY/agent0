@@ -54,6 +54,7 @@ class DecisionTraceEmitter(EventEmitter):
     def __init__(self, delegate: EventEmitter, *, verbose: bool = False) -> None:
         self._delegate = delegate
         self._verbose = verbose
+        # Verbose keeps more of each reason / keyword; default stays terse.
         self._reason_clip = 220 if verbose else 90
         self._kw_clip = 200 if verbose else 80
 
@@ -61,7 +62,7 @@ class DecisionTraceEmitter(EventEmitter):
         try:
             for line in self._render(event_type, payload):
                 _trace_logger.info(line)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — tracing must never break the workflow
             pass
         await self._delegate.emit(event_type, payload)
 
@@ -96,6 +97,7 @@ class DecisionTraceEmitter(EventEmitter):
                 return [f"│  search → {p.get('result_count')} results ({status})"]
             if status not in ("success", "empty"):
                 return [f"│  {tool} {status}: {_clip(p.get('error_message'))}"]
+            # Enrichment fan-out: collapsed by default, shown in verbose.
             if self._verbose:
                 return [f"│    · {tool} → {p.get('result_count')} ({status})"]
             return []

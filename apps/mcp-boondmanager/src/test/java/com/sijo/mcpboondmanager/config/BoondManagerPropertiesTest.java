@@ -43,9 +43,13 @@ class BoondManagerPropertiesTest {
     }
 
     @Test
-    void givenMissingBaseUrl_whenContextStarts_thenFailsConfigurationBinding() {
+    void givenBlankBaseUrl_whenContextStarts_thenFailsConfigurationBinding() {
+        // Set the value explicitly blank rather than omitting it: an omitted property would otherwise
+        // be supplied by a leaking BOONDMANAGER_BASE_URL OS env var (relaxed binding), making this test
+        // depend on the developer's shell. A blank value still trips @NotBlank.
         contextRunner
                 .withPropertyValues(
+                        "boondmanager.base-url=",
                         "boondmanager.jwt-client=eyTestJwt",
                         "boondmanager.timeout=3s"
                 )
@@ -56,10 +60,12 @@ class BoondManagerPropertiesTest {
     }
 
     @Test
-    void givenMissingJwtClient_whenContextStarts_thenFailsConfigurationBinding() {
+    void givenBlankJwtClient_whenContextStarts_thenFailsConfigurationBinding() {
+        // Blank (not omitted) so a leaking BOONDMANAGER_JWT_CLIENT OS env var cannot satisfy the binding.
         contextRunner
                 .withPropertyValues(
                         "boondmanager.base-url=https://ui.boondmanager.com/api",
+                        "boondmanager.jwt-client=",
                         "boondmanager.timeout=3s"
                 )
                 .run(context -> {

@@ -83,6 +83,102 @@ def test_prompt_includes_query_tools_and_constraints() -> None:
     assert '"max_enrichments": 3' in user
 
 
+def test_planner_role_setting_default_and_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config.settings import Settings
+
+    # Ships ON with a recruiter/ranker persona by default.
+    assert "recruiter" in Settings().llm_planner_role.lower()
+    # Operator override via env.
+    monkeypatch.setenv("LLM_PLANNER_ROLE", "Custom persona X")
+    assert Settings().llm_planner_role == "Custom persona X"
+
+
+def test_prompt_prepends_configurable_role_and_keeps_rules() -> None:
+    persona = "You are ACME's elite CV match-maker."
+    system, _user = build_planner_prompt(
+        query="find a java dev",
+        filters={},
+        tools=[_search_candidates_tool()],
+        constraints=PlannerConstraints(),
+        role=persona,
+    )
+    # The persona frames the prompt (prepended) but the mechanical contract
+    # (rules + schema) is still present and authoritative.
+    assert system.startswith(persona)
+    assert "RULES (must be obeyed):" in system
+    assert "ranking_priority" in system
+
+
+def test_prompt_role_empty_is_unchanged() -> None:
+    # Back-compat: no role -> the system prompt opens at the rules-only text.
+    system, _user = build_planner_prompt(
+        query="find a java dev",
+        filters={},
+        tools=[_search_candidates_tool()],
+        constraints=PlannerConstraints(),
+        role="   ",
+    )
+    assert system.startswith("You are the planning component")
+
+
+def test_prompt_includes_feedback_section_on_replan() -> None:
+    system, user = build_planner_prompt(
+        query="find a java dev",
+        filters={},
+        tools=[_search_candidates_tool()],
+        constraints=PlannerConstraints(),
+        feedback="Top results were coaches; require a developer role.",
+    )
+    assert "PREVIOUS ATTEMPT" in user
+    assert "require a developer role" in user
+    # No feedback -> no PREVIOUS ATTEMPT block.
+    _system2, user2 = build_planner_prompt(
+        query="find a java dev",
+        filters={},
+        tools=[_search_candidates_tool()],
+        constraints=PlannerConstraints(),
+    )
+    assert "PREVIOUS ATTEMPT" not in user2
+
+
+def test_build_reflection_prompt_grounds_in_query_and_results() -> None:
+    from app.services.llm_planner import (
+        build_reflection_prompt,
+        parse_reflection_response,
+    )
+
+    system, user = build_reflection_prompt(
+        role="ACME recruiter",
+        query="java dev in CIB",
+        results_summary="- Jerome — Coach Craft Java | score=0.6 | full_match=False",
+    )
+    assert system.startswith("ACME recruiter")
+    assert "needs_replan" in system
+    assert "java dev in CIB" in user
+    assert "Coach Craft Java" in user
+    # Parser is fail-safe on garbage.
+    assert parse_reflection_response("not json").needs_replan is False
+    verdict = parse_reflection_response('{"needs_replan": true, "guidance": "g"}')
+    assert verdict.needs_replan is True and verdict.guidance == "g"
+
+
+def test_prompt_routes_a_named_person_into_constraints_name() -> None:
+    system, _user = build_planner_prompt(
+        query="java dev whose name is Taher ben abdallah",
+        filters={},
+        tools=[_search_candidates_tool()],
+        constraints=PlannerConstraints(max_plan_steps=4, max_enrichments=3),
+    )
+    # The planner must learn to capture a named person in constraints.name
+    # (not stuff it into entities/keywords).
+    assert "constraints.name" in system
+    assert "whose name is" in system
+    # And to declare the importance ordering (LLM-driven ranking priority).
+    assert "ranking_priority" in system
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
@@ -305,7 +401,7 @@ async def test_structured_planner_validates_against_discovered_tools() -> None:
         captured["user"] = user
         return json.dumps(canned)
 
-    planner = StructuredLlmPlanner(chat_fn=chat_fn)
+    planner = StructuredLlmPlanner(chat_fn=chat_fn, role="ACME persona line.")
     plan = await planner.plan(
         query="search a dev who knows java and CIB",
         filters={},
@@ -316,6 +412,8 @@ async def test_structured_planner_validates_against_discovered_tools() -> None:
     # Prompt actually carried the right context.
     assert "searchCandidates" in captured["user"]
     assert "getCandidateDetail" in captured["user"]
+    # The planner forwarded its configured role into the system prompt.
+    assert captured["system"].startswith("ACME persona line.")
     # Plan was validated and returned in order.
     assert [step.tool_name for step in plan.plan] == [
         "searchCandidates",

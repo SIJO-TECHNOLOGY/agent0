@@ -67,35 +67,4 @@ public class BoondManagerClient {
                     ex);
         }
     }
-
-    public byte[] getBytes(String path) {
-        String correlationId = MDC.get(MdcKeys.CORRELATION_ID);
-        log.debug("Calling BoondManager GET {}", path);
-        try {
-            return webClient.get()
-                    .uri(uriBuilder -> uriBuilder.path(path).build())
-                    .header(CorrelationIdFilter.HEADER_NAME, correlationId == null ? "" : correlationId)
-                    .retrieve()
-                    .bodyToMono(byte[].class)
-                    .block();
-        } catch (WebClientResponseException ex) {
-            throw new BoondApiException(
-                    "BoondManager returned " + ex.getStatusCode() + " on GET " + path,
-                    ex.getStatusCode(),
-                    path,
-                    ex);
-        } catch (WebClientRequestException ex) {
-            throw new ExternalServiceException(
-                    "Unable to reach BoondManager on GET " + path, path, ex);
-        } catch (RuntimeException ex) {
-            String causeMessage = ex.getMessage();
-            String detail = causeMessage == null || causeMessage.isBlank()
-                    ? ex.getClass().getSimpleName()
-                    : ex.getClass().getSimpleName() + ": " + causeMessage;
-            throw new ExternalServiceException(
-                    "Unexpected error while calling BoondManager on GET " + path + " (" + detail + ")",
-                    path,
-                    ex);
-        }
-    }
 }

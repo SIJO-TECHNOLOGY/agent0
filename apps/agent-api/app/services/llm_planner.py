@@ -285,9 +285,6 @@ def build_planner_prompt(
         "agent. You receive a user query and a catalogue of available MCP "
         "tools. You must return a JSON object matching the schema below, "
         "and nothing else (no prose, no markdown fences).\n\n"
-        "LANGUAGE: Always respond in the same language as the user query. "
-        "If the query is in French, all text fields (`reason`, `assumptions`, "
-        "`warnings`, `guidance`) must be in French.\n\n"
         "RULES (must be obeyed):\n"
         "1. Use only tools whose name appears in the provided catalogue.\n"
         "2. Use only input fields declared in each tool's input_schema.\n"
@@ -454,8 +451,6 @@ def build_reflection_prompt(
         "Return a JSON object and nothing else (no prose, no markdown fences) "
         "with exactly these keys:\n"
         '{"needs_replan": true|false, "reason": "...", "guidance": "..."}\n\n'
-        "LANGUAGE: Always respond in the same language as the user query. "
-        "If the query is in French, `reason` and `guidance` must be in French.\n\n"
         "RULES:\n"
         "1. Set `needs_replan` true ONLY if another search would plausibly find "
         "materially better candidates (e.g. the top results miss the core "

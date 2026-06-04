@@ -626,19 +626,6 @@ button.footer-pill:hover {
   flex-shrink: 0;
 }
 
-.header-logo {
-  flex-shrink: 0;
-  margin-right: var(--space-2);
-  display: flex;
-  align-items: center;
-}
-
-.header-logo img {
-  height: 28px;
-  width: auto;
-  display: block;
-}
-
 .header-title {
   min-width: 0;
   overflow: hidden;
@@ -1423,32 +1410,6 @@ button.footer-pill:hover {
   background: var(--panel);
 }
 
-.drawer-tool-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.drawer-tool-list li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  font-size: var(--fs-sm);
-}
-
-.drawer-tool-list li span {
-  color: var(--text-primary);
-}
-
-.drawer-tool-list li strong {
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
 .drawer-footer {
   padding: 16px 24px 24px;
   border-top: 1px solid var(--border);
@@ -1494,6 +1455,21 @@ button.footer-pill:hover {
   transition: color 0.2s ease;
 }
 
+.step-text {
+  flex: 1 1 auto;
+}
+
+/* The agent's actual reasoning, wrapped to a muted second line under the
+   localized step label. */
+.step-detail {
+  flex-basis: 100%;
+  margin-left: 22px; /* step-icon width (13) + gap (9) */
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--text-muted);
+  line-height: var(--lh-base);
+}
+
 .step-icon {
   flex: 0 0 auto;
   width: 13px;
@@ -1505,14 +1481,6 @@ button.footer-pill:hover {
   line-height: 1;
 }
 
-.thinking-step .step-detail {
-  flex-basis: 100%;
-  margin: 2px 0 0 25px;
-  color: var(--text-muted);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-regular);
-  line-height: 1.45;
-}
 .thinking-step.active {
   color: var(--text-primary);
   font-weight: var(--fw-medium);

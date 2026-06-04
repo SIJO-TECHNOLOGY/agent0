@@ -7,7 +7,6 @@ import pytest
 from app.graph.nodes import (
     ENRICHMENT_DETAIL_KEY,
     ENRICHMENT_TECH_DOC_KEY,
-    EXPERIENCE_MIN_YEARS_KEY,
     NodeContext,
     enrich_candidates,
     rank_candidates,
@@ -212,6 +211,108 @@ async def test_enrich_is_noop_when_detail_tool_missing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rank_named_person_beats_perfect_criteria_stranger() -> None:
+    # The Taher case: a stranger with perfect criteria but only a shared
+    # surname must NOT outrank the actually-requested person.
+    state = GraphState(
+        original_query="10 years java developer named Taher ben abdallah",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={
+                "role": "developer",
+                "min_experience_years": "10",
+                "name": "Taher ben abdallah",
+                # The LLM ranks the name as the most important criterion.
+                "ranking_priority": "name,skill,seniority,role",
+            },
+        ),
+        results=[
+            # Stranger: perfect criteria, shares only "abdallah".
+            _result(
+                candidate_id="38964",
+                data={
+                    "firstName": "Abdallah",
+                    "lastName": "Khirallah",
+                    "jobTitle": "Java Developer",
+                    "experienceMinYears": 10,
+                    "skills": ["Java"],
+                },
+            ),
+            # The requested person: exact name, Java + 10y, but title is
+            # "Tech Lead" (no literal "developer" token).
+            _result(
+                candidate_id="40278",
+                data={
+                    "firstName": "TAHER",
+                    "lastName": "BEN ABDALLAH",
+                    "jobTitle": "Tech Lead Java backend",
+                    "experienceMinYears": 10,
+                    "skills": ["Java"],
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # The exact-name person ranks first and outscores the stranger.
+    assert result.results[0].id == "40278"
+    assert result.results[0].score > result.results[1].score
+    # The stranger is never labelled a full match and lists the name as unmet.
+    stranger = next(r for r in result.results if r.id == "38964")
+    assert stranger.is_full_match is False
+    assert "Taher ben abdallah" in stranger.unmet_criteria
+
+
+@pytest.mark.asyncio
+async def test_rank_priority_demotes_coach_below_cib_developer() -> None:
+    # The JEROME case end-to-end: with the LLM ranking domain/role above
+    # seniority, a java+10y "coach" (no CIB, not a dev) must rank below a
+    # java+CIB developer that matches fewer of the "easy" criteria.
+    state = GraphState(
+        original_query="java dev with 10 yrs experience whose last job is in CIB",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={
+                "role": "developer",
+                "domain": "CIB",
+                "min_experience_years": "10",
+                "ranking_priority": "domain,role,skill,seniority",
+            },
+        ),
+        results=[
+            _result(
+                candidate_id="40706",
+                data={
+                    "firstName": "Jerome",
+                    "lastName": "Moliere",
+                    "jobTitle": "Coach Craft Java",
+                    "experienceMinYears": 10,
+                    "skills": ["Java"],
+                },
+            ),
+            _result(
+                candidate_id="8378",
+                data={
+                    "firstName": "Antoni",
+                    "lastName": "Galmiche",
+                    "jobTitle": "Java Developer at SGCIB",
+                    "skills": ["Java"],
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # The CIB developer outranks the coach because the LLM ranked domain first.
+    assert result.results[0].id == "8378"
+    assert result.results[0].score > result.results[1].score
+
+
+@pytest.mark.asyncio
 async def test_rank_promotes_candidates_with_matching_evidence() -> None:
     state = GraphState(
         original_query="dev java cib",
@@ -299,6 +400,66 @@ async def test_rank_flags_unverifiable_criteria_as_warning() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rank_domain_phrase_in_title_beats_plain_skill_match() -> None:
+    # Reproduction of the live bug: the domain phrase "Corporate & Investment
+    # Banking" (with "&") must still credit a title that spells it with "and",
+    # so the real domain candidate ranks first — not a plain Java profile.
+    state = GraphState(
+        original_query="java dev in cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"domain": "Corporate & Investment Banking"},
+        ),
+        results=[
+            _result(candidate_id="plain", data={"jobTitle": "Java Developer"}),
+            _result(
+                candidate_id="cib",
+                data={
+                    "jobTitle": (
+                        "Software Engineer at Societe Generale Corporate "
+                        "and Investment Banking - SGCIB"
+                    ),
+                    "skills": ["Java"],
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    assert result.results[0].id == "cib"
+    by_id = {r.id: r.score for r in result.results}
+    assert by_id["cib"] > by_id["plain"]
+    # The domain IS evidenced (in the title) — never "could not verify".
+    assert not any(w.code == "criteria_unverified" for w in result.warnings)
+    assert any(w.code == "criteria_visible" for w in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_rank_generic_csharp_in_banking_not_java_specific() -> None:
+    state = GraphState(
+        original_query="c# dev in banking",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["c#"],
+            constraints={"domain": "banking"},
+        ),
+        results=[
+            _result(candidate_id="plain", data={"jobTitle": "C# Developer"}),
+            _result(
+                candidate_id="bank",
+                data={"jobTitle": "C# Developer at Retail Banking"},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    assert result.results[0].id == "bank"
+
+
+@pytest.mark.asyncio
 async def test_rank_marks_domain_visible_not_unverified_when_in_title() -> None:
     state = GraphState(
         original_query="java dev in cib",
@@ -359,6 +520,75 @@ async def test_rank_marks_criteria_verified_when_in_technical_document() -> None
 
 
 @pytest.mark.asyncio
+async def test_rank_sets_is_full_match_true_when_all_criteria_evidenced() -> None:
+    state = GraphState(
+        original_query="java 10 years cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"domain": "cib", "min_experience_years": "10"},
+        ),
+        results=[
+            _result(
+                candidate_id="full",
+                data={
+                    "jobTitle": "Java Developer at SGCIB",
+                    "experienceMinYears": 11,
+                },
+            )
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    card = result.results[0]
+    assert card.is_full_match is True
+    assert card.unmet_criteria == []
+
+
+@pytest.mark.asyncio
+async def test_rank_sets_is_full_match_false_with_unmet_labels() -> None:
+    state = GraphState(
+        original_query="java 10 years cib",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"domain": "cib", "min_experience_years": "10"},
+        ),
+        results=[
+            # Java only — no CIB, only 3 years.
+            _result(
+                candidate_id="partial",
+                data={"jobTitle": "Java Developer", "experienceMinYears": 3},
+            )
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    card = result.results[0]
+    assert card.is_full_match is False
+    assert "cib" in card.unmet_criteria
+    assert "10+ years" in card.unmet_criteria
+
+
+@pytest.mark.asyncio
+async def test_rank_leaves_is_full_match_none_without_criteria() -> None:
+    state = GraphState(
+        original_query="x",
+        interpreted_intent=InterpretedIntent(objective="find"),
+        results=[
+            _result(candidate_id="1", data={"jobTitle": "Java Developer"})
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    assert result.results[0].is_full_match is None
+    assert result.results[0].unmet_criteria == []
+
+
+@pytest.mark.asyncio
 async def test_rank_prefers_senior_domain_match_over_junior_skill_only() -> None:
     state = GraphState(
         original_query="java dev 10 years cib",
@@ -371,14 +601,14 @@ async def test_rank_prefers_senior_domain_match_over_junior_skill_only() -> None
             # Java, but only 3 years and no domain signal.
             _result(
                 candidate_id="junior",
-                data={"jobTitle": "Java Developer", EXPERIENCE_MIN_YEARS_KEY: 3},
+                data={"jobTitle": "Java Developer", "experienceMinYears": 3},
             ),
             # Java + 11 years + CIB (via SGCIB in the title).
             _result(
                 candidate_id="senior",
                 data={
                     "jobTitle": "Java Developer at SGCIB",
-                    EXPERIENCE_MIN_YEARS_KEY: 11,
+                    "experienceMinYears": 11,
                 },
             ),
         ],

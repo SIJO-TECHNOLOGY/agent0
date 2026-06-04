@@ -7,12 +7,15 @@ and Project Manager style queries.
 
 from __future__ import annotations
 
+import pytest
+
 from app.services.search_strategy import (
     Anchors,
     build_recall_passes,
     classify_anchors,
     domain_match_tokens,
     evidence_score,
+    name_match_score,
     safe_keywords,
 )
 
@@ -89,6 +92,59 @@ def test_evidence_score_domain_substring_matches_sgcib() -> None:
     assert score == 1.0
 
 
+def test_skill_multiword_matches_when_all_tokens_present() -> None:
+    # A multi-word term (e.g. a domain phrase that leaked into entities, or
+    # a real multi-word skill) matches when all tokens are present — tolerant
+    # to "&"/"and" and word order.
+    _, hits = evidence_score(
+        "software engineer at corporate and investment banking sgcib",
+        skills=("java", "corporate & investment banking"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:corporate & investment banking" in hits
+    assert "skill:java" not in hits  # java genuinely absent here
+
+
+def test_skill_single_word_substring_still_matches() -> None:
+    _, hits = evidence_score(
+        "javafx developer",
+        skills=("java",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:java" in hits
+
+
+def test_domain_dimension_is_scoped_to_high_signal_text() -> None:
+    # Domain word only in the noisy full haystack (skills blob) -> no credit.
+    _, hits = evidence_score(
+        "java investment banking spring kafka",
+        skills=("java",),
+        domains=("banking",),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+        domain_haystack="java developer",
+    )
+    assert "domain" not in hits
+    # Present in the high-signal domain surface -> credit.
+    _, hits2 = evidence_score(
+        "java developer",
+        skills=("java",),
+        domains=("banking",),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+        domain_haystack="software engineer in banking",
+    )
+    assert "domain" in hits2
+
+
 def test_evidence_score_seniority_below_required_earns_nothing() -> None:
     below, hits = evidence_score(
         "java",
@@ -132,6 +188,143 @@ def test_safe_keywords_strips_boolean_and_parentheses() -> None:
     assert safe_keywords("java AND spring") == "java spring"
     # A simple +term include operator is preserved.
     assert safe_keywords("+java CIB") == "+java CIB"
+
+
+# ---------------------------------------------------------------------------
+# name_match_score — requested name vs candidate name (token recall)
+# ---------------------------------------------------------------------------
+
+
+def test_name_match_exact_is_one_case_insensitive() -> None:
+    assert name_match_score("Taher ben abdallah", "TAHER BEN ABDALLAH") == 1.0
+
+
+def test_name_match_partial_surname_only() -> None:
+    # Shares only "abdallah" of {taher, ben, abdallah}.
+    assert name_match_score("Taher ben abdallah", "Abdallah Khirallah") == pytest.approx(
+        1 / 3
+    )
+
+
+def test_name_match_two_of_three() -> None:
+    assert name_match_score("Taher ben abdallah", "Moatez Ben Abdallah") == pytest.approx(
+        2 / 3
+    )
+
+
+def test_name_match_zero_when_no_overlap_or_empty() -> None:
+    assert name_match_score("Taher ben abdallah", "Jean Dupont") == 0.0
+    assert name_match_score("", "Anyone") == 0.0
+    assert name_match_score("Taher", None) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# evidence_score — name dimension + generic LLM-chosen primary boost
+# ---------------------------------------------------------------------------
+
+
+def _criteria_kwargs() -> dict:
+    """A fixed criteria-only call (no name, no primary)."""
+    return dict(
+        skills=("java",),
+        domains=("cib",),
+        role="developer",
+        candidate_min_years=10,
+        required_min_years=10,
+    )
+
+
+def test_evidence_score_unchanged_without_name_or_priority() -> None:
+    # No-regression guard: with requested_name=None and priority=None the score
+    # equals the criteria-only call (new params are inert by default).
+    hay = "java developer at sgcib"
+    base, base_hits = evidence_score(hay, **_criteria_kwargs())
+    same, same_hits = evidence_score(
+        hay, **_criteria_kwargs(), requested_name=None, candidate_name=None, priority=None
+    )
+    assert (same, same_hits) == (base, base_hits)
+
+
+def test_evidence_score_name_dimension_exact_match_is_a_hit() -> None:
+    score, hits = evidence_score(
+        "tech lead java backend",
+        skills=("java",),
+        domains=(),
+        role=None,
+        candidate_min_years=10,
+        required_min_years=10,
+        requested_name="Taher ben abdallah",
+        candidate_name="TAHER BEN ABDALLAH",
+    )
+    assert "name" in hits  # exact (all tokens) -> evidenced
+    assert score > 0.0
+
+
+def test_evidence_score_partial_name_is_not_a_hit() -> None:
+    _score, hits = evidence_score(
+        "java developer",
+        skills=("java",),
+        domains=(),
+        role=None,
+        candidate_min_years=10,
+        required_min_years=10,
+        requested_name="Taher ben abdallah",
+        candidate_name="Abdallah Khirallah",
+    )
+    assert "name" not in hits  # only a shared surname
+
+
+def test_priority_ordering_is_generic_over_any_dimension() -> None:
+    # Two candidates: A evidences the skill only, B the domain only. Whichever
+    # dimension the LLM ranks higher should win — proving the ordering is
+    # generic, not name-specific.
+    a_hay = "java engineer"  # skill yes, domain no
+    b_hay = "consultant at sgcib"  # domain yes, skill no
+    kw = dict(skills=("java",), domains=("cib",), role=None,
+              candidate_min_years=None, required_min_years=None)
+
+    a_skill, _ = evidence_score(a_hay, **kw, priority=("skill", "domain"))
+    b_skill, _ = evidence_score(b_hay, **kw, priority=("skill", "domain"))
+    assert a_skill > b_skill  # skill ranked first -> skill candidate wins
+
+    a_domain, _ = evidence_score(a_hay, **kw, priority=("domain", "skill"))
+    b_domain, _ = evidence_score(b_hay, **kw, priority=("domain", "skill"))
+    assert b_domain > a_domain  # domain ranked first -> domain candidate wins
+
+
+def test_priority_lifts_exact_name_over_perfect_criteria() -> None:
+    # The Taher case, at the scoring level: exact-name + Java + 10y outscores a
+    # look-alike with perfect criteria once the LLM ranks name first.
+    kw = dict(skills=("java",), domains=(), role="developer",
+              candidate_min_years=10, required_min_years=10)
+    priority = ("name", "skill", "seniority", "role")
+    taher, _ = evidence_score(
+        "tech lead java backend", **kw,
+        requested_name="Taher ben abdallah", candidate_name="TAHER BEN ABDALLAH",
+        priority=priority,
+    )
+    stranger, _ = evidence_score(
+        "java developer", **kw,
+        requested_name="Taher ben abdallah", candidate_name="Abdallah Khirallah",
+        priority=priority,
+    )
+    assert taher > stranger
+
+
+def test_priority_demotes_partial_match_coach_below_domain_dev() -> None:
+    # The JEROME case: a java+seniority "coach" (no domain/role) must rank below
+    # a java+CIB developer once the LLM ranks domain/role above seniority.
+    kw = dict(skills=("java",), domains=("cib",), role="developer")
+    priority = ("domain", "role", "skill", "seniority")
+    coach, _ = evidence_score(
+        "coach craft java", **kw,
+        candidate_min_years=10, required_min_years=10, priority=priority,
+    )  # java + 10y, no CIB, not a dev
+    cib_dev, _ = evidence_score(
+        "java developer at sgcib", **kw,
+        candidate_min_years=10, required_min_years=10, priority=priority,
+    )  # java + CIB + dev + 10y
+    assert cib_dev > coach
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +391,36 @@ def test_anchors_project_manager_finance() -> None:
     assert anchors.domains == ("finance",)
 
 
+def test_anchors_capture_person_name_without_polluting_domains() -> None:
+    anchors = classify_anchors(
+        ["Java"],
+        {"role": "developer", "min_experience_years": "10"},
+        skill_labels={"java"},
+        name="Taher ben abdallah",
+    )
+    assert anchors.name == "Taher ben abdallah"
+    # The name must NOT leak into skills/role/domains (it would skew ranking).
+    assert anchors.skills == ("Java",)
+    assert anchors.role == "developer"
+    assert anchors.domains == ()
+    # Skill stays the primary keyword anchor; the name is a separate first pass.
+    assert anchors.primary == "Java"
+    assert anchors.is_empty() is False
+
+
+def test_anchors_name_only_is_not_empty() -> None:
+    anchors = classify_anchors([], {}, skill_labels=set(), name="Jane Doe")
+    assert anchors.name == "Jane Doe"
+    assert anchors.is_empty() is False
+    # No skill/role/domain -> primary is None, but the ladder still has the name.
+    assert anchors.primary is None
+
+
+def test_anchors_blank_name_is_ignored() -> None:
+    anchors = classify_anchors(["Java"], {}, skill_labels={"java"}, name="   ")
+    assert anchors.name is None
+
+
 # ---------------------------------------------------------------------------
 # build_recall_passes — focused → broaden, drops filters, no boolean text
 # ---------------------------------------------------------------------------
@@ -229,6 +452,36 @@ def test_ladder_is_keyword_only_and_recall_first() -> None:
     for p in passes:
         kw = str(p.inputs.get("keywords", ""))
         assert " OR " not in kw and "(" not in kw and ")" not in kw
+
+
+def test_ladder_searches_name_first_when_present() -> None:
+    anchors = Anchors(
+        skills=("java",), role="developer", domains=("cib",), name="Taher ben abdallah"
+    )
+    passes = build_recall_passes(anchors, schema_fields=_SCHEMA_FIELDS)
+
+    # Pass 0 is the name — strongest anchor, not relaxed, full-text resumeTd.
+    assert passes[0].label == "name"
+    assert passes[0].relaxed is False
+    assert passes[0].inputs["keywords"] == "Taher ben abdallah"
+    assert passes[0].inputs["keywordsType"] == "resumeTd"
+
+    # The skill/role/domain ladder still follows as the labeled relaxation,
+    # and the skill primary slot is unchanged (no skills[0] dropped).
+    assert any(
+        p.label == "primary" and p.inputs.get("keywords") == "java" for p in passes
+    )
+    assert any(p.inputs.get("keywords") == "developer" for p in passes)
+    assert any(p.inputs.get("keywords") == "cib" for p in passes)
+
+
+def test_ladder_without_name_is_unchanged() -> None:
+    # Regression guard: a query with no person name produces the same first
+    # pass as before (skill primary), never a "name" pass.
+    anchors = Anchors(skills=("java",), role="developer", domains=("cib",))
+    passes = build_recall_passes(anchors, schema_fields=_SCHEMA_FIELDS)
+    assert passes[0].label == "primary"
+    assert all(p.label != "name" for p in passes)
 
 
 def test_ladder_is_bounded() -> None:

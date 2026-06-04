@@ -87,6 +87,9 @@ class _ExtraRenderingFormatter(logging.Formatter):
 
 def _configure_logging(level: str, *, verbose: bool = False) -> None:
     fmt = "%(asctime)s %(levelname)s %(name)s %(message)s"
+    # Verbose mode renders the structured extra={} payloads as JSON on every
+    # app log line; default mode keeps lines plain (the readable decision chain
+    # comes from the agent.trace logger instead).
     formatter: logging.Formatter = (
         _ExtraRenderingFormatter(fmt) if verbose else logging.Formatter(fmt)
     )
@@ -95,6 +98,7 @@ def _configure_logging(level: str, *, verbose: bool = False) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    # Third-party noise is quieted in every mode.
     for noisy in _NOISY_LOGGERS:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 

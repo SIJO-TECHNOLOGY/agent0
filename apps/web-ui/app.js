@@ -609,7 +609,7 @@ function renderMessage(role, text) {
   message.append(buildMessageHead(role), body);
   elements.messages.appendChild(message);
   setUiState(role === "error" ? "error" : "active");
-  if (role === "user") scrollToBottom();
+  scrollToBottom();
 
   return message;
 }
@@ -686,7 +686,7 @@ function renderCandidateDetail(candidate) {
   const meta = document.createElement("div");
   meta.className = "candidate-meta";
   meta.append(
-    createMetaItem(t("candidate.meta.experience"), formatExperience(candidate.experience_years, candidate.experience_label)),
+    createMetaItem(t("candidate.meta.experience"), formatExperience(candidate.experience_years)),
     createMetaItem(t("candidate.meta.location"), candidate.location || t("candidate.fallback_location")),
     createMetaItem(t("candidate.meta.availability"), candidate.availability || t("candidate.fallback_availability")),
     createMetaItem(t("candidate.meta.contract"), formatList(candidate.contract_preferences)),
@@ -710,6 +710,7 @@ function renderCandidateDetail(candidate) {
   );
   elements.messages.appendChild(detail);
   setUiState("active");
+  scrollToBottom();
 }
 
 function renderTechnicalSummary(ui) {
@@ -761,6 +762,7 @@ function renderTechnicalSummary(ui) {
 
   elements.messages.appendChild(card);
   setUiState("active");
+  scrollToBottom();
 }
 
 function renderClarificationForm(response) {
@@ -802,6 +804,7 @@ function renderClarificationForm(response) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
+  scrollToBottom();
 }
 
 async function submitClarification(form, sourceResponse) {
@@ -860,6 +863,7 @@ function renderCandidateCards(candidates, ui = {}) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
+  scrollToBottom();
 
   return wrapper;
 }
@@ -940,7 +944,7 @@ function renderCandidateCard(candidate) {
   const meta = document.createElement("div");
   meta.className = "candidate-meta";
   meta.append(
-    createMetaItem(t("candidate.meta.experience"), formatExperience(candidate.experience_years, candidate.experience_label)),
+    createMetaItem(t("candidate.meta.experience"), formatExperience(candidate.experience_years)),
     createMetaItem(t("candidate.meta.location"), candidate.location || t("candidate.fallback_location")),
     createMetaItem(t("candidate.meta.contract"), formatList(candidate.contract_preferences)),
     createMetaItem(t("candidate.meta.availability"), candidate.availability || t("candidate.fallback_availability")),
@@ -1001,7 +1005,7 @@ function openCandidateDrawer(candidate) {
   elements.drawerName.textContent = candidate.full_name || t("candidate.no_name");
   elements.drawerTitle.textContent = candidate.title || t("candidate.fallback_title");
   elements.drawerSummary.textContent = candidate.summary || t("candidate.no_summary");
-  elements.drawerExperience.textContent = formatExperience(candidate.experience_years, candidate.experience_label);
+  elements.drawerExperience.textContent = formatExperience(candidate.experience_years);
   elements.drawerLocation.textContent = candidate.location || t("candidate.fallback_location");
   elements.drawerAvailability.textContent = candidate.availability || t("candidate.fallback_availability");
   elements.drawerMatch.textContent = formatMatchScore(candidate.match_score);
@@ -1013,13 +1017,7 @@ function openCandidateDrawer(candidate) {
     renderDrawerSection(t("candidate.sections.ai_eval"), renderAiEvaluation(candidate)),
     renderDrawerSection(t("candidate.sections.experiences"), renderExperiences(candidate.experiences, 5)),
     renderDrawerSection(t("candidate.sections.technical"), renderTechnicalNotes(candidate)),
-    renderDrawerSection(t("candidate.sections.diplomas"), renderSimpleTagList(candidate.diplomas)),
-    renderDrawerSection(t("candidate.sections.expertise_areas"), renderSimpleTagList(candidate.expertise_areas)),
-    renderDrawerSection(t("candidate.sections.activity_areas"), renderSimpleTagList(candidate.activity_areas)),
-    renderDrawerSection(t("candidate.sections.tools"), renderToolsWithLevel(candidate.tools)),
-    renderDrawerSection(t("candidate.sections.languages"), renderLanguagesWithLevel(candidate.languages)),
     renderDrawerSection(t("candidate.sections.keywords"), renderHighlightTags(candidate.highlights)),
-    renderDrawerSection(t("candidate.sections.meta"), renderCandidateMeta(candidate)),
   );
   elements.drawerBoondBtn.hidden = !FEATURES.boond_redirect || !candidate.boond_url;
   elements.drawerBoondBtn.disabled = !FEATURES.boond_redirect || !candidate.boond_url;
@@ -1118,6 +1116,7 @@ function renderLoading() {
   message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
+  scrollToBottom();
 
   return message;
 }
@@ -1139,6 +1138,7 @@ function renderThinking() {
   message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
+  scrollToBottom();
 
   let currentStep = null;
 
@@ -1151,7 +1151,7 @@ function renderThinking() {
 
   return {
     element: message,
-    addStep(text, detail = "") {
+    addStep(text, detail) {
       if (!text) return;
       completeStep(currentStep);
 
@@ -1167,14 +1167,17 @@ function renderThinking() {
       stepText.textContent = text;
 
       li.append(icon, stepText);
-      if (typeof detail === "string" && detail.trim()) {
-        const detailText = document.createElement("p");
-        detailText.className = "step-detail";
-        detailText.textContent = detail.trim();
-        li.appendChild(detailText);
+      // Optional dynamic detail (the agent's actual reasoning) under the
+      // localized step label — secondary, muted.
+      if (detail) {
+        const stepDetail = document.createElement("span");
+        stepDetail.className = "step-detail";
+        stepDetail.textContent = detail;
+        li.append(stepDetail);
       }
       steps.appendChild(li);
       currentStep = { li, icon };
+      scrollToBottom();
     },
     finish() {
       completeStep(currentStep);
@@ -1186,6 +1189,20 @@ function renderThinking() {
   };
 }
 
+function clip(text, max = 160) {
+  if (!text) return "";
+  const flat = String(text).replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+function planSearchReason(data) {
+  const steps = Array.isArray(data?.plan) ? data.plan : [];
+  const search = steps.find(
+    (s) => (s?.tool_name || s?.tool) === "searchCandidates",
+  );
+  return clip(search?.reason);
+}
+
 function stepDescriptorForEvent(type, data) {
   const label = (key) => t(`stream.step_labels.${key}`);
 
@@ -1195,30 +1212,26 @@ function stepDescriptorForEvent(type, data) {
 
     case "plan_created":
     case "replan_created":
+      // Surface the LLM's actual search intent as a secondary detail line.
+      return { key: "plan", label: label("plan"), detail: planSearchReason(data) };
+
+    case "replan_requested":
+      // The headline sync: the LLM's observe-then-replan decision, with its
+      // reason. `decided_by` is "llm".
       return {
-        key: "plan",
-        label: label("plan"),
-        detail: firstText(data?.goal, data?.reason, data?.guidance),
+        key: "replan",
+        label: label("replan"),
+        detail: clip(data?.reason || data?.guidance),
       };
 
     case "plan_validated":
       return { key: "plan_validated", label: label("plan_validated") };
-
-    case "replan_requested":
-      return {
-        key: "replan",
-        label: label("replan"),
-        detail: firstText(data?.reason, data?.guidance),
-        startsNewPhase: true,
-      };
 
     case "tool_call_started": {
       const tool = String(data?.tool || "");
       if (tool === "searchCandidates") return { key: "searching", label: label("searching") };
       if (tool === "getCandidateTechnicalDocument") return { key: "reading_docs", label: label("reading_docs") };
       if (tool === "getCandidateDetail") return { key: "reading_details", label: label("reading_details") };
-      if (tool === "getCandidateCV") return { key: "reading_cv", label: label("reading_cv") };
-      if (tool === "getCandidateAdministrative") return { key: "reading_admin", label: label("reading_admin") };
       return { key: "tool", label: label("tool") };
     }
 
@@ -1239,17 +1252,10 @@ function stepDescriptorForEvent(type, data) {
   }
 }
 
-function firstText(...values) {
-  const found = values.find((value) => typeof value === "string" && value.trim());
-  if (!found) return "";
-  const text = found.trim();
-  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
-}
-
 async function runSearchStream(text, thinking) {
   let finalResponse = null;
   let failure = null;
-  let phase = 0;
+  let round = 0;
   const shownSteps = new Set();
 
   await streamSearch(
@@ -1269,16 +1275,16 @@ async function runSearchStream(text, thinking) {
         return;
       }
 
+      // A replan opens a new round, so the second pass's steps show again
+      // instead of being de-duped away (which made the bubble look frozen).
+      if (type === "replan_requested") round += 1;
+
       const step = stepDescriptorForEvent(type, data);
-      if (step) {
-        const stepKey = `${phase}:${step.key}`;
-        if (!shownSteps.has(stepKey)) {
-          shownSteps.add(stepKey);
-          thinking.addStep(step.label, step.detail);
-        }
-        if (step.startsNewPhase) {
-          phase += 1;
-        }
+      if (!step) return;
+      const key = `${round}:${step.key}`;
+      if (!shownSteps.has(key)) {
+        shownSteps.add(key);
+        thinking.addStep(step.label, step.detail);
       }
     },
     { signal: state.abortController.signal },
@@ -1698,85 +1704,17 @@ function isAvailableSoon(candidate) {
   return availability.includes("disponible") || availability.includes("immédiat") || availability.includes("immediat");
 }
 
-function renderSimpleTagList(items) {
-  const normalized = Array.isArray(items) ? items.filter(Boolean) : [];
-  if (!normalized.length) return emptyFragment();
-
-  const wrapper = document.createElement("div");
-  wrapper.className = "highlight-tags";
-  normalized.forEach((item) => {
-    const tag = document.createElement("span");
-    tag.textContent = item;
-    wrapper.appendChild(tag);
-  });
-  return wrapper;
-}
-
-function renderToolsWithLevel(tools) {
-  const normalized = Array.isArray(tools) ? tools.filter(Boolean) : [];
-  if (!normalized.length) return emptyFragment();
-
-  const list = document.createElement("ul");
-  list.className = "drawer-tool-list";
-  normalized.forEach((tool) => {
-    const item = document.createElement("li");
-    const name = document.createElement("span");
-    name.textContent = tool.name || t("technical.tool_fallback");
-    const level = document.createElement("strong");
-    level.textContent = tool.level != null ? `${tool.level}/5` : t("candidate.tool_level_unknown");
-    item.append(name, level);
-    list.appendChild(item);
-  });
-  return list;
-}
-
-function renderLanguagesWithLevel(languages) {
-  const normalized = Array.isArray(languages) ? languages.filter(Boolean) : [];
-  if (!normalized.length) return emptyFragment();
-
-  const list = document.createElement("ul");
-  list.className = "drawer-tool-list";
-  normalized.forEach((lang) => {
-    const item = document.createElement("li");
-    const name = document.createElement("span");
-    name.textContent = lang.language || lang.name || lang;
-    const level = document.createElement("strong");
-    level.textContent = lang.level || "";
-    if (level.textContent) item.append(name, level);
-    else item.appendChild(name);
-    list.appendChild(item);
-  });
-  return list;
-}
-
-function renderCandidateMeta(candidate) {
-  const parts = [];
-  if (candidate.state_label) parts.push(`${t("candidate.meta.state")} : ${candidate.state_label}`);
-  if (candidate.source) parts.push(`${t("candidate.meta.source")} : ${candidate.source}`);
-  if (candidate.last_update) parts.push(`${t("candidate.meta.last_update")} : ${candidate.last_update}`);
-  if (!parts.length) return emptyFragment();
-
-  const dl = document.createElement("dl");
-  dl.className = "drawer-details";
-  parts.forEach((text) => {
-    const div = document.createElement("div");
-    div.textContent = text;
-    dl.appendChild(div);
-  });
-  return dl;
-}
-
 function emptyFragment() {
   return document.createDocumentFragment();
 }
 
-function formatExperience(years, label) {
-  if (years !== null && years !== undefined && years !== "") {
-    const value = Number(years);
-    if (!Number.isNaN(value)) return tCount("candidate.years", value, { count: value });
-  }
-  if (label && typeof label === "string" && label.trim()) return label.trim();
-  return t("candidate.not_specified_f");
+function formatExperience(years) {
+  if (years === null || years === undefined || years === "") return t("candidate.not_specified_f");
+
+  const value = Number(years);
+  if (Number.isNaN(value)) return String(years);
+
+  return tCount("candidate.years", value, { count: value });
 }
 
 function formatMatchScore(score) {

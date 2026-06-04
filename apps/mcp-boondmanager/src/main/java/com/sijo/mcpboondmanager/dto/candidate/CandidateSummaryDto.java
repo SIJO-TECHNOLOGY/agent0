@@ -4,6 +4,20 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
 
+/**
+ * Candidate search result summary.
+ *
+ * <p>{@code availability} is a resolved, human-readable {@link String}: the {@code setting.availability}
+ * dictionary label for a relative band (e.g. "Immédiate", "3 mois"), the {@code yyyy-MM-dd} date for a
+ * candidate available from a specific date, or {@code null} when not specified. The raw BoondManager id
+ * is resolved via {@code com.sijo.mcpboondmanager.service.AvailabilityDictionaryResolver}.
+ *
+ * <p>{@code experience} is BoondManager's raw {@code setting.experience} level id (kept for
+ * filtering/sorting). The {@code experienceMinYears}/{@code experienceOpenEnded}/
+ * {@code experienceSpecified} fields are the language-neutral resolution of that id (years parsed from
+ * the dictionary label). {@code experienceLabelRaw} is BoondManager's localized label and is
+ * <strong>non-authoritative, for debugging only</strong> (not for display or logic).
+ */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record CandidateSummaryDto(
         Integer id,
@@ -18,6 +32,10 @@ public record CandidateSummaryDto(
         String country,
         String title,
         Integer experience,
+        Integer experienceMinYears,
+        boolean experienceOpenEnded,
+        boolean experienceSpecified,
+        String experienceLabelRaw,
         String skills,
         List<String> diplomas,
         List<String> expertiseAreas,

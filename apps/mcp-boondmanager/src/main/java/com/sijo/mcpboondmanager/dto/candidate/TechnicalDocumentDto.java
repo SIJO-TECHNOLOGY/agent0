@@ -9,6 +9,13 @@ import java.util.List;
  *
  * <p>{@code id} is the id of the candidate the document belongs to (the endpoint is candidate
  * scoped); {@code tdId} is the technical document's own identifier.
+ *
+ * <p>{@code experience} is BoondManager's raw {@code setting.experience} level id (kept for
+ * filtering/sorting). The {@code experienceMinYears}/{@code experienceOpenEnded}/
+ * {@code experienceSpecified} fields are the language-neutral resolution of that id (years parsed from
+ * the dictionary label) so consumers don't need to know BoondManager's dictionary. {@code
+ * experienceLabelRaw} is BoondManager's localized label and is <strong>non-authoritative, for debugging
+ * only</strong> (not for display or logic).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record TechnicalDocumentDto(
@@ -18,6 +25,10 @@ public record TechnicalDocumentDto(
         String description,
         String summary,
         Integer experience,
+        Integer experienceMinYears,
+        boolean experienceOpenEnded,
+        boolean experienceSpecified,
+        String experienceLabelRaw,
         String training,
         List<String> diplomas,
         String skills,

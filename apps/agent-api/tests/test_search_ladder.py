@@ -14,7 +14,7 @@ from app.mcp.mock_client import MockMcpClient
 from app.models.graph_state import GraphState
 from app.models.intent import InterpretedIntent, LlmToolPlan, PlannedToolCall
 from app.models.tools import McpTool
-from app.services.search_service import _base_message
+from app.services.search_service import _base_message, _build_message
 
 
 _SEARCH_TOOL = McpTool(
@@ -144,6 +144,97 @@ async def test_ladder_reports_no_results_after_fallback() -> None:
     message = _base_message([], result)
     assert "even after broader fallback searches" in message
     assert message != "No candidates matched your search."
+
+
+@pytest.mark.asyncio
+async def test_ladder_searches_named_person_first_and_succeeds() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def search_handler(inputs: dict[str, object]):
+        captured.append(dict(inputs))
+        # The name pass finds the person; any criteria pass would also return
+        # data, but the ladder must stop at the successful name pass.
+        if inputs.get("keywords") == "Taher ben abdallah":
+            return [
+                {
+                    "id": 40706,
+                    "attributes": {
+                        "jobTitle": "Tech Lead Java backend",
+                        "skills": "Java",
+                    },
+                }
+            ]
+        return [{"id": 999, "attributes": {"jobTitle": "Other Java dev"}}]
+
+    client = MockMcpClient(
+        tools=[_SEARCH_TOOL, _DICTIONARY_TOOL],
+        handlers={"searchCandidates": search_handler, "getDictionary": _dict_handler},
+    )
+    state = GraphState(
+        original_query="10 years java developer named Taher ben abdallah",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={
+                "role": "developer",
+                "min_experience_years": "10",
+                "name": "Taher ben abdallah",
+            },
+        ),
+        available_tools=[_SEARCH_TOOL, _DICTIONARY_TOOL],
+        llm_plan=_search_plan(),
+    )
+
+    result = await execute_llm_plan(state, _ctx(client))
+
+    # The very first searchCandidates call is the name pass.
+    assert captured[0]["keywords"] == "Taher ben abdallah"
+    assert captured[0]["keywordsType"] == "resumeTd"
+    # The named candidate is returned and no honest-miss warning fires.
+    assert result.results and result.results[0].id == "40706"
+    assert not any(w.code == "name_not_found" for w in result.warnings)
+    assert not any(w.code == "search_broadened" for w in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_ladder_labels_name_miss_then_relaxes_to_criteria() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def search_handler(inputs: dict[str, object]):
+        captured.append(dict(inputs))
+        # No one by that name; the criteria ladder (java) recovers candidates.
+        if inputs.get("keywords") == "zzzz qqqq":
+            return []
+        return [{"id": 1, "attributes": {"jobTitle": "Java Engineer"}}]
+
+    client = MockMcpClient(
+        tools=[_SEARCH_TOOL, _DICTIONARY_TOOL],
+        handlers={"searchCandidates": search_handler, "getDictionary": _dict_handler},
+    )
+    state = GraphState(
+        original_query="java developer named zzzz qqqq",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "developer", "name": "zzzz qqqq"},
+        ),
+        available_tools=[_SEARCH_TOOL, _DICTIONARY_TOOL],
+        llm_plan=_search_plan(),
+    )
+
+    result = await execute_llm_plan(state, _ctx(client))
+
+    # Name searched first, returned nothing, then the criteria ladder ran.
+    assert captured[0]["keywords"] == "zzzz qqqq"
+    assert result.results and result.results[0].id == "1"
+    # Honest, labeled fallback — and NOT the generic "search_broadened".
+    miss = next((w for w in result.warnings if w.code == "name_not_found"), None)
+    assert miss is not None
+    assert "zzzz qqqq" in miss.message
+    assert not any(w.code == "search_broadened" for w in result.warnings)
+    # The user-facing message leads with the honest miss note.
+    message = _build_message([], result)
+    assert "zzzz qqqq" in message
 
 
 @pytest.mark.asyncio
