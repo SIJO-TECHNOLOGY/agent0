@@ -42,8 +42,20 @@ Out of scope:
 - REST API calls to a FastAPI backend
 - Node.js for local development scripts
 - Vite for development server and production build
+- `i18n.js` — lightweight custom i18n engine (FR/EN)
 
 No React, Vue, Angular, or frontend framework should be introduced.
+
+## Internationalisation
+
+UI strings live in `locales/fr.js` (default) and `locales/en.js`.  
+Use `t("key")` / `tCount("key", n)` — never hardcode strings in JS or HTML.  
+Backend text (candidate data, error messages from the server) is **never** translated.
+
+## Scroll Behaviour
+
+The page auto-scrolls only when the **user** sends a message.  
+Assistant responses, candidate cards, and loading indicators do **not** trigger auto-scroll — the user stays at their reading position.
 
 ## Key Constraints
 

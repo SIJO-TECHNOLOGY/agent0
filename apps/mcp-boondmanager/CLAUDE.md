@@ -112,9 +112,10 @@ Do not implement:
 | `searchCandidates` | `CandidateSearchTool` | Searches candidates with a rich set of optional filters: keyword search (with `keywordsType`), candidate states/types, availability/contract/experience, expertise & activity areas, mobility, languages, tools, evaluations, sources, profile completeness (`shields`), geographic search (location/coordinates + radius), date-range filters, sorting, and response-column selection. Returns a paginated list of profiles. See the parameter table below. |
 | `getCandidateDetail` | `CandidateDetailTool` | Retrieves the detailed information profile of a candidate by ID (BoondManager `GET /candidates/{id}/information`): contact details (emails, phones, fax), civility, date of birth, postal address, pipeline state, desired contract type, availability, mobility zones, sourcing origin, global evaluation, information notes, and creation/update metadata. BoondManager does not expose salary/TJM on this endpoint. Call after `searchCandidates`. |
 | `getCandidateTechnicalDocument` | `CandidateTechnicalDocTool` | Retrieves the technical document (CV / skills profile) of a candidate (BoondManager `GET /candidates/{id}/technical-data`): title, skills text, experience level, training/diploma level, diplomas, expertise domains, activity sectors, tools with proficiency level, languages with level, and summary. The `id` field is the candidate id and `tdId` is the technical-document id. Call after `getCandidateDetail` for deep skills analysis. |
+| `getCandidateCV` | `CandidateCvTool` | Downloads and extracts raw text from the candidate CV/resume PDF attached to BoondManager. Returns `candidateId`, `fileName`, `hasContent`, and `extractedText`. Use after `searchCandidates` when skills, project history, or experience evidence must be verified from the real CV. The Agent API uses `extractedText` to generate a short LLM-backed summary. |
 
 **Call order enforced by descriptions:**
-`getDictionary` → `searchCandidates` → `getCandidateDetail` → `getCandidateTechnicalDocument`
+`getDictionary` → `searchCandidates` → `getCandidateDetail` → `getCandidateTechnicalDocument` → `getCandidateCV`
 
 #### `searchCandidates` — Parameters
 

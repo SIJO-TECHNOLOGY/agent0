@@ -91,12 +91,43 @@ When `DEV_MODE = false`:
 - Candidate search messages are sent to `POST /api/search/stream`.
 - Clarification/legacy chat interactions may still use `POST /api/chat`.
 
+## Internationalisation (i18n)
+
+The UI supports French (default) and English. Language is detected from the
+browser, persisted in `localStorage`, and switchable via the sidebar settings
+menu.
+
+- `i18n.js` — lightweight i18n engine: `t()`, `tCount()`, `formatDate()`,
+  `setLanguage()`, `getLanguage()`.
+- `locales/fr.js` — French dictionary (default / fallback).
+- `locales/en.js` — English dictionary.
+
+Backend-generated text (candidate names, summaries, BoondManager data) is never
+translated — only UI chrome strings live in locale files.
+
+## Candidate Experience Display
+
+BoondManager stores experience as an integer level ID (e.g. `3`), not a year
+count. The backend resolves it to a human-readable label (e.g. `"3-5 ans"`) in
+`experience_label`. The frontend displays `experience_years` when available,
+falling back to `experience_label` when only the level label exists.
+
+## Candidate Drawer ("Voir plus")
+
+Clicking **Voir plus** on a candidate card opens a side drawer with enriched
+fields not shown on the card: diplomas, expertise areas, activity sectors, tools
+with levels, languages with levels, statut, source, and last update.
+
 ## Main Files
 
 ```txt
-frontend/
+apps/web-ui/
 ├── assets/
-│   └── logo.png
+│   ├── logo.png
+│   └── sijo.jpg          ← brand logo (favicon + header)
+├── locales/
+│   ├── fr.js             ← French UI strings
+│   └── en.js             ← English UI strings
 ├── docs/
 │   ├── api-contract.md
 │   ├── api-contract-detailed.md
@@ -104,6 +135,7 @@ frontend/
 │   ├── design.md
 │   ├── project-structure.md
 │   └── skills.md
+├── i18n.js               ← i18n engine
 ├── index.html
 ├── style.css
 ├── app.js

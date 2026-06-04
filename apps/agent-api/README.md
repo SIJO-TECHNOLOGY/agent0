@@ -30,7 +30,11 @@ Implemented backend service for the candidate-search POC.
 - Aggregate, deduplicate, rank, and summarize results.
 - Enrich candidates with technical-document and CV data returned by MCP tools.
 - Generate short, natural CV summaries through the configured LLM when parsed CV
-  text is available.
+  text is available (`ResumeSummarizer`).
+- Resolve BoondManager integer IDs (experience level, availability, contract
+  type, mobility, state, tools, languages, activity areas) to human-readable
+  labels via the dictionary, including `experience_label` as a fallback when
+  no numeric year count is available.
 - Normalize BoondManager MCP results into UI-friendly response models.
 - Return `conversation_id`, `message`, and `ui` to the web UI by default.
 
