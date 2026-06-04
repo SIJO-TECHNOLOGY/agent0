@@ -17,3 +17,5 @@ class SearchResult(BaseModel):
     score: float = Field(ge=0.0, le=1.0, default=0.0)
     source_tool: str
     data: dict[str, object] = Field(default_factory=dict)
+    is_full_match: bool | None = None
+    unmet_criteria: list[str] = Field(default_factory=list)

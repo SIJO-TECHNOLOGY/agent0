@@ -17,9 +17,12 @@ from app.models.api import (
 from app.models.graph_state import GraphState
 from app.models.tools import ToolCallStatus
 from app.services.candidate_mapper import candidate_cards_from_results
-from app.services.event_emitter import EventEmitter, NoopEventEmitter
+from app.services.event_emitter import (
+    DecisionTraceEmitter,
+    EventEmitter,
+    NoopEventEmitter,
+)
 from app.services.llm_planner import LlmPlanner
-from app.services.resume_summarizer import ResumeSummarizer
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +37,21 @@ class SearchService:
         max_replan_attempts: int = 1,
         mcp_max_retries: int = 2,
         llm_planner: LlmPlanner | None = None,
-        resume_summarizer: ResumeSummarizer | None = None,
         max_plan_steps: int = DEFAULT_LLM_PLAN_STEPS,
-        boond_base_url: str = "https://ui.boondmanager.com",
+        use_llm_replan: bool = True,
+        replan_skip_score: float = 0.8,
+        agent_trace: bool = False,
+        agent_trace_verbose: bool = False,
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
         self._mcp_max_retries = mcp_max_retries
         self._llm_planner = llm_planner
-        self._resume_summarizer = resume_summarizer
         self._max_plan_steps = max_plan_steps
-        self._boond_base_url = boond_base_url
+        self._use_llm_replan = use_llm_replan
+        self._replan_skip_score = replan_skip_score
+        self._agent_trace = agent_trace
+        self._agent_trace_verbose = agent_trace_verbose
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -58,23 +65,16 @@ class SearchService:
             max_replan_attempts=self._max_replan_attempts,
             mcp_max_retries=self._mcp_max_retries,
             llm_planner=self._llm_planner,
-            resume_summarizer=self._resume_summarizer,
             max_plan_steps=self._max_plan_steps,
+            use_llm_replan=self._use_llm_replan,
+            replan_skip_score=self._replan_skip_score,
             event_emitter=emitter,
             debug_mode=debug_mode,
-            boond_base_url=self._boond_base_url,
         )
 
-    async def search(
-        self,
-        request: SearchRequest,
-        *,
-        conversation_id: str | None = None,
-    ) -> SearchResponse:
+    async def search(self, request: SearchRequest) -> SearchResponse:
         """Non-streaming search. Events are discarded by NoopEventEmitter."""
-        return await self.search_with_events(
-            request, NoopEventEmitter(), conversation_id=conversation_id
-        )
+        return await self.search_with_events(request, NoopEventEmitter())
 
     async def search_with_events(
         self,
@@ -82,7 +82,6 @@ class SearchService:
         emitter: EventEmitter,
         *,
         debug_mode: bool = False,
-        conversation_id: str | None = None,
     ) -> SearchResponse:
         """Run the workflow while emitting progress events to ``emitter``.
 
@@ -90,8 +89,14 @@ class SearchService:
         at the end of a successful run. Failures are raised to the caller
         (the streaming route turns them into ``search_failed`` events).
         """
-        conversation_id = conversation_id or f"conv_{uuid.uuid4().hex}"
+        conversation_id = f"conv_{uuid.uuid4().hex}"
         planner_mode = "llm" if self._llm_planner is not None else "deterministic"
+        # Wrap at the outermost point so the readable decision trace also
+        # captures the search header and final result, not just node events.
+        if self._agent_trace:
+            emitter = DecisionTraceEmitter(
+                emitter, verbose=self._agent_trace_verbose
+            )
         logger.info(
             "search.start",
             extra={
@@ -117,9 +122,7 @@ class SearchService:
         )
         final_state = await run_workflow(initial_state, ctx)
 
-        candidates = candidate_cards_from_results(
-            final_state.results, boond_base_url=self._boond_base_url
-        )
+        candidates = candidate_cards_from_results(final_state.results)
 
         logger.info(
             "search.complete",
@@ -134,12 +137,7 @@ class SearchService:
         response = SearchResponse(
             conversation_id=conversation_id,
             message=_build_message(candidates, final_state),
-            ui=CandidateCardsUI(
-                candidates=candidates,
-                title=_build_ui_title(candidates),
-                subtitle=_build_ui_subtitle(candidates),
-                filters_summary=_build_filters_summary(final_state),
-            ),
+            ui=CandidateCardsUI(candidates=candidates),
         )
         await emitter.emit("final_response", response.model_dump())
         return response
@@ -151,48 +149,12 @@ class SearchService:
 _LIMITED_SEARCH_WARNING_CODES: frozenset[str] = frozenset(
     {
         "experience_filter_unmapped",
+        "criteria_unverified",
+        "criteria_visible",
         "filter_unresolved",
+        "search_broadened",
     }
 )
-
-
-def _build_ui_title(candidates: list[CandidateCard]) -> str | None:
-    count = len(candidates)
-    if count == 0:
-        return None
-    plural = "s" if count > 1 else ""
-    return f"{count} profil{plural} candidat{plural} trouvé{plural}"
-
-
-def _build_ui_subtitle(candidates: list[CandidateCard]) -> str | None:
-    available = sum(
-        1
-        for c in candidates
-        if c.availability
-        and "disponible" in c.availability.lower()
-        and "préavis" not in c.availability.lower()
-        and "preavis" not in c.availability.lower()
-    )
-    if available == 0:
-        return None
-    plural = "s" if available > 1 else ""
-    return f"{available} profil{plural} disponible{plural} rapidement"
-
-
-def _build_filters_summary(final_state: GraphState) -> list[str]:
-    """Surface the interpreted search criteria as human-readable filter tags."""
-    if final_state.interpreted_intent is None:
-        return []
-    intent = final_state.interpreted_intent
-    tags: list[str] = []
-    for entity in intent.entities:
-        if isinstance(entity, str) and entity.strip():
-            tags.append(entity.strip())
-    if "seniority" in intent.constraints:
-        tags.append(intent.constraints["seniority"])
-    if "min_experience_years" in intent.constraints:
-        tags.append(f"{intent.constraints['min_experience_years']}+ ans d'expérience")
-    return tags[:6]
 
 
 def _build_message(
@@ -207,9 +169,20 @@ def _build_message(
     """
     base = _base_message(candidates, final_state)
     hint = _limited_search_hint(final_state)
-    if hint:
-        return f"{base} {hint}"
-    return base
+    message = f"{base} {hint}" if hint else base
+    # A named-person miss is the most important context — lead with it so the
+    # user knows these are fallback results, not the person they asked for.
+    name_note = next(
+        (
+            w.message
+            for w in final_state.warnings
+            if w.code == "name_not_found" and w.message
+        ),
+        None,
+    )
+    if name_note:
+        return f"{name_note} {message}"
+    return message
 
 
 # Tools whose execution counts as "we actually ran a candidate search"
@@ -228,55 +201,58 @@ def _base_message(
     if count == 0:
         if _has_warning(final_state, "clarification_needed"):
             return (
-                "Veuillez affiner votre recherche avec au moins un critère "
-                "(compétence, technologie, rôle, localisation ou entreprise)."
+                "Please refine your search with at least one keyword "
+                "(skill, technology, role, location, or company)."
             )
         if not final_state.tool_calls:
             return (
-                "La recherche n'a pas pu être lancée : aucun outil disponible "
-                "ne correspond à cette requête."
+                "We couldn't run a candidate search for that query — no "
+                "matching MCP tool was available."
             )
         if not _ran_candidate_search(final_state):
             return (
-                "La recherche de candidats n'a pas abouti. Veuillez affiner "
-                "votre requête et réessayer."
+                "The candidate search did not complete. Please refine "
+                "your query and try again."
             )
         if _candidate_search_failed(final_state):
             return (
-                "La recherche n'a pas pu aboutir en raison d'une erreur technique. "
-                "Veuillez réessayer ou reformuler votre requête."
+                "The candidate search could not be completed because a "
+                "search tool failed. Please try again or adjust your query."
             )
         if final_state.results:
             return (
-                "Des enregistrements ont été trouvés, mais n'ont pas pu être "
-                "normalisés en fiches candidats."
+                "Candidate records were returned, but they could not be "
+                "normalized into displayable candidate cards. Check the "
+                "stream's results_normalized event for drop reasons."
             )
         if _has_warning(final_state, "no_results_after_fallback"):
             return (
-                "Aucun candidat trouvé, même après une recherche élargie. "
-                "Essayez d'autres termes ou simplifiez votre requête."
+                "No candidates matched your search, even after broader "
+                "fallback searches. Try different or fewer terms."
             )
-        return "Aucun candidat ne correspond à votre recherche."
+        return "No candidates matched your search."
     unverified = (
         _has_warning(final_state, "criteria_unverified")
         or _has_warning(final_state, "criteria_visible")
         or _has_warning(final_state, "search_broadened")
+        or _has_warning(final_state, "name_not_found")
     )
     if count == 1:
         name = candidates[0].full_name or candidates[0].id
         if unverified:
             return (
-                f"J'ai trouvé un profil proche de votre recherche : {name}. "
-                "Certains points restent à confirmer dans le dossier candidat."
+                f"I found 1 broad candidate result ({name}), but the strict "
+                "criteria could not be fully verified. Showing the closest "
+                "match ranked by available evidence."
             )
-        return f"J'ai trouvé un profil qui correspond à votre recherche : {name}."
+        return f"Found 1 candidate matching your search: {name}."
     if unverified:
         return (
-            f"J'ai trouvé {count} profils proches de votre recherche. "
-            "Je les ai classés selon les informations disponibles ; certains points "
-            "restent à confirmer dans les dossiers candidats."
+            f"I found {count} broad candidate results, but the strict "
+            "criteria could not be fully verified. Showing the closest "
+            "matches ranked by available evidence."
         )
-    return f"J'ai trouvé {count} profils correspondant à votre recherche."
+    return f"I found {count} candidates matching your search."
 
 
 def _has_warning(final_state: GraphState, code: str) -> bool:
@@ -306,11 +282,11 @@ def _limited_search_hint(final_state: GraphState) -> str | None:
         return None
     clauses: list[str] = []
     if any(w.code == "search_broadened" for w in triggered):
-        clauses.append("recherche élargie pour trouver des candidats")
+        clauses.append("search was broadened to find candidates")
     if any(w.code == "experience_filter_unmapped" for w in triggered):
-        clauses.append("filtre d'expérience non appliqué")
+        clauses.append("experience filter could not be applied")
     if any(w.code == "filter_unresolved" for w in triggered):
-        clauses.append("certains filtres n'ont pas pu être appliqués")
+        clauses.append("some planned filters could not be applied")
     unverified = next(
         (w for w in triggered if w.code == "criteria_unverified"), None
     )

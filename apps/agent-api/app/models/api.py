@@ -75,9 +75,6 @@ class CandidateCardsUI(BaseModel):
 
     type: Literal["candidate_cards"] = "candidate_cards"
     candidates: list[CandidateCard] = Field(default_factory=list)
-    title: str | None = None
-    subtitle: str | None = None
-    filters_summary: list[str] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):

@@ -16,7 +16,9 @@ Two workflow shapes coexist in `app/graph/workflow.py`:
   and when LLM credentials are not configured. It uses keyword
   heuristics and the prior plan-by-rules logic.
 
-Reflection is only for evaluating result quality and deciding whether a bounded replan is needed (deterministic path). Neither path implements open-ended autonomous loops.
+Reflection decides whether a **bounded** replan is needed. In the LLM workflow the **LLM makes that
+decision** (`reflect_on_results`); in the deterministic fallback it is rule-based (`replan_if_needed`).
+Neither path implements open-ended autonomous loops — both are hard-capped by `max_replan_attempts`.
 
 ## LLM Workflow
 
@@ -27,7 +29,9 @@ flowchart TD
     C --> D["enrich_candidates"]
     D --> E["evaluate_results"]
     E --> F["rank_candidates"]
-    F --> G["generate_final_response"]
+    F --> G["reflect_on_results"]
+    G -->|"LLM: needs_replan (budget left)"| B
+    G -->|"good enough / budget spent"| H["generate_final_response"]
 ```
 
 Key invariants:
@@ -41,12 +45,22 @@ Key invariants:
   `max_enrichments` times — once per candidate id returned by the
   prior tool. Fan-out results are merged into the existing
   `SearchResult` rather than appended as new candidates.
-- **CV enrichment stays backend-owned.** `getCandidateCV` is an MCP tool that
-  downloads and extracts readable CV text. When the Agent API has an LLM
-  backend configured, `enrich_candidates` asks `ResumeSummarizer` to analyze
-  that text and produce a short, complete candidate summary. The frontend only
-  receives the normalized `summary` field.
 - **MCP-only execution.** No tool runs outside `McpClient.call_tool`.
+- **LLM-driven, bounded replan.** After ranking, `reflect_on_results`
+  asks the LLM (`LlmPlanner.reflect`) whether one more guided search
+  pass is warranted; `should_replan_llm` loops back to `plan_with_llm`
+  with the LLM's `guidance` (carried in `replan_feedback`). Guards make
+  it bounded, never autonomous:
+  - Hard cap `max_replan_attempts` (Settings, default 1, ≤3), checked
+    before each reflection.
+  - Cost gate: the reflection LLM call is skipped when results are
+    already strong (a full match, or top score ≥ `replan_skip_score`).
+  - Fail-safe: any reflection error ⇒ no replan.
+  - Kill switch: `use_llm_replan=false` ⇒ single-shot.
+  - `replan_feedback` is set only by `reflect_on_results` (under budget)
+    and cleared by `plan_with_llm` on consumption, so the loop cannot
+    spin. Re-runs **accumulate** candidates (executor de-dupes by
+    `(source_tool, id)`) — a replan adds better-targeted profiles.
 
 ## Deterministic Workflow (fallback)
 
@@ -71,9 +85,9 @@ flowchart TD
 | `build_plan` | Produce a bounded execution plan with clear steps and expected tool needs. |
 | `select_tools` | Match plan steps to available MCP tools, preferring dynamically discovered tool metadata. |
 | `execute_mcp_tools` | Execute selected MCP tools asynchronously, collect outputs, and normalize failures. |
-| `enrich_candidates` | Merge per-candidate detail, technical-document, dictionary, and CV data; generate LLM-backed CV summaries when available. |
 | `evaluate_results` | Assess result quality, coverage, duplicates, confidence, and missing information. |
-| `replan_if_needed` | Decide whether to re-enter planning with bounded retries or proceed to final response. |
+| `replan_if_needed` | Deterministic fallback only: decide whether to re-enter planning with bounded retries or proceed to final response. |
+| `reflect_on_results` | LLM workflow only: ask the LLM whether the ranked results warrant one more guided, bounded replan; set `replan_feedback` under budget. |
 | `generate_final_response` | Aggregate, rank, summarize, normalize MCP results, and produce the UI-oriented API response payload. |
 
 ## State Schema Proposal
@@ -94,7 +108,8 @@ The graph state should be represented with typed Pydantic models or typed dictio
 | `confidence` | Numeric confidence from `0.0` to `1.0`. |
 | `warnings` | User-safe warnings about partial results, ambiguity, or degraded execution. |
 | `errors` | Internal structured errors for workflow control. |
-| `replan_count` | Number of replanning attempts already used. |
+| `replan_count` | Number of replanning attempts already used (hard-capped by `max_replan_attempts`). |
+| `replan_feedback` | LLM reflection guidance for the next plan pass; non-empty = a bounded replan is pending. Set by `reflect_on_results`, consumed/cleared by `plan_with_llm`. |
 | `ui_response` | Final frontend response containing `conversation_id`, `message`, and `ui`. |
 
 ## Transitions
@@ -114,6 +129,11 @@ The graph state should be represented with typed Pydantic models or typed dictio
 - Record retries in `tool_calls` and warnings when they affect output quality.
 
 ## Replanning Conditions
+
+In the **LLM workflow** the replan decision is the LLM's (`reflect_on_results`): it judges the
+ranked candidates against the query and returns `needs_replan` + `guidance`. The conditions below
+describe the intent the LLM is prompted to follow and the deterministic guardrails that bound it;
+the **deterministic fallback** applies them as hard rules in `replan_if_needed`.
 
 Replan only when:
 
@@ -143,7 +163,7 @@ The final API response should be UI-oriented:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "J'ai trouvé 5 profils proches de votre recherche.",
+  "message": "I found 5 candidates matching your search.",
   "ui": {
     "type": "candidate_cards",
     "candidates": []
@@ -159,31 +179,14 @@ Candidate card fields:
 - `full_name`
 - `title`
 - `experience_years`
-- `experience_label`
 - `location`
 - `availability`
 - `skills`
 - `match_score`
 - `summary`
 - `boond_url`
-- `state_label`
-- `mobility`
-- `contract_preferences`
-- `technical_summary`
-- `diplomas`
-- `expertise_areas`
-- `activity_areas`
-- `tools`
-- `languages`
-- `source`
-- `last_update`
 
-The card values must be adapted from BoondManager MCP results. Missing scalar
-or numeric fields should be `null`; missing list fields should be `[]`. Do not
-invent candidate data. LLM-generated summaries are allowed only when grounded in
-MCP result fields, including parsed CV text returned by `getCandidateCV`.
-Dictionary-backed BoondManager IDs should be resolved into labels before display
-whenever possible.
+The card values must be adapted from BoondManager MCP results. Missing scalar or numeric fields should be `null`; missing list fields should be `[]`. Do not invent candidate data. LLM-generated summaries are allowed only when grounded in MCP result fields.
 
 ## Internal Metadata
 

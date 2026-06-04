@@ -6,7 +6,9 @@ The Agent API receives natural-language search requests from the web UI, orchest
 
 ## Status
 
-Implemented backend service for the candidate-search POC.
+Active implementation.
+
+The Agent API now follows the **Architectural Paradigm Shift: From Single-Shot Planning to Bounded ReAct Control Loop** for the LLM workflow: after execution and ranking, the LLM can inspect sanitized results and decide whether one more guided search pass is warranted, while LangGraph enforces hard bounds and MCP-only execution.
 
 ## Stack
 
@@ -25,16 +27,10 @@ Implemented backend service for the candidate-search POC.
 
 - Analyze user intent.
 - Build and execute a search plan.
+- Reflect on ranked results in the LLM workflow and decide whether a bounded replan is warranted.
 - Select MCP tools.
 - Orchestrate LangGraph nodes.
 - Aggregate, deduplicate, rank, and summarize results.
-- Enrich candidates with technical-document and CV data returned by MCP tools.
-- Generate short, natural CV summaries through the configured LLM when parsed CV
-  text is available (`ResumeSummarizer`).
-- Resolve BoondManager integer IDs (experience level, availability, contract
-  type, mobility, state, tools, languages, activity areas) to human-readable
-  labels via the dictionary, including `experience_label` as a fallback when
-  no numeric year count is available.
 - Normalize BoondManager MCP results into UI-friendly response models.
 - Return `conversation_id`, `message`, and `ui` to the web UI by default.
 
@@ -45,7 +41,7 @@ Implemented backend service for the candidate-search POC.
 - Do not implement open-ended autonomous ReAct loops for the MVP.
 - Do not add framework boilerplate until implementation begins.
 
-## MVP Endpoint
+## Primary Endpoints
 
 ```text
 POST /api/search
@@ -53,18 +49,14 @@ POST /api/search/stream
 POST /api/chat
 ```
 
-`/api/search/stream` is the preferred web UI path. It accepts a natural-language
-query and optional filters, emits sanitized SSE progress events, and finishes
-with a `final_response` event containing the same UI-oriented response shape as
-`/api/search`. `/api/chat` remains available for compatibility and structured
-clarification interactions.
+The endpoints accept natural-language candidate search input and return a UI-oriented response. The streaming endpoint emits sanitized agent progress events, including LLM-driven replan decisions when the bounded reflection loop elects to run another guided pass.
 
 Example:
 
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "J'ai trouvé 5 profils proches de votre recherche. Certains points restent à confirmer dans les dossiers candidats.",
+  "message": "I found 5 candidates matching your search.",
   "ui": {
     "type": "candidate_cards",
     "candidates": [
@@ -77,13 +69,8 @@ Example:
         "availability": "Available immediately",
         "skills": ["Java", "Spring", "Kafka"],
         "match_score": 0.86,
-        "summary": "Backend Java engineer with 7 years of experience in Spring APIs, Kafka integrations, and production support for banking platforms.",
-        "boond_url": "https://ui.boondmanager.com/",
-        "state_label": "Vivier",
-        "technical_summary": "Solid Java/Spring backend profile.",
-        "diplomas": ["Bac+5"],
-        "tools": [{ "name": "Java", "level": 5 }],
-        "languages": [{ "language": "Anglais", "level": "Courant" }]
+        "summary": "Confirmed backend profile.",
+        "boond_url": "https://ui.boondmanager.com/"
       }
     ]
   }
@@ -93,18 +80,6 @@ Example:
 The values above are examples only. Real candidate values must be adapted from BoondManager MCP server results.
 
 Internal metadata such as interpreted intent, execution plan, tool calls, confidence, and warnings may exist in graph state or debug mode, but should not be the default frontend response.
-
-Candidate cards may include enriched profile metadata from BoondManager MCP
-results: resolved experience, availability, state and mobility labels, diplomas,
-expertise/activity areas, tools with levels, languages with levels, technical
-summary, source, and last update. When a candidate CV is available through
-`getCandidateCV`, the MCP server extracts the PDF text and the Agent API can ask
-the configured LLM to produce a complete short `summary` grounded in that CV.
-Unknown scalar fields stay `null`; unknown list fields stay `[]`.
-
-User-facing search messages should be natural and honest. When not every
-criterion can be fully confirmed from evidence, describe returned records as
-close profiles with points to confirm rather than exposing internal warnings.
 
 ## System Context
 
@@ -119,6 +94,7 @@ This module implements the Agentic Backend described in the [Sijo AI Agent Archi
 - [Testing Strategy](./docs/testing-strategy.md)
 - [Claude Code Instructions](./CLAUDE.md)
 - [Agent API Skill](./SKILL.md)
+- [Bounded ReAct Control-Loop Transition](../../docs/architecture-transitions/bounded-react-control-loop/README.md)
 
 ## Decision Trail
 
@@ -130,4 +106,6 @@ This module implements the Agentic Backend described in the [Sijo AI Agent Archi
 - [ADR-007 - LLM Tool Plan Execution Semantics](../../docs/decisions/adr-007-llm-tool-plan-execution-semantics.md) explains how ordering-only `depends_on` is distinguished from candidate-id fan-out, and which tools may produce candidate results.
 - [ADR-008 - MCP Result Envelope Normalization Boundary](../../docs/decisions/adr-008-mcp-result-envelope-normalization-boundary.md) explains why MCP result envelopes are unwrapped at the MCP client boundary and shared between real and mock clients.
 - [ADR-009 - Agent API Milestone 1 Boundary And Evidence Verification](../../docs/decisions/adr-009-agent-api-milestone-1-boundary.md) explains what Agent API Milestone 1 covers and which precision work is deferred to a later milestone gated by MCP-side improvements.
+- [ADR-010 - LLM-Driven Bounded Replan](../../docs/decisions/adr-010-llm-driven-bounded-replan.md) explains the bounded observe-then-replan loop in the LLM workflow.
 - [Milestone 001 - Agent API MCP Fuzzy Search](../../docs/milestones/milestone-001-agent-api-mcp-fuzzy-search.md) records the orchestration milestone with reproducible verification evidence.
+- [Milestone 002 - Bounded ReAct Control Loop](../../docs/milestones/milestone-002-bounded-react-control-loop.md) defines the certification target for the bounded ReAct control-loop migration.

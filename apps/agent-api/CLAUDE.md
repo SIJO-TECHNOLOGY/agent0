@@ -14,6 +14,7 @@ Before implementation, read:
 - [API Contract](./docs/api-contract.md)
 - [Project Structure](./docs/project-structure.md)
 - [Testing Strategy](./docs/testing-strategy.md)
+- [Bounded ReAct Control-Loop Transition](../../docs/architecture-transitions/bounded-react-control-loop/README.md)
 
 ## Required Stack
 
@@ -70,6 +71,28 @@ The MVP workflow is:
 6. Re-plan if needed
 7. Generate Final Response
 
+### LLM-driven replan (bounded reflection)
+
+In the **LLM workflow** (`USE_LLM_PLANNER=true`), the **replan decision is made by the LLM**, not
+by deterministic code. After ranking, a `reflect_on_results` node asks the LLM (via
+`LlmPlanner.reflect`) whether the ranked candidates adequately answer the query; a conditional edge
+(`should_replan_llm`) loops back to `plan_with_llm` with the LLM's `guidance` when it says replan.
+This is the "lightweight reflection" above — it is **bounded, not autonomous**:
+
+- Hard cap: `max_replan_attempts` (Settings, default 1, ≤3) — checked deterministically before each
+  reflection, so the LLM can never exceed it.
+- Cost gate: the reflection LLM call is skipped when results are already strong (a full match, or
+  top score ≥ `replan_skip_score`) or the budget is spent.
+- Fail-safe: any reflection/parse error ⇒ no replan.
+- Kill switch: `use_llm_replan=false` (or `max_replan_attempts=0`) ⇒ the LLM workflow is single-shot.
+- Loop signal: `GraphState.replan_feedback` is set only by `reflect_on_results` (under budget) and
+  cleared by `plan_with_llm` on consumption, so the loop cannot spin.
+
+The deterministic fallback workflow keeps its own rule-based `replan_if_needed` (widen the plan on
+empty results) — unchanged. What the LLM owns vs what stays deterministic: the LLM decides the plan,
+criteria, ranking priority, and now the replan decision; Agent-API code still owns plan validation,
+the recall-relaxation ladder, the ranking score arithmetic, and the bounded loop guardrails.
+
 Do not implement:
 
 - Fully autonomous open-ended ReAct loops.
@@ -96,7 +119,7 @@ The frontend expects UI-oriented responses. For candidate search, use:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "J'ai trouvé 5 profils proches de votre recherche.",
+  "message": "I found 5 candidates matching your search.",
   "ui": {
     "type": "candidate_cards",
     "candidates": []
@@ -112,15 +135,6 @@ Rules:
 - Use `[]` for missing list fields.
 - Never invent candidate data.
 - LLM-generated summaries must be grounded in MCP result fields.
-- Resolve dictionary-backed BoondManager IDs into labels where possible
-  (experience, availability, candidate state, mobility, tools, languages,
-  activity areas).
-- Candidate cards may expose enriched profile fields such as `state_label`,
-  `technical_summary`, `diplomas`, `expertise_areas`, `activity_areas`,
-  `tools`, `languages`, `source`, and `last_update`.
-- User-facing messages should stay natural and honest. Prefer "profils proches"
-  and "points à confirmer" when criteria are not fully verified; do not expose
-  internal warning codes or long diagnostic parentheses.
 - Do not expose `interpreted_intent`, `execution_plan`, `tool_calls`, `confidence`, or `warnings` by default.
 - These metadata fields may exist internally or in explicit debug mode only.
 

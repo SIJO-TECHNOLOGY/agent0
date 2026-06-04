@@ -13,9 +13,11 @@ spring:
         protocol: STREAMABLE
         streamable-http:
           mcp-endpoint: /mcp
+        annotation-scanner:
+          enabled: false        # project uses @Tool + MethodToolCallbackProvider, not @McpTool/@McpResource
 
 boondmanager:
-  base-url: ${BOONDMANAGER_BASE_URL:https://ui.boondmanager.com/api/}
+  base-url: ${BOONDMANAGER_BASE_URL}
   jwt-client: ${BOONDMANAGER_JWT_CLIENT}
   timeout: ${BOONDMANAGER_TIMEOUT:15s}
 

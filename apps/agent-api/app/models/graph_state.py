@@ -26,10 +26,17 @@ class GraphState(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     results: list[SearchResult] = Field(default_factory=list)
     llm_plan: LlmToolPlan | None = None
-    dictionary_raw: list[dict[str, object]] = Field(default_factory=list)
 
     summary: str = ""
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     warnings: list[Warning] = Field(default_factory=list)
     errors: list[AgentError] = Field(default_factory=list)
     replan_count: int = Field(ge=0, default=0)
+    replan_feedback: str = Field(
+        default="",
+        description=(
+            "LLM reflection guidance for the next plan pass. Non-empty is the "
+            "single signal that an LLM-decided replan is pending; consumed and "
+            "cleared by plan_with_llm so the bounded loop cannot spin."
+        ),
+    )

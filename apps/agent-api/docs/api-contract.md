@@ -9,10 +9,12 @@ POST /api/chat
 ```
 
 `/api/search` executes a natural-language search workflow through the Agent API
-and returns a frontend-oriented response. `/api/search/stream` is the preferred
-web UI endpoint: it runs the same workflow and streams sanitized SSE progress
-events before a final `final_response` event. `/api/chat` remains a compatibility
-endpoint for legacy chat-style calls and clarification interactions.
+and returns a frontend-oriented response. `/api/search/stream` delegates to the
+same workflow and emits sanitized Server-Sent Events style progress, including
+planning, MCP tool execution, result normalization, candidate-card previews, and
+bounded LLM replan decisions. `/api/chat` is the compatibility endpoint consumed
+by the current web UI; it delegates to the same search workflow and returns
+`{ conversation_id, message, ui, candidates }`.
 
 The frontend never consumes raw MCP or BoondManager payloads by default.
 
@@ -50,7 +52,7 @@ The frontend never consumes raw MCP or BoondManager payloads by default.
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "J'ai trouvé un profil proche de votre recherche : Sarah Martin. Certains points restent à confirmer dans le dossier candidat.",
+  "message": "Found 1 candidate matching your search: Sarah Martin.",
   "ui": {
     "type": "candidate_cards",
     "candidates": [
@@ -63,17 +65,8 @@ The frontend never consumes raw MCP or BoondManager payloads by default.
         "availability": "Available immediately",
         "skills": ["Java", "Spring", "Kafka"],
         "match_score": 0.86,
-        "summary": "Backend Java engineer with 7 years of experience in Spring APIs, Kafka integrations, and production support for banking platforms.",
-        "boond_url": "https://ui.boondmanager.com/candidates/41924/overview",
-        "state_label": "Vivier",
-        "mobility": "Paris (75)",
-        "contract_preferences": ["CDI"],
-        "technical_summary": "Solid Java/Spring backend profile.",
-        "diplomas": ["Bac+5"],
-        "expertise_areas": ["Banque"],
-        "activity_areas": ["Business Analyst"],
-        "tools": [{ "name": "SQL", "level": 1 }],
-        "languages": [{ "language": "Anglais", "level": "Courant" }]
+        "summary": "Sarah Martin - Backend Java Engineer.",
+        "boond_url": null
       }
     ]
   }
@@ -106,31 +99,12 @@ BoondManager MCP server results.
 | `full_name` | string \| null | Derived from name fields when present. |
 | `title` | string \| null | Job title or headline if available. |
 | `experience_years` | number \| null | Years of experience when available. |
-| `experience_label` | string \| null | Human-readable experience level resolved from the dictionary when available. |
 | `location` | string \| null | Readable location derived from city, country, or address fields. |
 | `availability` | string \| null | Readable availability label or availability date. |
 | `skills` | array of strings | Empty array when unknown. |
 | `match_score` | number \| null | Relevance score when available. |
-| `summary` | string \| null | Short backend-generated summary grounded in MCP data. When a readable CV is available, the Agent API may analyze the parsed CV text with the configured LLM and return a complete, natural sentence. |
+| `summary` | string \| null | Short MCP-grounded summary. |
 | `boond_url` | string \| null | External link when the MCP result provides one. |
-| `highlights` | array of strings | Keywords or criteria highlighted by the backend. |
-| `experiences` | array of objects | Recent experiences when available. |
-| `ai_evaluation` | object \| null | Optional grounded match explanation. |
-| `contract_preferences` | array of strings | Contract labels resolved from source data when available. |
-| `salary_expectation` | string \| null | Salary expectation when available. |
-| `tjm` | string \| null | Daily rate when available. |
-| `mobility` | string \| null | Mobility label or readable mobility area list. |
-| `strengths` | array of strings | Grounded strengths when available. |
-| `watch_points` | array of strings | Grounded watch points when available. |
-| `state_label` | string \| null | Candidate pipeline state label resolved from the dictionary. |
-| `source` | string \| null | Candidate sourcing origin/detail when available. |
-| `last_update` | string \| null | Last update date when available. |
-| `technical_summary` | string \| null | Technical-document summary or, when absent, backend-generated CV summary. |
-| `diplomas` | array of strings | Diplomas/training entries. |
-| `expertise_areas` | array of strings | Expertise area labels. |
-| `activity_areas` | array of strings | Activity area labels. |
-| `tools` | array of objects | Tool or technology entries, optionally with `level`. |
-| `languages` | array of objects | Language entries, optionally with `level`. |
 
 ## Normalization Rules
 
@@ -140,18 +114,8 @@ BoondManager MCP server results.
 - `full_name` is derived from `firstName` and `lastName` when present.
 - `location` is derived from `city`, `country`, or address-style fields.
 - `availability` prefers an explicit label and falls back to a date.
-- BoondManager dictionary IDs should be resolved before display whenever possible
-  (availability, experience, state, mobility, tools, languages, activity areas).
-- Raw BoondManager experience level IDs must not be exposed as literal years.
-- `summary` may be generated by the Agent API LLM layer, but it must be grounded
-  in MCP data. For CV-based summaries, the MCP server only downloads/extracts
-  the CV; the Agent API owns the interpretation and natural-language synthesis.
-- CV summaries should be complete sentences, not raw clipped CV fragments.
-- `boond_url` is either a safe `http(s)://` value from the MCP record or a
-  backend-constructed BoondManager candidate overview URL based on the candidate id.
-- User-facing messages should remain natural and honest. When some criteria are
-  only partially confirmed, prefer wording such as "profils proches" and
-  "points à confirmer" over technical warning text.
+- `summary` may be generated by the backend, but it must be grounded in MCP data.
+- `boond_url` is `null` unless the MCP record provides a safe `http(s)://` URL.
 
 ## Validation Rules
 
@@ -192,7 +156,7 @@ For successful requests with no matching candidates, prefer a `200` response:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "Aucun candidat ne correspond à votre recherche.",
+  "message": "I could not find candidates matching your search.",
   "ui": {
     "type": "candidate_cards",
     "candidates": []
@@ -220,18 +184,29 @@ Other UI types may be added later, for example:
 
 Do not add them to the default contract until the frontend supports them.
 
-## Streaming Compatibility
+## Streaming Search Endpoint
 
-`POST /api/search/stream` emits Server-Sent Events. Normal traffic should use
-sanitized Agent API events, not MCP transport frames. A successful stream ends
-with exactly one `final_response` event whose payload matches the response body
-shape above. Current event categories include:
+`POST /api/search/stream` returns user-facing progress events for the same
+search workflow used by `/api/search`.
 
-- Intent interpretation.
-- Plan creation.
-- Tool call progress.
-- Partial candidate-card emission.
-- Final summary.
+Expected event categories include:
+
+- `search_started`
+- `tools_discovered`
+- `plan_created`
+- `plan_validated`
+- `tool_call_started`
+- `tool_call_completed`
+- `results_normalized`
+- `candidate_cards_partial`
+- `replan_requested`
+- `final_response`
+- `search_failed`
+
+When the bounded LLM reflection loop elects to replan, the stream emits
+`replan_requested` with `decided_by: "llm"` and then emits the next plan
+lifecycle. Streaming events must not expose raw MCP payloads, raw BoondManager
+payloads, secrets, stack traces, or chain-of-thought.
 
 ## Operational API Decisions
 

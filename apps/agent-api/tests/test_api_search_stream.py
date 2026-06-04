@@ -605,7 +605,9 @@ async def test_dictionary_before_search_still_runs_search_candidates(
     tool_names = [name for name, _ in _dictionary_plan_calls]
 
     # getDictionary must run before searchCandidates (plan order).
-    assert tool_names.count("getDictionary") == 1
+    # Note: getDictionary may be called more than once (once for filter
+    # resolution during planning, once for label resolution during enrichment).
+    assert tool_names.count("getDictionary") >= 1
     assert tool_names.count("searchCandidates") == 1
     assert tool_names.index("getDictionary") < tool_names.index("searchCandidates")
 

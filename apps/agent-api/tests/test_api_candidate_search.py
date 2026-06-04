@@ -167,7 +167,7 @@ async def test_candidate_search_calls_search_candidates_with_string_keywords(
     assert "cib" in keywords_value
     # page / numberPerPage defaults injected when schema accepts them.
     assert inputs["page"] == 1
-    assert inputs["numberPerPage"] == 25
+    assert inputs["numberPerPage"] == 10
 
 
 @pytest.mark.asyncio
@@ -215,8 +215,8 @@ async def test_unverifiable_criteria_yields_honest_broad_message(
     message = body["message"]
     # Must NOT over-claim that the candidates match the strict criteria.
     assert "correspondant à votre recherche" not in message
-    assert "profils proches de votre recherche" in message
-    assert "restent à confirmer" in message
+    assert "broad candidate results" in message
+    assert "could not be fully verified" in message
     assert "critères stricts" not in message
     assert "non vérifié" not in message
 
@@ -238,7 +238,7 @@ async def test_candidate_search_message_mentions_limited_search(
     message = response.json()["message"]
     # 10 years experience could not be mapped to an MCP dictionary id,
     # so the message must say so rather than hide the limitation.
-    assert "filtre d'expérience non appliqué" in message
+    assert "experience filter could not be applied" in message
 
 
 @pytest.mark.asyncio
@@ -255,8 +255,8 @@ async def test_candidate_search_empty_results_returns_clear_message(
     assert body["ui"]["candidates"] == []
     # Empty MCP results must say "no candidates matched", not a planner
     # failure message — but the experience-filter hint still surfaces.
-    assert "Aucun candidat" in body["message"]
-    assert "filtre d'expérience non appliqué" in body["message"]
+    assert "No candidates matched" in body["message"]
+    assert "experience filter could not be applied" in body["message"]
 
 
 @pytest.mark.asyncio
@@ -283,4 +283,4 @@ async def test_candidate_search_with_no_available_tool_is_not_hidden() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["ui"]["candidates"] == []
-    assert "La recherche n'a pas pu être lancée" in body["message"]
+    assert "couldn't run a candidate search" in body["message"]

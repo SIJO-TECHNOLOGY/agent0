@@ -1060,3 +1060,12 @@ def candidate_cards_with_diagnostics(
         else:
             cards.append(card)
     return cards, dropped
+
+
+def candidate_full_name(result: SearchResult) -> str | None:
+    """Best-effort display name for a search result.
+
+    Reuses the same name resolution the card mapper uses, so ranking and the
+    rendered card agree on a candidate's name.
+    """
+    return _build_full_name(_flatten_record(dict(result.data)))
