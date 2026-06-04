@@ -35,6 +35,8 @@ The system is split into two layers with strict boundaries.
 │  • Reasoning / BI           │     │  • Validation & DTO mapping │     │  • /candidates/{id}/ │
 │  • Conversation memory      │     │  • Correlation ID propagation│    │    information       │
 │                             │     │                             │     │  • /candidates/{id}/ │
+│                             │     │                             │     │    administrative    │
+│                             │     │                             │     │  • /candidates/{id}/ │
 │                             │     │                             │     │    technical-data    │
 └─────────────────────────────┘     └─────────────────────────────┘     └──────────────────────┘
 ```
@@ -75,13 +77,15 @@ Tools are designed to be called in sequence. The descriptions embedded in each `
 
 ```
 getDictionary → searchCandidates → getCandidateDetail → getCandidateTechnicalDocument
+                                 → getCandidateAdministrative
 ```
 
 | Tool | Class | Description |
 |---|---|---|
-| `getDictionary` | `BoondDictionaryTool` | Retrieves all BoondManager reference data (diploma levels, contract types, availability types, experience levels, expertise areas, activity sectors, tools, languages, candidate states). Must be called before `searchCandidates` to resolve human-readable values to their IDs. |
+| `getDictionary` | `BoondDictionaryTool` | Retrieves all BoondManager reference data: diploma levels, contract types (`setting.typeOf.contract`), resource types (`setting.typeOf.resource`), availability types, experience levels, expertise areas, activity sectors, tools, languages, candidate states. Must be called before `searchCandidates` to resolve human-readable values to their IDs. |
 | `searchCandidates` | `CandidateSearchTool` | Searches candidates with a rich set of optional filters: keyword search (with `keywordsType`), candidate states/types, availability/contract/experience, expertise & activity areas, mobility, languages, tools, evaluations, sources, profile completeness (`shields`), geographic search (location/coordinates + radius), date-range filters, sorting, and response-column selection. Returns a paginated list of profiles. See the [parameters](#searchcandidates--parameters) below. |
-| `getCandidateDetail` | `CandidateDetailTool` | Retrieves the detailed information profile of a candidate by ID (`GET /candidates/{id}/information`): contact details, civility, date of birth, postal address, pipeline state, desired contract type, availability, mobility zones, sourcing origin, global evaluation, information notes, and creation/update metadata. Salary/TJM are not exposed by BoondManager. Call after `searchCandidates`. |
+| `getCandidateDetail` | `CandidateDetailTool` | Retrieves the detailed information profile of a candidate by ID (`GET /candidates/{id}/information`): contact details, civility, date of birth, postal address, pipeline state, resource type (`typeOf` via `setting.typeOf.resource`), availability, mobility zones, sourcing origin, global evaluation, information notes, and creation/update metadata. Call after `searchCandidates`. |
+| `getCandidateAdministrative` | `CandidateAdministrativeTool` | Retrieves administrative data (`GET /candidates/{id}/administrative`): salary expectations (`currentSalary`, `minSalary`, `maxSalary`), daily rate / TJM (`currentDailyRate`, `minDailyRate`, `maxDailyRate`), currency, and — crucially — the **desired contract type** (`desiredContract`, resolves via `setting.typeOf.contract`: CDI=0, CDD=1, etc.). This is the authoritative source for `contract_preferences` displayed in candidate cards. |
 | `getCandidateTechnicalDocument` | `CandidateTechnicalDocTool` | Retrieves the technical document (CV / skills profile) of a candidate (`GET /candidates/{id}/technical-data`): title, skills text, experience level, training/diploma level, diplomas, expertise domains, activity sectors, tools with proficiency level, languages with level, and summary. `id` is the candidate id, `tdId` the document id. Call after `getCandidateDetail` for deep skills analysis. |
 
 ### `searchCandidates` — Parameters

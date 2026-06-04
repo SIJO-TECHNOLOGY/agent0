@@ -266,7 +266,7 @@ class BoondManagerCandidateServiceTest {
     private BoondDictionaryEnvelope dictionaryEnvelope() {
         BoondDictionarySetting setting = new BoondDictionarySetting(
                 new BoondDictionarySetting.State(List.of(new DictionaryEntryDto("1", "Active"))),
-                new BoondDictionarySetting.TypeOf(List.of(new DictionaryEntryDto("2", "CDI"))),
+                new BoondDictionarySetting.TypeOf(List.of(new DictionaryEntryDto("2", "CDI")), null),
                 List.of(new DictionaryEntryDto("9", "Available after date")),
                 List.of(new DictionaryOptionEntryDto(
                         List.of(new DictionaryOptionEntryDto.OptionId("idf", "Ile-de-France")), "Ile-de-France")),

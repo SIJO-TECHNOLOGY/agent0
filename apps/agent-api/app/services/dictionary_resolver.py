@@ -273,6 +273,31 @@ def dictionary_contract_entries(
     return out
 
 
+def dictionary_resource_type_entries(
+    raw_records: Iterable[object],
+) -> list[dict[str, object]]:
+    """Extract resource type entries from ``setting.typeOf.resource[]``.
+
+    BoondManager stores the candidate's desired contract type (CDI, CDD, etc.)
+    in ``typeOf`` using the ``setting.typeOf.resource`` dictionary, not
+    ``setting.typeOf.contract``. This function extracts those entries for
+    proper label resolution.
+    """
+    out: list[dict[str, object]] = []
+    for record in raw_records:
+        if not isinstance(record, dict):
+            continue
+        setting = record.get("setting")
+        if not isinstance(setting, dict):
+            continue
+        type_of = setting.get("typeOf")
+        if isinstance(type_of, dict):
+            resource_list = type_of.get("resource")
+            if isinstance(resource_list, list):
+                out.extend(e for e in resource_list if isinstance(e, dict))
+    return out
+
+
 # Labels in candidate states that indicate the profile should be excluded
 # from search results. Checked case-insensitively as substrings.
 _EXCLUDED_STATE_KEYWORDS: Final[tuple[str, ...]] = (

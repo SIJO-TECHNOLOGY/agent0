@@ -149,7 +149,7 @@ public final class TestFixtures {
 
         return new DictionaryResponseDto(new DictionarySettingDto(
                 new DictionarySettingDto.State(List.of(activeState)),
-                new DictionarySettingDto.TypeOf(List.of(contract)),
+                new DictionarySettingDto.TypeOf(List.of(contract), null),
                 List.of(availability),
                 List.of(mobility),
                 List.of(new DictionaryEntryDto("3", "Senior")),

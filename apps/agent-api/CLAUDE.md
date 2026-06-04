@@ -138,6 +138,14 @@ Rules:
 - Do not expose `interpreted_intent`, `execution_plan`, `tool_calls`, `confidence`, or `warnings` by default.
 - These metadata fields may exist internally or in explicit debug mode only.
 
+**Contract type resolution (`contract_preferences`):**
+
+- Source: `desiredContract` field from `getCandidateAdministrative` (`/candidates/{id}/administrative`).
+- Dictionary: `setting.typeOf.contract` (CDI=0, CDD=1, Sous-traitant=2, Freelance=3, Stage=4, Portage Salariale=5).
+- `desiredContract: -1` or `null` → not set → `contract_preferences = []` → frontend shows "Non renseigné".
+- **Do not use** `typeOf` from `/information` or search results for contract display — that field is the resource type (`setting.typeOf.resource`), not the desired contract type.
+- Resolution priority in `nodes.py._raw_contract_type`: admin enrichment → detail enrichment → search summary.
+
 Future UI types may include `mission_cards`, `client_cards`, `table`, `clarification_request`, and `error_message`, but do not emit them until the frontend supports them.
 
 ## Configuration

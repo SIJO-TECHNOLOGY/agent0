@@ -132,7 +132,7 @@ public class BoondManagerCandidateService {
             BoondCandidateAdministrativeAttributes attrs =
                     envelope != null && envelope.data() != null ? envelope.data().attributes() : null;
             if (attrs == null) {
-                return new CandidateAdministrativeDto(candidateId, null, null, null, null, null, null, null);
+                return new CandidateAdministrativeDto(candidateId, null, null, null, null, null, null, null, null);
             }
             return new CandidateAdministrativeDto(
                     candidateId,
@@ -142,7 +142,8 @@ public class BoondManagerCandidateService {
                     nullIfZero(attrs.currentDailyRate()),
                     nullIfZero(attrs.minDailyRate()),
                     nullIfZero(attrs.maxDailyRate()),
-                    attrs.currency()
+                    attrs.currency(),
+                    nullIfNegative(attrs.desiredContract())
             );
         } catch (BoondApiException ex) {
             if (org.springframework.http.HttpStatus.NOT_FOUND.value() == ex.status().value()) {
@@ -154,6 +155,10 @@ public class BoondManagerCandidateService {
 
     private static Double nullIfZero(Double value) {
         return (value == null || value == 0.0) ? null : value;
+    }
+
+    private static Integer nullIfNegative(Integer value) {
+        return (value == null || value < 0) ? null : value;
     }
 
     public TechnicalDocumentDto getCandidateTechnicalDocument(Integer candidateId) {
@@ -356,7 +361,7 @@ public class BoondManagerCandidateService {
         BoondDictionarySetting setting = envelope.data().setting();
         return new DictionaryResponseDto(new DictionarySettingDto(
                 new DictionarySettingDto.State(setting.state().candidate()),
-                new DictionarySettingDto.TypeOf(setting.typeOf().contract()),
+                new DictionarySettingDto.TypeOf(setting.typeOf().contract(), setting.typeOf().resource()),
                 setting.availability(),
                 setting.mobilityArea(),
                 setting.experience(),

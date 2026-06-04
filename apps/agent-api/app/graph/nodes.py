@@ -1165,13 +1165,13 @@ def _raw_experience_id(data: dict[str, object]) -> object | None:
 def _contract_value_from_source(source: object) -> object | None:
     if not isinstance(source, dict):
         return None
-    for field in ("typeOf", "contractType", "contract"):
+    for field in ("desiredContract", "contractType", "typeOf", "contract"):
         raw = source.get(field)
         if raw is not None:
             return raw
     attrs = source.get("attributes")
     if isinstance(attrs, dict):
-        for field in ("typeOf", "contractType", "contract"):
+        for field in ("desiredContract", "contractType", "typeOf", "contract"):
             raw = attrs.get(field)
             if raw is not None:
                 return raw
@@ -1179,19 +1179,23 @@ def _contract_value_from_source(source: object) -> object | None:
 
 
 def _raw_contract_type(data: dict[str, object]) -> object | None:
-    # Candidate detail (`/information`) is the source of truth for the
-    # display-only desired contract. If it was fetched, do not fall back to the
-    # search-list `typeOf`, which can be absent, stale, or ambiguous depending
-    # on the BoondManager response columns.
+    # Administrative endpoint is the authoritative source for desired contract type
+    # (typeOf / contractType from /candidates/{id}/administrative).
+    # Only fall back to /information if administrative was not fetched.
+    if ENRICHMENT_ADMINISTRATIVE_KEY in data:
+        raw = _contract_value_from_source(data.get(ENRICHMENT_ADMINISTRATIVE_KEY))
+        if raw is not None:
+            return raw
+        # Administrative was fetched but contractType is null/absent — stop here.
+        # Do not fall back to /information typeOf which is a resource-type ID,
+        # not the desired contract type.
+        return None
+
+    # Administrative not fetched: try detail as secondary source, then search summary.
     if ENRICHMENT_DETAIL_KEY in data:
         return _contract_value_from_source(data.get(ENRICHMENT_DETAIL_KEY))
 
-    for source in (
-        data,
-        data.get("attributes"),
-        data.get(ENRICHMENT_ADMINISTRATIVE_KEY),
-        data.get(ENRICHMENT_TECH_DOC_KEY),
-    ):
+    for source in (data, data.get("attributes")):
         raw = _contract_value_from_source(source)
         if raw is not None:
             return raw
