@@ -43,6 +43,7 @@ from app.services.dictionary_resolver import (
     dictionary_mobility_option_entries,
     dictionary_section_entries,
     dictionary_tool_entries,
+    resolve_excluded_state_ids,
     resolve_experience_id,
     resolve_label_for_id,
     resolve_tool_ids,
@@ -1451,8 +1452,25 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     language_level_entries = dictionary_language_level_entries(dict_raw)
     activity_area_entries = dictionary_activity_area_option_entries(dict_raw)
 
+    # Remove candidates with excluded states ("Ne plus contacter", "A SUPPRIMER", etc.)
+    # before enrichment so we never surface them to the frontend.
+    excluded_state_ids = {str(sid) for sid in resolve_excluded_state_ids(state_entries)}
+    if excluded_state_ids:
+        def _is_excluded(result: SearchResult) -> bool:
+            raw_state = result.data.get("state")
+            if raw_state is None:
+                attrs = result.data.get("attributes")
+                if isinstance(attrs, dict):
+                    raw_state = attrs.get("state")
+            return raw_state is not None and str(raw_state) in excluded_state_ids
+
+        eligible = [r for r in eligible if not _is_excluded(r)]
+        excluded_ids = {r.id for r in state.results if _is_excluded(r)}
+    else:
+        excluded_ids: set[str] = set()
+
     tool_calls = list(state.tool_calls)
-    enriched_results = list(state.results)
+    enriched_results = [r for r in state.results if r.id not in excluded_ids]
 
     enrichment_limit = len(eligible) if ctx.llm_planner is not None else ctx.max_enrichments
 
