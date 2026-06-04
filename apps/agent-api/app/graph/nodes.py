@@ -1140,17 +1140,29 @@ def _raw_experience_id(data: dict[str, object]) -> object | None:
 
 
 def _raw_contract_type(data: dict[str, object]) -> object | None:
-    """Extract the raw contract type id (typeOf) from a result data dict."""
-    raw = data.get("typeOf")
-    if raw is None:
-        attrs = data.get("attributes")
-        if isinstance(attrs, dict):
-            raw = attrs.get("typeOf")
-    if raw is None:
-        detail = data.get(ENRICHMENT_DETAIL_KEY)
-        if isinstance(detail, dict):
-            raw = detail.get("typeOf")
-    return raw
+    """Extract the raw contract type id from a result data dict.
+
+    BoondManager raw API uses ``typeOf``; the MCP Java DTO serialises it as
+    ``contractType``.  Both names are checked so the resolver works regardless
+    of which layer populated the data dict.
+    """
+    for field in ("typeOf", "contractType"):
+        raw = data.get(field)
+        if raw is not None:
+            return raw
+    attrs = data.get("attributes")
+    if isinstance(attrs, dict):
+        for field in ("typeOf", "contractType"):
+            raw = attrs.get(field)
+            if raw is not None:
+                return raw
+    detail = data.get(ENRICHMENT_DETAIL_KEY)
+    if isinstance(detail, dict):
+        for field in ("typeOf", "contractType"):
+            raw = detail.get(field)
+            if raw is not None:
+                return raw
+    return None
 
 
 def _inject_resolved_labels(
