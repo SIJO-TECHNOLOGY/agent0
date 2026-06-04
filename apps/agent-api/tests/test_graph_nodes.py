@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 
 from app.graph.nodes import (
+    CONTRACT_LABEL_KEY,
+    ENRICHMENT_ADMINISTRATIVE_KEY,
     NodeContext,
+    _inject_resolved_labels,
     _record_to_result,
     analyze_intent,
     build_plan,
@@ -29,6 +32,19 @@ def _ctx(client: MockMcpClient, *, max_replan: int = 1, retries: int = 2) -> Nod
         max_replan_attempts=max_replan,
         mcp_max_retries=retries,
     )
+
+
+def test_inject_resolved_labels_uses_administrative_contract_type() -> None:
+    data = {ENRICHMENT_ADMINISTRATIVE_KEY: {"typeOf": 2}}
+
+    _inject_resolved_labels(
+        data,
+        avail_entries=[],
+        exp_entries=[],
+        contract_entries=[{"id": 2, "label": "CDI"}],
+    )
+
+    assert data[CONTRACT_LABEL_KEY] == "CDI"
 
 
 @pytest.mark.asyncio

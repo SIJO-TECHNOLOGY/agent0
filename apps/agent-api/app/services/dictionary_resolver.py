@@ -259,9 +259,15 @@ def dictionary_contract_entries(
         # BoondManager shape: setting.typeOf.contract[]
         setting = record.get("setting")
         if isinstance(setting, dict):
+            for key in ("contract", "contracts"):
+                value = setting.get(key)
+                if isinstance(value, list):
+                    out.extend(e for e in value if isinstance(e, dict))
             type_of = setting.get("typeOf")
+            if isinstance(type_of, list):
+                out.extend(e for e in type_of if isinstance(e, dict))
             if isinstance(type_of, dict):
-                contract_list = type_of.get("contract")
+                contract_list = type_of.get("contract") or type_of.get("contracts")
                 if isinstance(contract_list, list):
                     out.extend(e for e in contract_list if isinstance(e, dict))
     return out

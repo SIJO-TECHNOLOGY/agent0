@@ -1163,22 +1163,25 @@ def _raw_experience_id(data: dict[str, object]) -> object | None:
 
 
 def _raw_contract_type(data: dict[str, object]) -> object | None:
-    for field in ("typeOf", "contractType"):
-        raw = data.get(field)
-        if raw is not None:
-            return raw
-    attrs = data.get("attributes")
-    if isinstance(attrs, dict):
-        for field in ("typeOf", "contractType"):
-            raw = attrs.get(field)
+    for source in (
+        data,
+        data.get("attributes"),
+        data.get(ENRICHMENT_DETAIL_KEY),
+        data.get(ENRICHMENT_ADMINISTRATIVE_KEY),
+        data.get(ENRICHMENT_TECH_DOC_KEY),
+    ):
+        if not isinstance(source, dict):
+            continue
+        for field in ("typeOf", "contractType", "contract"):
+            raw = source.get(field)
             if raw is not None:
                 return raw
-    detail = data.get(ENRICHMENT_DETAIL_KEY)
-    if isinstance(detail, dict):
-        for field in ("typeOf", "contractType"):
-            raw = detail.get(field)
-            if raw is not None:
-                return raw
+        attrs = source.get("attributes")
+        if isinstance(attrs, dict):
+            for field in ("typeOf", "contractType", "contract"):
+                raw = attrs.get(field)
+                if raw is not None:
+                    return raw
     return None
 
 
