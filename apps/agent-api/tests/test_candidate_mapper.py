@@ -405,18 +405,18 @@ def test_technical_document_adds_summary_domains_tools_and_languages() -> None:
     assert card.languages == [{"language": "anglais", "level": "courant"}]
 
 
-def test_contract_preferences_fall_back_to_enriched_detail_contract_type() -> None:
+def test_contract_preferences_do_not_show_raw_contract_type_ids() -> None:
     card = candidate_card_from_result(
         _result(
             source_tool="searchCandidates",
             data={
-                "contractType": None,
+                "contractType": -1,
                 "_enrichment_detail": {"contractType": 2},
             },
         )
     )
 
-    assert card.contract_preferences == ["2"]
+    assert card.contract_preferences == []
 
 
 def test_contract_preferences_prefer_resolved_contract_label() -> None:
@@ -431,3 +431,14 @@ def test_contract_preferences_prefer_resolved_contract_label() -> None:
     )
 
     assert card.contract_preferences == ["CDI"]
+
+
+def test_contract_preferences_keep_text_contract_type() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"contractType": "freelance"},
+        )
+    )
+
+    assert card.contract_preferences == ["freelance"]

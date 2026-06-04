@@ -637,20 +637,26 @@ def _extract_string_list(data: dict[str, object], keys: Iterable[str]) -> list[s
 
 
 def _extract_contract_preferences(data: dict[str, object]) -> list[str]:
-    """Extract desired contract labels, including enriched detail fallbacks."""
-    values = _extract_string_list(data, _CONTRACT_FIELDS)
-    if values:
-        return values
+    """Extract desired contract labels without surfacing raw dictionary IDs."""
+    for key in (
+        "_contractLabel",
+        "contractLabel",
+        "contractPreferences",
+        "contract_preferences",
+        "contract",
+    ):
+        values = _extract_string_list(data, (key,))
+        labels = [value for value in values if not _is_raw_integer(value)]
+        if labels:
+            return labels
 
     for source in (data, data.get("attributes"), data.get("_enrichment_detail")):
         if not isinstance(source, dict):
             continue
         for key in ("contractType", "typeOf", "contract"):
             value = source.get(key)
-            if isinstance(value, str) and value.strip():
+            if isinstance(value, str) and value.strip() and not _is_raw_integer(value):
                 return [value.strip()]
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                return [str(int(value)) if value == int(value) else str(value)]
     return []
 
 def _extract_named_entries(
