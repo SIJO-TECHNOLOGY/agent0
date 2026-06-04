@@ -403,3 +403,31 @@ def test_technical_document_adds_summary_domains_tools_and_languages() -> None:
     assert card.diplomas == ["Bac+5"]
     assert card.tools == [{"name": "sql", "level": "3"}]
     assert card.languages == [{"language": "anglais", "level": "courant"}]
+
+
+def test_contract_preferences_fall_back_to_enriched_detail_contract_type() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "contractType": None,
+                "_enrichment_detail": {"contractType": 2},
+            },
+        )
+    )
+
+    assert card.contract_preferences == ["2"]
+
+
+def test_contract_preferences_prefer_resolved_contract_label() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "_contractLabel": "CDI",
+                "_enrichment_detail": {"contractType": 2},
+            },
+        )
+    )
+
+    assert card.contract_preferences == ["CDI"]

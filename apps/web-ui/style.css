@@ -1485,6 +1485,7 @@ button.footer-pill:hover {
 
 .thinking-step {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
   font-size: var(--fs-sm);
@@ -1504,6 +1505,14 @@ button.footer-pill:hover {
   line-height: 1;
 }
 
+.thinking-step .step-detail {
+  flex-basis: 100%;
+  margin: 2px 0 0 25px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+  line-height: 1.45;
+}
 .thinking-step.active {
   color: var(--text-primary);
   font-weight: var(--fw-medium);

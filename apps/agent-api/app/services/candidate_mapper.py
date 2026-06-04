@@ -635,6 +635,24 @@ def _extract_string_list(data: dict[str, object], keys: Iterable[str]) -> list[s
     return []
 
 
+
+def _extract_contract_preferences(data: dict[str, object]) -> list[str]:
+    """Extract desired contract labels, including enriched detail fallbacks."""
+    values = _extract_string_list(data, _CONTRACT_FIELDS)
+    if values:
+        return values
+
+    for source in (data, data.get("attributes"), data.get("_enrichment_detail")):
+        if not isinstance(source, dict):
+            continue
+        for key in ("contractType", "typeOf", "contract"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return [value.strip()]
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return [str(int(value)) if value == int(value) else str(value)]
+    return []
+
 def _extract_named_entries(
     data: dict[str, object],
     keys: Iterable[str],
@@ -990,7 +1008,7 @@ def candidate_card_from_result(
         highlights=_extract_string_list(merged, _HIGHLIGHTS_FIELDS),
         experiences=_extract_experiences(merged),
         ai_evaluation=_extract_ai_evaluation(merged),
-        contract_preferences=_extract_string_list(merged, _CONTRACT_FIELDS),
+        contract_preferences=_extract_contract_preferences(merged),
         salary_expectation=_first_non_empty_str(merged, _SALARY_FIELDS),
         tjm=_first_non_empty_str(merged, _TJM_FIELDS),
         mobility=_build_mobility(merged),

@@ -1151,7 +1151,7 @@ function renderThinking() {
 
   return {
     element: message,
-    addStep(text) {
+    addStep(text, detail = "") {
       if (!text) return;
       completeStep(currentStep);
 
@@ -1167,6 +1167,12 @@ function renderThinking() {
       stepText.textContent = text;
 
       li.append(icon, stepText);
+      if (typeof detail === "string" && detail.trim()) {
+        const detailText = document.createElement("p");
+        detailText.className = "step-detail";
+        detailText.textContent = detail.trim();
+        li.appendChild(detailText);
+      }
       steps.appendChild(li);
       currentStep = { li, icon };
     },
@@ -1189,16 +1195,30 @@ function stepDescriptorForEvent(type, data) {
 
     case "plan_created":
     case "replan_created":
-      return { key: "plan", label: label("plan") };
+      return {
+        key: "plan",
+        label: label("plan"),
+        detail: firstText(data?.goal, data?.reason, data?.guidance),
+      };
 
     case "plan_validated":
       return { key: "plan_validated", label: label("plan_validated") };
+
+    case "replan_requested":
+      return {
+        key: "replan",
+        label: label("replan"),
+        detail: firstText(data?.reason, data?.guidance),
+        startsNewPhase: true,
+      };
 
     case "tool_call_started": {
       const tool = String(data?.tool || "");
       if (tool === "searchCandidates") return { key: "searching", label: label("searching") };
       if (tool === "getCandidateTechnicalDocument") return { key: "reading_docs", label: label("reading_docs") };
       if (tool === "getCandidateDetail") return { key: "reading_details", label: label("reading_details") };
+      if (tool === "getCandidateCV") return { key: "reading_cv", label: label("reading_cv") };
+      if (tool === "getCandidateAdministrative") return { key: "reading_admin", label: label("reading_admin") };
       return { key: "tool", label: label("tool") };
     }
 
@@ -1219,9 +1239,17 @@ function stepDescriptorForEvent(type, data) {
   }
 }
 
+function firstText(...values) {
+  const found = values.find((value) => typeof value === "string" && value.trim());
+  if (!found) return "";
+  const text = found.trim();
+  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+}
+
 async function runSearchStream(text, thinking) {
   let finalResponse = null;
   let failure = null;
+  let phase = 0;
   const shownSteps = new Set();
 
   await streamSearch(
@@ -1242,9 +1270,15 @@ async function runSearchStream(text, thinking) {
       }
 
       const step = stepDescriptorForEvent(type, data);
-      if (step && !shownSteps.has(step.key)) {
-        shownSteps.add(step.key);
-        thinking.addStep(step.label);
+      if (step) {
+        const stepKey = `${phase}:${step.key}`;
+        if (!shownSteps.has(stepKey)) {
+          shownSteps.add(stepKey);
+          thinking.addStep(step.label, step.detail);
+        }
+        if (step.startsNewPhase) {
+          phase += 1;
+        }
       }
     },
     { signal: state.abortController.signal },
