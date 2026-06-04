@@ -3,6 +3,7 @@ package com.sijo.mcpboondmanager.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sijo.mcpboondmanager.client.BoondManagerClient;
+import com.sijo.mcpboondmanager.dto.boond.BoondCandidateAdministrativeAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateDetailAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateSummaryAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondData;
@@ -12,6 +13,7 @@ import com.sijo.mcpboondmanager.dto.boond.BoondListEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondMeta;
 import com.sijo.mcpboondmanager.dto.boond.BoondSingleEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondTechnicalDocumentAttributes;
+import com.sijo.mcpboondmanager.dto.candidate.CandidateAdministrativeDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateDetailDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateCvDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
@@ -120,6 +122,38 @@ public class BoondManagerCandidateService {
             }
             throw ex;
         }
+    }
+
+    public CandidateAdministrativeDto getCandidateAdministrative(Integer candidateId) {
+        String path = CANDIDATES_PATH + "/" + candidateId + "/administrative";
+        try {
+            BoondSingleEnvelope<BoondCandidateAdministrativeAttributes> envelope =
+                    client.get(path, new org.springframework.core.ParameterizedTypeReference<>() {});
+            BoondCandidateAdministrativeAttributes attrs =
+                    envelope != null && envelope.data() != null ? envelope.data().attributes() : null;
+            if (attrs == null) {
+                return new CandidateAdministrativeDto(candidateId, null, null, null, null, null, null, null);
+            }
+            return new CandidateAdministrativeDto(
+                    candidateId,
+                    nullIfZero(attrs.currentSalary()),
+                    nullIfZero(attrs.minSalary()),
+                    nullIfZero(attrs.maxSalary()),
+                    nullIfZero(attrs.currentDailyRate()),
+                    nullIfZero(attrs.minDailyRate()),
+                    nullIfZero(attrs.maxDailyRate()),
+                    attrs.currency()
+            );
+        } catch (BoondApiException ex) {
+            if (org.springframework.http.HttpStatus.NOT_FOUND.value() == ex.status().value()) {
+                throw new CandidateNotFoundException(candidateId, path, ex);
+            }
+            throw ex;
+        }
+    }
+
+    private static Double nullIfZero(Double value) {
+        return (value == null || value == 0.0) ? null : value;
     }
 
     public TechnicalDocumentDto getCandidateTechnicalDocument(Integer candidateId) {

@@ -1061,6 +1061,8 @@ RESOLVED_LANGUAGE_LABELS_KEY: Final[str] = "_resolvedLanguageLabels"
 RESOLVED_ACTIVITY_AREA_LABELS_KEY: Final[str] = "_resolvedActivityAreaLabels"
 
 RESUME_TOOL: Final[str] = "getCandidateCV"
+ADMINISTRATIVE_TOOL: Final[str] = "getCandidateAdministrative"
+ENRICHMENT_ADMINISTRATIVE_KEY: Final[str] = "_enrichment_administrative"
 
 
 def _candidate_id_inputs(
@@ -1349,6 +1351,11 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     resume_schema: dict[str, object] = (
         tools_by_name[RESUME_TOOL].input_schema if enrich_with_resume else {}
     )
+    # Enrich with administrative data (salary/TJM) when the tool is available.
+    enrich_with_administrative = ADMINISTRATIVE_TOOL in tools_by_name
+    administrative_schema: dict[str, object] = (
+        tools_by_name[ADMINISTRATIVE_TOOL].input_schema if enrich_with_administrative else {}
+    )
 
     # Resolve availability and experience labels from the dictionary so the
     # frontend never shows raw BoondManager integer IDs.
@@ -1435,6 +1442,20 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
                     if generated_summary:
                         resume_enrichment["generatedSummary"] = generated_summary
                 merged_data[ENRICHMENT_RESUME_KEY] = resume_enrichment
+
+        # Enrich with salary/TJM from the administrative endpoint.
+        if enrich_with_administrative and ENRICHMENT_ADMINISTRATIVE_KEY not in merged_data:
+            admin_inputs = _candidate_id_inputs(result.id, administrative_schema)
+            admin_call, admin_raw = await _execute_single_tool(
+                ctx, ADMINISTRATIVE_TOOL, admin_inputs
+            )
+            tool_calls.append(admin_call)
+            if (
+                admin_call.status is ToolCallStatus.SUCCESS
+                and admin_raw
+                and isinstance(admin_raw[0], dict)
+            ):
+                merged_data[ENRICHMENT_ADMINISTRATIVE_KEY] = admin_raw[0]
 
         # Resolve all BoondManager integer/opaque IDs to human-readable labels.
         _inject_resolved_labels(

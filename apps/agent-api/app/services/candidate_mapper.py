@@ -213,9 +213,18 @@ _SALARY_FIELDS: Final[tuple[str, ...]] = (
     "salaryExpectation",
     "salary_expectation",
     "expectedSalary",
+    "currentSalary",    # from getCandidateAdministrative
+    "minSalary",        # from getCandidateAdministrative
     "salary",
 )
-_TJM_FIELDS: Final[tuple[str, ...]] = ("tjm", "dailyRate", "daily_rate", "tjmExpected")
+_TJM_FIELDS: Final[tuple[str, ...]] = (
+    "tjm",
+    "dailyRate",
+    "daily_rate",
+    "tjmExpected",
+    "currentDailyRate",  # from getCandidateAdministrative
+    "minDailyRate",      # from getCandidateAdministrative
+)
 _MOBILITY_FIELDS: Final[tuple[str, ...]] = (
     "_mobilityLabel",     # resolved from BoondManager dictionary option IDs
     "mobility",
@@ -260,6 +269,7 @@ _ENRICHMENT_FIELDS: Final[tuple[str, ...]] = (
     "_enrichment_detail",
     "_enrichment_technical_document",
     "_enrichment_resume",
+    "_enrichment_administrative",
 )
 _SAFE_INTERNAL_FIELDS: Final[tuple[str, ...]] = (
     "_availabilityLabel",
@@ -320,6 +330,8 @@ def _flatten_record(data: dict[str, object]) -> dict[str, object]:
         is_tech_doc = enrichment_key == "_enrichment_technical_document"
         is_resume = enrichment_key == "_enrichment_resume"
 
+        is_administrative = enrichment_key == "_enrichment_administrative"
+
         if is_resume:
             # The CV enrichment carries the raw extracted PDF text.
             # Surface it as a searchable text field and extract skill hints.
@@ -332,6 +344,21 @@ def _flatten_record(data: dict[str, object]) -> dict[str, object]:
                 # Use the CV text as a summary fallback if nothing better exists.
                 if not flat.get("summary") and len(cv_text) > 20:
                     flat.setdefault("summary", cv_text[:500].strip())
+            continue
+
+        if is_administrative:
+            # Convert numeric salary/TJM fields to formatted strings so
+            # _first_non_empty_str can pick them up downstream.
+            for field in (
+                "currentDailyRate", "minDailyRate", "maxDailyRate",
+                "currentSalary", "minSalary", "maxSalary",
+            ):
+                raw_val = enrichment.get(field)
+                if isinstance(raw_val, (int, float)) and not isinstance(raw_val, bool) and raw_val > 0:
+                    formatted = f"{int(raw_val)} €" if raw_val == int(raw_val) else f"{raw_val:.2f} €"
+                    flat.setdefault(field, formatted)
+                elif isinstance(raw_val, str) and raw_val.strip():
+                    flat.setdefault(field, raw_val.strip())
             continue
 
         for key, value in enrichment.items():
