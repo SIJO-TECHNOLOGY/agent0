@@ -72,9 +72,13 @@ class SearchService:
             debug_mode=debug_mode,
         )
 
-    async def search(self, request: SearchRequest) -> SearchResponse:
+    async def search(
+        self, request: SearchRequest, *, ui_language: str | None = None
+    ) -> SearchResponse:
         """Non-streaming search. Events are discarded by NoopEventEmitter."""
-        return await self.search_with_events(request, NoopEventEmitter())
+        return await self.search_with_events(
+            request, NoopEventEmitter(), ui_language=ui_language
+        )
 
     async def search_with_events(
         self,
@@ -82,6 +86,7 @@ class SearchService:
         emitter: EventEmitter,
         *,
         debug_mode: bool = False,
+        ui_language: str | None = None,
     ) -> SearchResponse:
         """Run the workflow while emitting progress events to ``emitter``.
 
@@ -136,7 +141,7 @@ class SearchService:
 
         response = SearchResponse(
             conversation_id=conversation_id,
-            message=_build_message(candidates, final_state),
+            message=_build_message(candidates, final_state, language=ui_language),
             ui=CandidateCardsUI(candidates=candidates),
         )
         await emitter.emit("final_response", response.model_dump())
@@ -158,7 +163,10 @@ _LIMITED_SEARCH_WARNING_CODES: frozenset[str] = frozenset(
 
 
 def _build_message(
-    candidates: list[CandidateCard], final_state: GraphState
+    candidates: list[CandidateCard],
+    final_state: GraphState,
+    *,
+    language: str | None = None,
 ) -> str:
     """Compose a short, user-facing reply grounded in the candidate list.
 
@@ -167,14 +175,15 @@ def _build_message(
     that. If criteria had to be dropped to run the search, append a
     short hint.
     """
-    base = _base_message(candidates, final_state)
-    hint = _limited_search_hint(final_state)
+    lang = _normalize_language(language)
+    base = _base_message(candidates, final_state, language=lang)
+    hint = _limited_search_hint(final_state, language=lang)
     message = f"{base} {hint}" if hint else base
     # A named-person miss is the most important context — lead with it so the
     # user knows these are fallback results, not the person they asked for.
     name_note = next(
         (
-            w.message
+            _localize_warning_message(w.code, w.message, lang)
             for w in final_state.warnings
             if w.code == "name_not_found" and w.message
         ),
@@ -195,42 +204,69 @@ _CANDIDATE_SEARCH_TOOL_NAMES: frozenset[str] = frozenset(
 
 
 def _base_message(
-    candidates: list[CandidateCard], final_state: GraphState
+    candidates: list[CandidateCard],
+    final_state: GraphState,
+    *,
+    language: str | None = None,
 ) -> str:
+    lang = _normalize_language(language)
     count = len(candidates)
     if count == 0:
         if _has_warning(final_state, "clarification_needed"):
             return (
-                "Please refine your search with at least one keyword "
+                "Précise ta recherche avec au moins un mot-clé "
+                "(compétence, technologie, rôle, localisation ou entreprise)."
+                if lang == "fr"
+                else "Please refine your search with at least one keyword "
                 "(skill, technology, role, location, or company)."
             )
         if not final_state.tool_calls:
             return (
-                "We couldn't run a candidate search for that query — no "
+                "Impossible de lancer une recherche candidat pour cette demande : "
+                "aucun outil MCP correspondant n’était disponible."
+                if lang == "fr"
+                else "We couldn't run a candidate search for that query — no "
                 "matching MCP tool was available."
             )
         if not _ran_candidate_search(final_state):
             return (
-                "The candidate search did not complete. Please refine "
+                "La recherche candidat ne s’est pas terminée. Précise ta "
+                "demande puis réessaie."
+                if lang == "fr"
+                else "The candidate search did not complete. Please refine "
                 "your query and try again."
             )
         if _candidate_search_failed(final_state):
             return (
-                "The candidate search could not be completed because a "
+                "La recherche candidat n’a pas pu aboutir car un outil de "
+                "recherche a échoué. Réessaie ou ajuste ta demande."
+                if lang == "fr"
+                else "The candidate search could not be completed because a "
                 "search tool failed. Please try again or adjust your query."
             )
         if final_state.results:
             return (
-                "Candidate records were returned, but they could not be "
+                "Des fiches candidats ont été retournées, mais elles n’ont "
+                "pas pu être normalisées en cartes affichables. Consulte "
+                "l’événement results_normalized du flux pour les raisons de rejet."
+                if lang == "fr"
+                else "Candidate records were returned, but they could not be "
                 "normalized into displayable candidate cards. Check the "
                 "stream's results_normalized event for drop reasons."
             )
         if _has_warning(final_state, "no_results_after_fallback"):
             return (
-                "No candidates matched your search, even after broader "
+                "Aucun candidat ne correspond à ta recherche, même après "
+                "des recherches élargies. Essaie avec des termes différents ou moins nombreux."
+                if lang == "fr"
+                else "No candidates matched your search, even after broader "
                 "fallback searches. Try different or fewer terms."
             )
-        return "No candidates matched your search."
+        return (
+            "Aucun candidat ne correspond à ta recherche."
+            if lang == "fr"
+            else "No candidates matched your search."
+        )
     unverified = (
         _has_warning(final_state, "criteria_unverified")
         or _has_warning(final_state, "criteria_visible")
@@ -241,18 +277,124 @@ def _base_message(
         name = candidates[0].full_name or candidates[0].id
         if unverified:
             return (
-                f"I found 1 broad candidate result ({name}), but the strict "
+                f"J’ai trouvé 1 résultat candidat large ({name}), mais les "
+                "critères stricts n’ont pas pu être entièrement vérifiés. "
+                "J’affiche le profil le plus proche, classé selon les éléments disponibles."
+                if lang == "fr"
+                else f"I found 1 broad candidate result ({name}), but the strict "
                 "criteria could not be fully verified. Showing the closest "
                 "match ranked by available evidence."
             )
-        return f"Found 1 candidate matching your search: {name}."
+        return (
+            f"J’ai trouvé 1 candidat correspondant à ta recherche : {name}."
+            if lang == "fr"
+            else f"Found 1 candidate matching your search: {name}."
+        )
     if unverified:
         return (
-            f"I found {count} broad candidate results, but the strict "
+            f"J’ai trouvé {count} résultats candidats larges, mais les "
+            "critères stricts n’ont pas pu être entièrement vérifiés. "
+            "J’affiche les profils les plus proches, classés selon les éléments disponibles."
+            if lang == "fr"
+            else f"I found {count} broad candidate results, but the strict "
             "criteria could not be fully verified. Showing the closest "
             "matches ranked by available evidence."
         )
-    return f"I found {count} candidates matching your search."
+    return (
+        f"J’ai trouvé {count} candidats correspondant à ta recherche."
+        if lang == "fr"
+        else f"I found {count} candidates matching your search."
+    )
+
+
+def _normalize_language(language: str | None) -> str:
+    if not language:
+        return "en"
+    return "fr" if str(language).strip().lower().startswith("fr") else "en"
+
+
+def _localize_warning_message(code: str, message: str | None, language: str) -> str:
+    if language != "fr" or not message:
+        return message or ""
+    if code == "criteria_unverified" and message.startswith("could not verify: "):
+        return "impossible à vérifier : " + message.split(": ", 1)[1]
+    if code == "criteria_visible" and message.startswith(
+        "visible on candidate profiles but not confirmed in technical documents: "
+    ):
+        return (
+            "visible sur les profils candidats mais non confirmé dans les "
+            "documents techniques : " + message.split(": ", 1)[1]
+        )
+    if code == "search_broadened":
+        return (
+            "La recherche initiale a été élargie pour trouver des candidats ; "
+            "certains critères peuvent ne pas être strictement appliqués."
+        )
+    if code == "name_not_found" and message.startswith("No candidate matching the name '"):
+        try:
+            name = message.split("'", 2)[1]
+        except IndexError:
+            return message
+        if "showing candidates matching the other criteria instead" in message:
+            return (
+                f"Aucun candidat correspondant au nom '{name}' n’a été trouvé ; "
+                "j’affiche plutôt les candidats correspondant aux autres critères."
+            )
+        if "no candidates matched the other criteria either" in message:
+            return (
+                f"Aucun candidat correspondant au nom '{name}' n’a été trouvé, "
+                "et aucun candidat ne correspond non plus aux autres critères."
+            )
+    return message
+
+
+def _limited_search_hint(
+    final_state: GraphState, *, language: str | None = None
+) -> str | None:
+    lang = _normalize_language(language)
+    triggered = [
+        w for w in final_state.warnings if w.code in _LIMITED_SEARCH_WARNING_CODES
+    ]
+    if not triggered:
+        return None
+    clauses: list[str] = []
+    if any(w.code == "search_broadened" for w in triggered):
+        clauses.append(
+            "recherche élargie pour trouver des candidats"
+            if lang == "fr"
+            else "search was broadened to find candidates"
+        )
+    if any(w.code == "experience_filter_unmapped" for w in triggered):
+        clauses.append(
+            "filtre d’expérience non applicable"
+            if lang == "fr"
+            else "experience filter could not be applied"
+        )
+    if any(w.code == "filter_unresolved" for w in triggered):
+        clauses.append(
+            "certains filtres prévus n’ont pas pu être appliqués"
+            if lang == "fr"
+            else "some planned filters could not be applied"
+        )
+    unverified = next(
+        (w for w in triggered if w.code == "criteria_unverified"), None
+    )
+    if unverified is not None and unverified.message:
+        clauses.append(
+            _localize_warning_message(unverified.code, unverified.message, lang)
+        )
+    visible = next(
+        (w for w in triggered if w.code == "criteria_visible"), None
+    )
+    if visible is not None and visible.message:
+        clauses.append(_localize_warning_message(visible.code, visible.message, lang))
+    if not clauses:
+        clauses.append(
+            "certains filtres n’ont pas pu être appliqués"
+            if lang == "fr"
+            else "some filters could not be applied"
+        )
+    return "(" + "; ".join(clauses) + ")"
 
 
 def _has_warning(final_state: GraphState, code: str) -> bool:
@@ -272,31 +414,3 @@ def _candidate_search_failed(final_state: GraphState) -> bool:
         and call.status is ToolCallStatus.FAILED
         for call in final_state.tool_calls
     )
-
-
-def _limited_search_hint(final_state: GraphState) -> str | None:
-    triggered = [
-        w for w in final_state.warnings if w.code in _LIMITED_SEARCH_WARNING_CODES
-    ]
-    if not triggered:
-        return None
-    clauses: list[str] = []
-    if any(w.code == "search_broadened" for w in triggered):
-        clauses.append("search was broadened to find candidates")
-    if any(w.code == "experience_filter_unmapped" for w in triggered):
-        clauses.append("experience filter could not be applied")
-    if any(w.code == "filter_unresolved" for w in triggered):
-        clauses.append("some planned filters could not be applied")
-    unverified = next(
-        (w for w in triggered if w.code == "criteria_unverified"), None
-    )
-    if unverified is not None and unverified.message:
-        clauses.append(unverified.message)
-    visible = next(
-        (w for w in triggered if w.code == "criteria_visible"), None
-    )
-    if visible is not None and visible.message:
-        clauses.append(visible.message)
-    if not clauses:
-        clauses.append("some filters could not be applied")
-    return "(" + "; ".join(clauses) + ")"

@@ -52,11 +52,15 @@ async def _drive_workflow(
     emitter: QueueEventEmitter,
     *,
     debug_mode: bool = False,
+    ui_language: str | None = None,
 ) -> None:
     """Run the search; ensure the queue closes on every exit path."""
     try:
         await service.search_with_events(
-            request, emitter, debug_mode=debug_mode
+            request,
+            emitter,
+            debug_mode=debug_mode,
+            ui_language=ui_language,
         )
     except McpClientUnavailableError:
         logger.info("search_stream.mcp_unavailable")
@@ -102,7 +106,13 @@ async def _stream(
 ) -> AsyncIterator[str]:
     emitter = QueueEventEmitter()
     task = asyncio.create_task(
-        _drive_workflow(service, request, emitter, debug_mode=debug_mode)
+        _drive_workflow(
+            service,
+            request,
+            emitter,
+            debug_mode=debug_mode,
+            ui_language=http_request.headers.get("accept-language"),
+        )
     )
     try:
         async for event in emitter:
