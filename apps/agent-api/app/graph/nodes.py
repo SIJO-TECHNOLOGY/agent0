@@ -1162,26 +1162,39 @@ def _raw_experience_id(data: dict[str, object]) -> object | None:
     return None
 
 
+def _contract_value_from_source(source: object) -> object | None:
+    if not isinstance(source, dict):
+        return None
+    for field in ("typeOf", "contractType", "contract"):
+        raw = source.get(field)
+        if raw is not None:
+            return raw
+    attrs = source.get("attributes")
+    if isinstance(attrs, dict):
+        for field in ("typeOf", "contractType", "contract"):
+            raw = attrs.get(field)
+            if raw is not None:
+                return raw
+    return None
+
+
 def _raw_contract_type(data: dict[str, object]) -> object | None:
+    # Candidate detail (`/information`) is the source of truth for the
+    # display-only desired contract. If it was fetched, do not fall back to the
+    # search-list `typeOf`, which can be absent, stale, or ambiguous depending
+    # on the BoondManager response columns.
+    if ENRICHMENT_DETAIL_KEY in data:
+        return _contract_value_from_source(data.get(ENRICHMENT_DETAIL_KEY))
+
     for source in (
         data,
         data.get("attributes"),
-        data.get(ENRICHMENT_DETAIL_KEY),
         data.get(ENRICHMENT_ADMINISTRATIVE_KEY),
         data.get(ENRICHMENT_TECH_DOC_KEY),
     ):
-        if not isinstance(source, dict):
-            continue
-        for field in ("typeOf", "contractType", "contract"):
-            raw = source.get(field)
-            if raw is not None:
-                return raw
-        attrs = source.get("attributes")
-        if isinstance(attrs, dict):
-            for field in ("typeOf", "contractType", "contract"):
-                raw = attrs.get(field)
-                if raw is not None:
-                    return raw
+        raw = _contract_value_from_source(source)
+        if raw is not None:
+            return raw
     return None
 
 

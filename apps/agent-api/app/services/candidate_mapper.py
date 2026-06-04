@@ -12,6 +12,7 @@ BoondManager API logic, no direct provider calls.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable
 from typing import Final
 
@@ -636,6 +637,25 @@ def _extract_string_list(data: dict[str, object], keys: Iterable[str]) -> list[s
 
 
 
+def _normalize_label(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value)
+    without_accents = "".join(
+        char for char in decomposed if not unicodedata.combining(char)
+    )
+    return re.sub(r"\s+", " ", without_accents).strip().casefold()
+
+
+def _is_unfilled_contract_label(value: str) -> bool:
+    normalized = _normalize_label(value)
+    return normalized in {
+        "non renseigne",
+        "not specified",
+        "unspecified",
+        "unknown",
+        "n/a",
+    }
+
+
 def _extract_contract_preferences(data: dict[str, object]) -> list[str]:
     """Extract desired contract labels without surfacing raw dictionary IDs."""
     for key in (
@@ -646,7 +666,11 @@ def _extract_contract_preferences(data: dict[str, object]) -> list[str]:
         "contract",
     ):
         values = _extract_string_list(data, (key,))
-        labels = [value for value in values if not _is_raw_integer(value)]
+        labels = [
+            value
+            for value in values
+            if not _is_raw_integer(value) and not _is_unfilled_contract_label(value)
+        ]
         if labels:
             return labels
 
@@ -655,7 +679,12 @@ def _extract_contract_preferences(data: dict[str, object]) -> list[str]:
             continue
         for key in ("contractType", "typeOf", "contract"):
             value = source.get(key)
-            if isinstance(value, str) and value.strip() and not _is_raw_integer(value):
+            if (
+                isinstance(value, str)
+                and value.strip()
+                and not _is_raw_integer(value)
+                and not _is_unfilled_contract_label(value)
+            ):
                 return [value.strip()]
     return []
 

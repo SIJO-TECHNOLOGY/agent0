@@ -409,10 +409,7 @@ def test_contract_preferences_do_not_show_raw_contract_type_ids() -> None:
     card = candidate_card_from_result(
         _result(
             source_tool="searchCandidates",
-            data={
-                "contractType": -1,
-                "_enrichment_detail": {"contractType": 2},
-            },
+            data={"contractType": -1},
         )
     )
 
@@ -442,3 +439,14 @@ def test_contract_preferences_keep_text_contract_type() -> None:
     )
 
     assert card.contract_preferences == ["freelance"]
+
+
+def test_contract_preferences_do_not_show_unfilled_contract_labels() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"_contractLabel": "Non renseigne"},
+        )
+    )
+
+    assert card.contract_preferences == []
