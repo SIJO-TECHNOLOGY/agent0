@@ -1,8 +1,8 @@
 package com.sijo.mcpboondmanager.config;
 
 import com.sijo.mcpboondmanager.tools.BoondDictionaryTool;
-import com.sijo.mcpboondmanager.tools.CandidateDetailTool;
 import com.sijo.mcpboondmanager.tools.CandidateCvTool;
+import com.sijo.mcpboondmanager.tools.CandidateDetailTool;
 import com.sijo.mcpboondmanager.tools.CandidateSearchTool;
 import com.sijo.mcpboondmanager.tools.CandidateTechnicalDocTool;
 import org.springframework.ai.tool.ToolCallbackProvider;
