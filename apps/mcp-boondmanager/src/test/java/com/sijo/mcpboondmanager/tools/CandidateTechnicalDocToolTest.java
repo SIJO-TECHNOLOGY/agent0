@@ -13,6 +13,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.tool.annotation.Tool;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,7 +34,7 @@ class CandidateTechnicalDocToolTest {
         TechnicalDocumentDto expected = TestFixtures.technicalDocument();
         when(candidateService.getCandidateTechnicalDocument(42)).thenReturn(expected);
 
-        TechnicalDocumentDto response = tool().getCandidateTechnicalDocument(42);
+        TechnicalDocumentDto response = tool().getCandidateTechnicalDocument(42, true);
 
         assertThat(response).isSameAs(expected);
         verify(candidateService).getCandidateTechnicalDocument(42);
@@ -40,11 +42,43 @@ class CandidateTechnicalDocToolTest {
     }
 
     @Test
+    void givenNoIncludeRawSkillsText_whenGetTechnicalDocument_thenKeepsSkillsByDefault() {
+        TechnicalDocumentDto expected = TestFixtures.technicalDocument();
+        when(candidateService.getCandidateTechnicalDocument(42)).thenReturn(expected);
+
+        TechnicalDocumentDto response = tool().getCandidateTechnicalDocument(42, null);
+
+        // includeRawSkillsText defaults to true — same instance returned, skills text intact.
+        assertThat(response).isSameAs(expected);
+        assertThat(response.skills()).isNotBlank();
+    }
+
+    @Test
+    void givenIncludeRawSkillsTextFalse_whenGetTechnicalDocument_thenStripsRawSkillsOnly() {
+        TechnicalDocumentDto backend = TestFixtures.technicalDocument();
+        when(candidateService.getCandidateTechnicalDocument(42)).thenReturn(backend);
+
+        TechnicalDocumentDto response = tool().getCandidateTechnicalDocument(42, false);
+
+        assertThat(response.skills()).isNull();
+        // Structured fields and the rest of the document are preserved.
+        assertThat(response.id()).isEqualTo(backend.id());
+        assertThat(response.tdId()).isEqualTo(backend.tdId());
+        assertThat(response.title()).isEqualTo(backend.title());
+        assertThat(response.summary()).isEqualTo(backend.summary());
+        assertThat(response.diplomas()).isEqualTo(backend.diplomas());
+        assertThat(response.expertiseAreas()).isEqualTo(backend.expertiseAreas());
+        assertThat(response.tools()).isEqualTo(backend.tools());
+        assertThat(response.languages()).isEqualTo(backend.languages());
+        assertThat(response.references()).isEqualTo(backend.references());
+    }
+
+    @Test
     void givenNullCandidateId_whenGetTechnicalDocument_thenDelegatesCurrentServiceBehavior() {
         TechnicalDocumentDto expected = TestFixtures.technicalDocument();
         when(candidateService.getCandidateTechnicalDocument(null)).thenReturn(expected);
 
-        TechnicalDocumentDto response = tool().getCandidateTechnicalDocument(null);
+        TechnicalDocumentDto response = tool().getCandidateTechnicalDocument(null, true);
 
         assertThat(response).isSameAs(expected);
         verify(candidateService).getCandidateTechnicalDocument(null);
@@ -57,7 +91,7 @@ class CandidateTechnicalDocToolTest {
                 "/candidates/42/technical-data", new RuntimeException());
         when(candidateService.getCandidateTechnicalDocument(42)).thenThrow(exception);
 
-        assertThatThrownBy(() -> tool().getCandidateTechnicalDocument(42))
+        assertThatThrownBy(() -> tool().getCandidateTechnicalDocument(42, true))
                 .isSameAs(exception);
     }
 
@@ -66,17 +100,33 @@ class CandidateTechnicalDocToolTest {
         RuntimeException exception = new RuntimeException("Technical document not found for candidate: 42");
         when(candidateService.getCandidateTechnicalDocument(42)).thenThrow(exception);
 
-        assertThatThrownBy(() -> tool().getCandidateTechnicalDocument(42))
+        assertThatThrownBy(() -> tool().getCandidateTechnicalDocument(42, true))
                 .isSameAs(exception);
     }
 
     @Test
     void givenToolClass_whenInspected_thenToolNameRemainsUnchanged() throws NoSuchMethodException {
         Tool annotation = CandidateTechnicalDocTool.class
-                .getMethod("getCandidateTechnicalDocument", Integer.class)
+                .getMethod("getCandidateTechnicalDocument", Integer.class, Boolean.class)
                 .getAnnotation(Tool.class);
 
         assertThat(annotation.name()).isEqualTo("getCandidateTechnicalDocument");
+    }
+
+    @Test
+    void givenToolDescription_whenInspected_thenDocumentsEveryReturnedField() {
+        Method method = Arrays.stream(CandidateTechnicalDocTool.class.getMethods())
+                .filter(m -> m.getName().equals("getCandidateTechnicalDocument"))
+                .findFirst()
+                .orElseThrow();
+        String description = method.getAnnotation(Tool.class).description();
+
+        for (RecordComponent component : TechnicalDocumentDto.class.getRecordComponents()) {
+            assertThat(description)
+                    .as("@Tool description should document the returned field '%s'", component.getName())
+                    .contains(component.getName());
+        }
+        assertThat(description).contains("includeRawSkillsText");
     }
 
     @Test

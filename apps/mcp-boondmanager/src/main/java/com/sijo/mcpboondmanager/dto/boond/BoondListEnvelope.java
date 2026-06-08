@@ -7,6 +7,7 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record BoondListEnvelope<A>(
         List<BoondData<A>> data,
-        BoondMeta meta
+        BoondMeta meta,
+        List<BoondIncluded> included
 ) {
 }

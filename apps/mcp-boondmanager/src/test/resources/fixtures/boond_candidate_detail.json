@@ -1,0 +1,130 @@
+{
+    "meta": {
+        "version": "9.1.58.1",
+        "androidMinVersion": "2.31.5",
+        "iosMinVersion": "2.28.6",
+        "isLogged": true,
+        "language": "fr",
+        "timestamp": 1780907452351,
+        "login": "mickael@sijo.fr",
+        "customer": "sijo"
+    },
+    "data": {
+        "id": "42130",
+        "type": "candidate",
+        "attributes": {
+            "creationDate": "2026-05-28T15:20:46+0200",
+            "updateDate": "2026-06-08T10:29:21+0200",
+            "creationSource": "manual",
+            "civility": 1,
+            "lastName": "REN",
+            "firstName": "Sisi",
+            "title": "Ing\u00e9nieur d'\u00e9tude et d\u00e9veloppement",
+            "initials": "S. R.",
+            "typeOf": -1,
+            "state": 4,
+            "stateReason": {
+                "typeOf": 0,
+                "detail": ""
+            },
+            "email1": "woshicecile@gmail.com",
+            "email2": "",
+            "email3": "",
+            "phone1": "06 50 60 29 75",
+            "phone2": "",
+            "phone3": "",
+            "fax": "",
+            "address": "Paris, \u00cele-de-France",
+            "postcode": "",
+            "town": "Paris",
+            "country": "France",
+            "subDivision": "",
+            "source": {
+                "typeOf": -1,
+                "detail": "Collective"
+            },
+            "dateOfBirth": "",
+            "mobilityAreas": [],
+            "globalEvaluation": "-1",
+            "evaluations": [],
+            "availability": -1,
+            "isVisible": true,
+            "thumbnail": "candidate_42130_e20efd2243f74204dc4379b1a14bdf13f29acf7a",
+            "numberOfActivePositionings": 0,
+            "informationComments": "",
+            "socialNetworks": [
+                {
+                    "network": "linkedin",
+                    "url": "www.linkedin.com/in/sisi-renb1413310a"
+                }
+            ]
+        },
+        "relationships": {
+            "mainManager": {
+                "data": {
+                    "id": "38837",
+                    "type": "resource"
+                }
+            },
+            "hrManager": {
+                "data": {
+                    "id": "38837",
+                    "type": "resource"
+                }
+            },
+            "createdBy": {
+                "data": {
+                    "id": "38837",
+                    "type": "resource"
+                }
+            },
+            "agency": {
+                "data": {
+                    "id": "1",
+                    "type": "agency"
+                }
+            },
+            "pole": {
+                "data": null
+            },
+            "resumes": {
+                "data": [
+                    {
+                        "id": "14086_resume",
+                        "type": "document"
+                    }
+                ]
+            },
+            "resource": {
+                "data": null
+            }
+        }
+    },
+    "included": [
+        {
+            "id": "38837",
+            "type": "resource",
+            "attributes": {
+                "lastName": "Mboutsou",
+                "firstName": "Etienne",
+                "thumbnail": "",
+                "email1": "etienne@sijo.fr",
+                "phone1": ""
+            }
+        },
+        {
+            "id": "1",
+            "type": "agency",
+            "attributes": {
+                "name": "SIJO"
+            }
+        },
+        {
+            "id": "14086_resume",
+            "type": "document",
+            "attributes": {
+                "name": "Profile - 2026-05-28T151921.193.pdf"
+            }
+        }
+    ]
+}

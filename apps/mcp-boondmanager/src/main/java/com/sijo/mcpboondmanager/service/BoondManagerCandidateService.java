@@ -6,14 +6,21 @@ import com.sijo.mcpboondmanager.dto.boond.BoondCandidateSummaryAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondData;
 import com.sijo.mcpboondmanager.dto.boond.BoondDictionaryEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondDictionarySetting;
+import com.sijo.mcpboondmanager.dto.boond.BoondIncluded;
 import com.sijo.mcpboondmanager.dto.boond.BoondListEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondMeta;
+import com.sijo.mcpboondmanager.dto.boond.BoondReference;
+import com.sijo.mcpboondmanager.dto.boond.BoondRelationships;
 import com.sijo.mcpboondmanager.dto.boond.BoondSingleEnvelope;
+import com.sijo.mcpboondmanager.dto.boond.BoondSocialNetwork;
+import com.sijo.mcpboondmanager.dto.boond.BoondSource;
 import com.sijo.mcpboondmanager.dto.boond.BoondTechnicalDocumentAttributes;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateDetailDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchResponseDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSummaryDto;
+import com.sijo.mcpboondmanager.dto.candidate.ExperienceReference;
+import com.sijo.mcpboondmanager.dto.candidate.SocialLink;
 import com.sijo.mcpboondmanager.dto.candidate.TechnicalDocumentDto;
 import com.sijo.mcpboondmanager.dto.common.PaginationMetaDto;
 import com.sijo.mcpboondmanager.dto.dictionary.DictionaryResponseDto;
@@ -27,7 +34,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriBuilder;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 @Service
@@ -201,7 +210,7 @@ public class BoondManagerCandidateService {
         BoondDictionarySetting setting = envelope.data().setting();
         return new DictionaryResponseDto(new DictionarySettingDto(
                 new DictionarySettingDto.State(setting.state().candidate()),
-                new DictionarySettingDto.TypeOf(setting.typeOf().contract()),
+                new DictionarySettingDto.TypeOf(setting.typeOf().contract(), setting.typeOf().resource()),
                 setting.availability(),
                 setting.mobilityArea(),
                 setting.experience(),
@@ -218,22 +227,34 @@ public class BoondManagerCandidateService {
 
     private CandidateSearchResponseDto toSearchResponse(
             BoondListEnvelope<BoondCandidateSummaryAttributes> envelope) {
+        Map<String, BoondIncluded> included = indexIncluded(envelope.included());
         List<CandidateSummaryDto> candidates = envelope.data().stream()
-                .map(this::toCandidateSummary)
+                .map(data -> toCandidateSummary(data, included))
                 .toList();
         return new CandidateSearchResponseDto(candidates, toPaginationMeta(envelope.meta()));
     }
 
-    private CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data) {
+    private CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data,
+                                                   Map<String, BoondIncluded> included) {
         BoondCandidateSummaryAttributes attrs = data.attributes();
         ResolvedExperience experience = experienceResolver.resolve(attrs.experience());
+        BoondSource source = attrs.source();
+        BoondRelationships relationships = data.relationships();
+        BoondRelationships.Relationship mainManager = relationships == null ? null : relationships.mainManager();
+        BoondRelationships.Relationship agency = relationships == null ? null : relationships.agency();
         return new CandidateSummaryDto(
                 parseId(data.id()),
                 attrs.firstName(),
                 attrs.lastName(),
                 attrs.email1(),
+                attrs.email2(),
+                attrs.email3(),
+                attrs.phone1(),
+                attrs.phone2(),
+                attrs.civility(),
                 attrs.state(),
                 availabilityResolver.resolve(attrs.availability()),
+                attrs.availability(),
                 attrs.typeOf(),
                 attrs.mobilityAreas(),
                 attrs.town(),
@@ -249,7 +270,22 @@ public class BoondManagerCandidateService {
                 attrs.expertiseAreas(),
                 attrs.activityAreas(),
                 toToolProficiencies(attrs.tools()),
-                toLanguageProficiencies(attrs.languages())
+                toLanguageProficiencies(attrs.languages()),
+                attrs.globalEvaluation(),
+                attrs.creationDate(),
+                attrs.updateDate(),
+                attrs.lastActionDate(),
+                attrs.numberOfActivePositionings(),
+                attrs.numberOfResumes(),
+                source == null ? null : source.typeOf(),
+                source == null ? null : source.detail(),
+                toReferences(attrs.references()),
+                attrs.evaluations(),
+                toSocialLinks(attrs.socialNetworks()),
+                relationshipId(mainManager),
+                relationshipName(mainManager, included),
+                relationshipId(agency),
+                relationshipName(agency, included)
         );
     }
 
@@ -260,6 +296,12 @@ public class BoondManagerCandidateService {
         BoondCandidateDetailAttributes.Source source = a.source();
         Integer sourceType = source == null ? null : source.typeOf();
         String sourceDetail = source == null ? null : source.detail();
+        BoondCandidateDetailAttributes.StateReason stateReason = a.stateReason();
+        Map<String, BoondIncluded> included = indexIncluded(envelope.included());
+        BoondRelationships relationships = data.relationships();
+        BoondRelationships.Relationship mainManager = relationships == null ? null : relationships.mainManager();
+        BoondRelationships.Relationship hrManager = relationships == null ? null : relationships.hrManager();
+        BoondRelationships.Relationship agency = relationships == null ? null : relationships.agency();
         return new CandidateDetailDto(
                 parseId(data.id()),
                 a.firstName(),
@@ -281,16 +323,27 @@ public class BoondManagerCandidateService {
                 a.title(),
                 a.initials(),
                 a.state(),
+                stateReason == null ? null : stateReason.typeOf(),
+                stateReason == null ? null : stateReason.detail(),
                 a.typeOf(),
                 a.availability(),
                 a.mobilityAreas(),
                 sourceType,
                 sourceDetail,
                 a.globalEvaluation(),
+                a.evaluations(),
+                a.numberOfActivePositionings(),
+                toSocialLinks(a.socialNetworks()),
                 a.informationComments(),
                 a.creationDate(),
                 a.updateDate(),
-                a.creationSource()
+                a.creationSource(),
+                relationshipId(mainManager),
+                relationshipName(mainManager, included),
+                relationshipId(hrManager),
+                relationshipName(hrManager, included),
+                relationshipId(agency),
+                relationshipName(agency, included)
         );
     }
 
@@ -317,6 +370,7 @@ public class BoondManagerCandidateService {
         return new TechnicalDocumentDto(
                 parseId(data.id()),
                 a.tdId(),
+                a.tdLink(),
                 a.title(),
                 a.description(),
                 a.summary(),
@@ -331,7 +385,8 @@ public class BoondManagerCandidateService {
                 a.expertiseAreas(),
                 a.activityAreas(),
                 toToolProficiencies(a.tools()),
-                toLanguageProficiencies(a.languages())
+                toLanguageProficiencies(a.languages()),
+                toReferences(a.references())
         );
     }
 
@@ -354,6 +409,89 @@ public class BoondManagerCandidateService {
                 .map(language -> new TechnicalDocumentDto.LanguageProficiency(
                         language.language(), language.level()))
                 .toList();
+    }
+
+    private static List<ExperienceReference> toReferences(List<BoondReference> references) {
+        if (references == null) {
+            return null;
+        }
+        return references.stream()
+                .map(r -> new ExperienceReference(
+                        parseId(r.id()),
+                        r.title(),
+                        r.company(),
+                        r.location(),
+                        r.startMonth(),
+                        r.startYear(),
+                        r.endMonth(),
+                        r.endYear(),
+                        r.startDate(),
+                        r.endDate(),
+                        r.row(),
+                        r.skills(),
+                        r.description()))
+                .toList();
+    }
+
+    private static List<SocialLink> toSocialLinks(List<BoondSocialNetwork> networks) {
+        if (networks == null) {
+            return null;
+        }
+        return networks.stream()
+                .map(network -> new SocialLink(network.network(), network.url()))
+                .toList();
+    }
+
+    /**
+     * Indexes the JSON:API {@code included} side-loaded resources by id so relationship references can
+     * be resolved to their human-readable label.
+     */
+    private static Map<String, BoondIncluded> indexIncluded(List<BoondIncluded> included) {
+        if (included == null || included.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, BoondIncluded> byId = new HashMap<>();
+        for (BoondIncluded entry : included) {
+            if (entry != null && entry.id() != null) {
+                byId.put(entry.id(), entry);
+            }
+        }
+        return byId;
+    }
+
+    /** The numeric id behind a relationship reference, or {@code null} when the link is absent. */
+    private static Integer relationshipId(BoondRelationships.Relationship relationship) {
+        if (relationship == null || relationship.data() == null) {
+            return null;
+        }
+        return parseId(relationship.data().id());
+    }
+
+    /** The label of the resource a relationship points to, resolved from the {@code included} index. */
+    private static String relationshipName(BoondRelationships.Relationship relationship,
+                                           Map<String, BoondIncluded> included) {
+        if (relationship == null || relationship.data() == null) {
+            return null;
+        }
+        return displayName(included.get(relationship.data().id()));
+    }
+
+    /**
+     * Builds a display label from a side-loaded resource: the {@code name} for agency-type entries, or
+     * the trimmed {@code firstName lastName} for resource-type entries; {@code null} when unresolved.
+     */
+    private static String displayName(BoondIncluded included) {
+        if (included == null || included.attributes() == null) {
+            return null;
+        }
+        BoondIncluded.IncludedAttributes attributes = included.attributes();
+        if (attributes.name() != null && !attributes.name().isBlank()) {
+            return attributes.name();
+        }
+        String first = attributes.firstName() == null ? "" : attributes.firstName().trim();
+        String last = attributes.lastName() == null ? "" : attributes.lastName().trim();
+        String full = (first + " " + last).trim();
+        return full.isEmpty() ? null : full;
     }
 
     private static PaginationMetaDto toPaginationMeta(BoondMeta meta) {

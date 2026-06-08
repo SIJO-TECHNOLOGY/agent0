@@ -15,12 +15,15 @@ import java.util.List;
  * called with a candidate id.)
  *
  * <p>BoondManager returns {@code diplomas}, {@code expertiseAreas} and {@code activityAreas} as JSON
- * arrays of strings, and {@code tools}/{@code languages} as arrays of objects (not delimited
- * strings), so they are modeled as typed lists.
+ * arrays of strings, and {@code tools}/{@code languages}/{@code references} as arrays of objects (not
+ * delimited strings), so they are modeled as typed lists. {@code references} is the candidate's
+ * detailed assignment history ({@link BoondReference}) and is the richest free-text matching signal —
+ * it must never be flattened or truncated.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record BoondTechnicalDocumentAttributes(
         String tdId,
+        String tdLink,
         String title,
         String description,
         String summary,
@@ -31,7 +34,8 @@ public record BoondTechnicalDocumentAttributes(
         List<String> expertiseAreas,
         List<String> activityAreas,
         List<Tool> tools,
-        List<Language> languages
+        List<Language> languages,
+        List<BoondReference> references
 ) {
 
     /**

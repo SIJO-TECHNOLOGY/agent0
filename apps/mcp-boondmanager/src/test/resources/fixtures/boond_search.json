@@ -1,0 +1,305 @@
+{
+    "meta": {
+        "totals": {
+            "rows": 25561
+        },
+        "solr": true,
+        "conditionalFields": false,
+        "version": "9.1.58.1",
+        "androidMinVersion": "2.31.5",
+        "iosMinVersion": "2.28.6",
+        "isLogged": true,
+        "language": "fr",
+        "timestamp": 1780907419760,
+        "login": "mickael@sijo.fr",
+        "customer": "sijo"
+    },
+    "data": [
+        {
+            "id": "42130",
+            "type": "candidate",
+            "attributes": {
+                "creationDate": "2026-05-28T15:20:46+0200",
+                "updateDate": "2026-06-08T10:29:21+0200",
+                "civility": 1,
+                "firstName": "Sisi",
+                "lastName": "REN",
+                "state": 4,
+                "typeOf": -1,
+                "isVisible": true,
+                "thumbnail": "candidate_42130_e20efd2243f74204dc4379b1a14bdf13f29acf7a",
+                "availability": -1,
+                "skills": "communication, adaptabilit\u00e9\n\nAngular, Java, Java 8/11, Spring, Spring Boot 2, Spring Batch, Redis, Angular 14/20, Hibernate, Oracle SQL Developer, Jira, Git, GitLab, Maven, Sonar, Jenkins, Eclipse, Visual Studio, WebLogic, JUnit 5, Mockito, Xray Test, Spring Boot, Angular 7, Bootstrap, Ansible, Docker, SecuServe, Semantic UI, IntelliJ, WSO2, SCIM2, LDAP, Ubuntu 20, Java 11, Angular 8, REST, PostgreSQL 9, Ubuntu 16, JHipster, Talend DI, PostgreSQL 9.5, SQL, PL/SQL, Java 8, CFT, batch, Tomcat, Maven 2, Angular 4/5, AWS, Windows 10, Java 7, JavaScript, Oracle SQL 12g, Maven 1/2, CVS, SVN, Bamboo, Apache2, Jboss 4, EJB3, Struts2, XML, XSLT, XSD, Axis2, JSP, Velocity, HTML, CSS, Ajax, jQuery 1.8",
+                "diplomas": [
+                    "2017 - Dipl\u00f4me d'ing\u00e9nieur, Syst\u00e8mes Logiciels et S\u00e9curit\u00e9 - ENSTA Bretagne",
+                    "2013 - Dipl\u00f4me DUFOS, Classe pr\u00e9paratoire en langue et culture fran\u00e7aises - Universit\u00e9 du Maine-Le Mans-Laval",
+                    "2011 - Licence en ing\u00e9nierie ( bac+3 ), M\u00e9canique et Automatisation - \u4e0a\u6d77\u5927\u5b66",
+                    "Jahia DX7 Oracle Certified Professional: Java SE 11 Developer -"
+                ],
+                "mobilityAreas": [],
+                "activityAreas": [
+                    "profilsdeveloppeur"
+                ],
+                "globalEvaluation": "-1",
+                "languages": [
+                    {
+                        "language": "Fran\u00e7ais",
+                        "level": "courant"
+                    },
+                    {
+                        "language": "Chinois",
+                        "level": "maternel"
+                    },
+                    {
+                        "language": "anglais",
+                        "level": "courant"
+                    }
+                ],
+                "expertiseAreas": [
+                    "Assurance",
+                    "Secteur public",
+                    "Logistique",
+                    "Automobile"
+                ],
+                "experience": 10,
+                "references": [
+                    {
+                        "id": "35102",
+                        "title": "Stagiaire d\u00e9veloppement Java Fullstack",
+                        "company": "Orchestra",
+                        "location": "",
+                        "startMonth": "2",
+                        "startYear": "2017",
+                        "endMonth": "8",
+                        "endYear": "2017",
+                        "skills": "Java 7, JavaScript, Oracle SQL 12g, Maven 1/2, Jira, CVS, SVN, Jenkins, Eclipse, Bamboo, Apache2, Jboss 4, EJB3, Struts2, XML, XSLT, XSD, Axis2, JSP, Velocity, HTML, CSS, Ajax, jQuery 1.8",
+                        "description": "Participation \u00e0 l'\u00e9volution d'une plateforme SaaS d\u00e9di\u00e9e au secteur du tourisme, permettant aux professionnels de produire, administrer, distribuer et g\u00e9rer une offre loisirs compl\u00e8te sur l'ensemble des canaux de distribution : packages s\u00e9jours, nuit\u00e9es d'h\u00f4tels, billets d'avion, packages dynamiques.\nD\u00e9veloppement frontend et correction d'anomalies\nD\u00e9veloppement des traitements de donn\u00e9es bas\u00e9s sur XML et XSLT\nMise \u00e0 jour et maintenance des web services\nR\u00e9alisation des tests unitaires avec JUnit\nR\u00e9daction de documentation technique et support des \u00e9quipes\nGestion et optimisation des requ\u00eates PL/SQL avanc\u00e9es",
+                        "row": 0,
+                        "startDate": "",
+                        "endDate": ""
+                    },
+                    {
+                        "id": "35103",
+                        "title": "Consultante D\u00e9veloppeuse Talend ETL",
+                        "company": "Renault Digital",
+                        "location": "",
+                        "startMonth": "6",
+                        "startYear": "2018",
+                        "endMonth": "5",
+                        "endYear": "2019",
+                        "skills": "Talend DI, PostgreSQL 9.5, SQL, PL/SQL, Java 8, JUnit 5, CFT, Jira, batch, Docker, Spring Boot, Tomcat, Maven 2, Angular 4/5, AWS, Windows 10, Ubuntu 16",
+                        "description": "Mise en place d'une solution d'\u00e9change et de traitement de donn\u00e9es entre vendeurs de pi\u00e8ces automobiles, visant \u00e0 optimiser les flux de commandes et d'approvisionnement.\nTravail en m\u00e9thodologie Agile (Scrum) au sein d'une \u00e9quipe de 5 personnes (4 d\u00e9veloppeurs + 1 chef de projet).\nCr\u00e9ation du mod\u00e8le physique de donn\u00e9es\nD\u00e9veloppement PL/SQL et optimisation des requ\u00eates\nD\u00e9veloppement Talend pour les demandes correctives et \u00e9volutives\nPrise en charge du traitement de nouveaux flux\nD\u00e9veloppement des batchs pour la gestion des fichiers\nPr\u00e9paration des livrables et d\u00e9ploiement des solutions\nPropositions d'am\u00e9liorations techniques et fonctionnelles\nTransfert des connaissances techniques et m\u00e9tiers aux \u00e9quipes situ\u00e9es en Inde",
+                        "row": 1,
+                        "startDate": "",
+                        "endDate": ""
+                    },
+                    {
+                        "id": "35104",
+                        "title": "Consultante D\u00e9veloppeuse Java Fullstack",
+                        "company": "BNP Paribas Personal Finance",
+                        "location": "",
+                        "startMonth": "8",
+                        "startYear": "2019",
+                        "endMonth": "6",
+                        "endYear": "2020",
+                        "skills": "Java 11, Angular 8, Spring Boot, REST, Bootstrap, PostgreSQL 9, GitLab, Ubuntu 16, JHipster",
+                        "description": "Analyse des besoins fonctionnels\nProposition et d\u00e9veloppement de solutions techniques\nD\u00e9veloppement backend et frontend\nInt\u00e9gration de web services REST",
+                        "row": 2,
+                        "startDate": "",
+                        "endDate": ""
+                    },
+                    {
+                        "id": "35105",
+                        "title": "Consultante D\u00e9veloppeuse Java Fullstack",
+                        "company": "AEFE - Agence pour l'enseignement fran\u00e7ais \u00e0 l'\u00e9tranger",
+                        "location": "Secteur de l'enseignement",
+                        "startMonth": "2",
+                        "startYear": "2021",
+                        "endMonth": "2",
+                        "endYear": "2023",
+                        "skills": "Java 8/11, Spring Boot, Spring Batch, Angular 7, Bootstrap, GitLab, Ansible, Docker, SecuServe, Semantic UI, IntelliJ, WSO2, SCIM2, LDAP, Ubuntu 20",
+                        "description": "Recueil et analyse des besoins fonctionnels\nD\u00e9veloppement de diff\u00e9rents modules applicatifs (Java / Angular)\nProposition de solutions techniques\nInvestigation et correction des anomalies\nParticipation aux livraisons des \u00e9volutions applicatives\nR\u00e9alisation des tests d'int\u00e9gration et de non-r\u00e9gression\nSupport technique aupr\u00e8s des \u00e9quipes\nR\u00e9daction de la documentation technique\nRefactoring du code, mont\u00e9e de version et participation aux migrations techniques",
+                        "row": 3,
+                        "startDate": "",
+                        "endDate": ""
+                    },
+                    {
+                        "id": "35106",
+                        "title": "Consultante D\u00e9veloppeuse Java Fullstack",
+                        "company": "Coface",
+                        "location": "\u041a\u0443\u0440\u0431\u0435\u0432\u0443\u0430",
+                        "startMonth": "2",
+                        "startYear": "2023",
+                        "endMonth": "5",
+                        "endYear": "2026",
+                        "skills": "Java 8/11, Spring, Spring Boot 2, Spring Batch, Redis, Angular 14/20, Hibernate, Oracle SQL Developer, Jira, Git, GitLab, Maven, Sonar, Jenkins, Eclipse, Visual Studio, WebLogic, JUnit 5, Mockito, Xray Test",
+                        "description": "Participation \u00e0 l'\u00e9volution et \u00e0 la maintenance du projet Autonomy Actx/GAP et de ses sous-projets\nParticipation aux discussions techniques autour de la migration vers une architecture hexagonale\nPr\u00e9sentation et d\u00e9monstration des nouvelles fonctionnalit\u00e9s lors des releases\nSupport technique et analyse des incidents en production afin d'assurer une r\u00e9solution rapide des d\u00e9fauts",
+                        "row": 4,
+                        "startDate": "",
+                        "endDate": ""
+                    }
+                ],
+                "evaluations": [],
+                "tools": [
+                    {
+                        "tool": "JAVA",
+                        "level": 0
+                    },
+                    {
+                        "tool": "Angular",
+                        "level": 0
+                    },
+                    {
+                        "tool": "Springboot",
+                        "level": 0
+                    },
+                    {
+                        "tool": "plsql",
+                        "level": 0
+                    },
+                    {
+                        "tool": "sql",
+                        "level": 0
+                    },
+                    {
+                        "tool": "oracle",
+                        "level": 0
+                    },
+                    {
+                        "tool": "aws",
+                        "level": 0
+                    },
+                    {
+                        "tool": "devops",
+                        "level": 0
+                    }
+                ],
+                "title": "Ing\u00e9nieur d'\u00e9tude et d\u00e9veloppement",
+                "email1": "woshicecile@gmail.com",
+                "email2": "",
+                "email3": "",
+                "phone1": "06 50 60 29 75",
+                "phone2": "",
+                "town": "Paris",
+                "country": "France",
+                "source": {
+                    "typeOf": -1,
+                    "detail": "Collective"
+                },
+                "numberOfResumes": 1,
+                "numberOfActivePositionings": 0,
+                "socialNetworks": [
+                    {
+                        "network": "linkedin",
+                        "url": "www.linkedin.com/in/sisi-renb1413310a"
+                    }
+                ],
+                "canShowTechnicalData": true,
+                "canShowActions": true
+            },
+            "relationships": {
+                "mainManager": {
+                    "data": {
+                        "id": "38837",
+                        "type": "resource"
+                    }
+                },
+                "agency": {
+                    "data": {
+                        "id": "1",
+                        "type": "agency"
+                    }
+                },
+                "pole": {
+                    "data": null
+                }
+            }
+        },
+        {
+            "id": "41923",
+            "type": "candidate",
+            "attributes": {
+                "creationDate": "2026-04-13T09:27:40+0200",
+                "updateDate": "2026-04-13T10:08:14+0200",
+                "civility": 0,
+                "firstName": "Louise",
+                "lastName": "HALLALOU",
+                "state": 3,
+                "typeOf": -1,
+                "isVisible": true,
+                "thumbnail": "",
+                "availability": -1,
+                "skills": "",
+                "diplomas": [],
+                "mobilityAreas": [],
+                "activityAreas": [],
+                "globalEvaluation": "-1",
+                "languages": [],
+                "expertiseAreas": [],
+                "experience": -1,
+                "references": [],
+                "evaluations": [],
+                "tools": [],
+                "title": "STAGIAIRE",
+                "email1": "louisehallalou@sijo.fr",
+                "email2": "",
+                "email3": "",
+                "phone1": "",
+                "phone2": "",
+                "town": "",
+                "country": "France",
+                "source": {
+                    "typeOf": -1,
+                    "detail": ""
+                },
+                "numberOfResumes": 0,
+                "numberOfActivePositionings": 0,
+                "socialNetworks": [],
+                "canShowTechnicalData": true,
+                "canShowActions": true
+            },
+            "relationships": {
+                "mainManager": {
+                    "data": {
+                        "id": "39004",
+                        "type": "resource"
+                    }
+                },
+                "agency": {
+                    "data": {
+                        "id": "1",
+                        "type": "agency"
+                    }
+                },
+                "pole": {
+                    "data": null
+                }
+            }
+        }
+    ],
+    "included": [
+        {
+            "id": "38837",
+            "type": "resource",
+            "attributes": {
+                "lastName": "Mboutsou",
+                "firstName": "Etienne"
+            }
+        },
+        {
+            "id": "1",
+            "type": "agency",
+            "attributes": {
+                "name": "SIJO"
+            }
+        },
+        {
+            "id": "39004",
+            "type": "resource",
+            "attributes": {
+                "lastName": "ANDRIANTSOA",
+                "firstName": "Toky"
+            }
+        }
+    ]
+}

@@ -2,6 +2,7 @@ package com.sijo.mcpboondmanager.tools;
 
 import com.sijo.mcpboondmanager.client.BoondManagerClient;
 import com.sijo.mcpboondmanager.dto.dictionary.DictionaryResponseDto;
+import com.sijo.mcpboondmanager.dto.dictionary.DictionarySettingDto;
 import com.sijo.mcpboondmanager.exception.BoondApiException;
 import org.springframework.http.HttpStatus;
 import com.sijo.mcpboondmanager.service.BoondManagerCandidateService;
@@ -13,6 +14,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.tool.annotation.Tool;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,6 +59,22 @@ class BoondDictionaryToolTest {
                 .getAnnotation(Tool.class);
 
         assertThat(annotation.name()).isEqualTo("getDictionary");
+    }
+
+    @Test
+    void givenToolDescription_whenInspected_thenDocumentsEverySettingSection() {
+        Method method = Arrays.stream(BoondDictionaryTool.class.getMethods())
+                .filter(m -> m.getName().equals("getDictionary"))
+                .findFirst()
+                .orElseThrow();
+        String description = method.getAnnotation(Tool.class).description();
+
+        for (RecordComponent component : DictionarySettingDto.class.getRecordComponents()) {
+            assertThat(description)
+                    .as("@Tool description should document the returned setting section '%s'",
+                            component.getName())
+                    .contains(component.getName());
+        }
     }
 
     @Test

@@ -2,7 +2,10 @@ package com.sijo.mcpboondmanager.tools;
 
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchResponseDto;
+import com.sijo.mcpboondmanager.dto.candidate.CandidateSummaryDto;
+import com.sijo.mcpboondmanager.dto.candidate.ExperienceReference;
 import com.sijo.mcpboondmanager.service.BoondManagerCandidateService;
+import org.jspecify.annotations.Nullable;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -20,19 +23,50 @@ public class CandidateSearchTool {
 
     @Tool(
             name = "searchCandidates",
-            description = "Searches candidates in BoondManager with rich, optional filters and returns " +
-                    "a paginated list of candidate profiles. Use getDictionary first to resolve " +
-                    "human-readable values (states, contract types, mobility zones, expertise areas, " +
-                    "tools, languages, ...) to their BoondManager IDs before calling this tool. " +
-                    "Supports full-text keyword search with a configurable keywordsType, multi-value " +
-                    "reference filters (repeatable parameters whose values are unioned), geographic " +
-                    "search (location or coordinates together with geoDistance), date-range filtering " +
-                    "(period with startDate/endDate, or periodDynamic), pagination (page, maxResults up " +
-                    "to 500), sorting (sort + order) and response field selection (columns). Returns " +
-                    "candidate summaries; call getCandidateDetail for a full profile and " +
-                    "getCandidateTechnicalDocument for the skills/CV. Call order: getDictionary -> " +
-                    "searchCandidates -> getCandidateDetail -> getCandidateTechnicalDocument."
-    )
+            description = """
+                    Searches candidates in BoondManager with rich, optional filters and returns a \
+                    paginated list of candidate summaries. Use getDictionary first to resolve \
+                    human-readable values (states, contract types, mobility zones, expertise areas, \
+                    tools, languages, ...) to their BoondManager IDs before calling this tool.
+
+                    Inputs: full-text keyword search with a configurable keywordsType, multi-value \
+                    reference filters (repeatable parameters whose values are unioned), geographic \
+                    search (location or coordinates together with geoDistance), date-range filtering \
+                    (period with startDate/endDate, or periodDynamic), pagination (page, maxResults \
+                    up to 500), sorting (sort + order) and response field selection (columns).
+
+                    Returns a list of candidate summaries, each with:
+                    - Identity: id, firstName, lastName, civility, title
+                    - Contact: email, email2, email3, phone1, phone2
+                    - Location: city, country, mobilityAreas
+                    - Pipeline: state
+                    - Availability: availability (resolved label or yyyy-MM-dd date), \
+                    availabilityRaw (raw BoondManager id or date)
+                    - Contract: contractType
+                    - Experience: experience (raw level id), experienceMinYears, \
+                    experienceOpenEnded, experienceSpecified (language-neutral resolution), \
+                    experienceLabelRaw (localized label, debug only)
+                    - Skills profile: skills (resume/skills free text), diplomas, expertiseAreas, \
+                    activityAreas, tools (with proficiency level), languages (with level)
+                    - Work history: references (per-assignment title, company, location, work \
+                    period, and free-text skills/description — the richest matching signal)
+                    - Evaluation: globalEvaluation, evaluations (raw, account-specific shape)
+                    - Sourcing: sourceType, sourceDetail
+                    - Ownership: mainManagerId, mainManagerName, agencyId, agencyName
+                    - Signals: numberOfActivePositionings, numberOfResumes, creationDate, \
+                    updateDate, lastActionDate (only when the lastActionDate column is requested)
+                    - Social: socialNetworks (network + url)
+
+                    Set includeResume=true to also receive the skills free text and the \
+                    references[].skills / references[].description free text in each result; by \
+                    default they are omitted to keep large result sets lightweight.
+
+                    Not exposed by BoondManager on the /candidates list endpoint: salary, \
+                    daily-rate (TJM) expectations, nationality.
+
+                    Call getCandidateDetail for a full profile and getCandidateTechnicalDocument \
+                    for the deep skills/CV or if a value is missing. Call order: getDictionary -> searchCandidates -> \
+                    getCandidateDetail -> getCandidateTechnicalDocument.""")
     public CandidateSearchResponseDto searchCandidates(
             @ToolParam(required = false, description =
                     "Full-text search query. Operators: +term forces inclusion, \"exact phrase\" for " +
@@ -45,7 +79,8 @@ public class CandidateSearchTool {
             String keywordsType,
             @ToolParam(required = false, description =
                     "Candidate pipeline state IDs (repeatable; values are unioned). " +
-                    "From getDictionary: setting.state.candidate.")
+                    "From getDictionary: setting.state.candidate." +
+                    "By default 0 ('Import à traiter') is excluded to avoid null values on other field.")
             List<Integer> candidateStates,
             @ToolParam(required = false, description =
                     "Candidate type IDs (repeatable). From getDictionary: setting.typeOf.resource.")
@@ -137,7 +172,14 @@ public class CandidateSearchTool {
                     "availability, mobilityAreas, details, updated, mainManager, resume, hrManager, " +
                     "expertiseAreas, creationDate, lastActionDate, source, diplomas, activityAreas, " +
                     "globalEvaluation, evaluations, experience, references, languages, tools.")
-            List<String> columns
+            List<String> columns,
+            @ToolParam(required = false, description = """
+                    When true, includes the resume/skills free text in each candidate result: the \
+                    top-level skills field and the references[].skills / references[].description \
+                    free text. Useful for deep keyword matching. Default: false (lighter response \
+                    for large result sets — those free-text fields are omitted while reference \
+                    titles, companies and dates are kept).""")
+            @Nullable Boolean includeResume
     ) {
         CandidateSearchRequestDto request = new CandidateSearchRequestDto(
                 keywords,
@@ -168,6 +210,95 @@ public class CandidateSearchTool {
                 order,
                 columns
         );
-        return candidateService.searchCandidates(request);
+        CandidateSearchResponseDto response = candidateService.searchCandidates(request);
+        if (Boolean.TRUE.equals(includeResume)) {
+            return response;
+        }
+        return stripResume(response);
+    }
+
+    /**
+     * Returns a copy of the response with the resume/skills free text removed from every candidate
+     * (the {@code skills} field and the {@code skills}/{@code description} of each work reference).
+     * Pure projection — no field is dropped beyond the free text gated by {@code includeResume}.
+     */
+    private static CandidateSearchResponseDto stripResume(CandidateSearchResponseDto response) {
+        if (response.candidates() == null) {
+            return response;
+        }
+        List<CandidateSummaryDto> stripped = response.candidates().stream()
+                .map(CandidateSearchTool::stripResume)
+                .toList();
+        return new CandidateSearchResponseDto(stripped, response.meta());
+    }
+
+    private static CandidateSummaryDto stripResume(CandidateSummaryDto c) {
+        return new CandidateSummaryDto(
+                c.id(),
+                c.firstName(),
+                c.lastName(),
+                c.email(),
+                c.email2(),
+                c.email3(),
+                c.phone1(),
+                c.phone2(),
+                c.civility(),
+                c.state(),
+                c.availability(),
+                c.availabilityRaw(),
+                c.contractType(),
+                c.mobilityAreas(),
+                c.city(),
+                c.country(),
+                c.title(),
+                c.experience(),
+                c.experienceMinYears(),
+                c.experienceOpenEnded(),
+                c.experienceSpecified(),
+                c.experienceLabelRaw(),
+                null,                          // skills free text omitted unless includeResume=true
+                c.diplomas(),
+                c.expertiseAreas(),
+                c.activityAreas(),
+                c.tools(),
+                c.languages(),
+                c.globalEvaluation(),
+                c.creationDate(),
+                c.updateDate(),
+                c.lastActionDate(),
+                c.numberOfActivePositionings(),
+                c.numberOfResumes(),
+                c.sourceType(),
+                c.sourceDetail(),
+                stripResume(c.references()),   // reference free text omitted; titles/dates kept
+                c.evaluations(),
+                c.socialNetworks(),
+                c.mainManagerId(),
+                c.mainManagerName(),
+                c.agencyId(),
+                c.agencyName()
+        );
+    }
+
+    private static List<ExperienceReference> stripResume(List<ExperienceReference> references) {
+        if (references == null) {
+            return null;
+        }
+        return references.stream()
+                .map(r -> new ExperienceReference(
+                        r.id(),
+                        r.title(),
+                        r.company(),
+                        r.location(),
+                        r.startMonth(),
+                        r.startYear(),
+                        r.endMonth(),
+                        r.endYear(),
+                        r.startDate(),
+                        r.endDate(),
+                        r.row(),
+                        null,   // skills free text omitted unless includeResume=true
+                        null))  // description free text omitted unless includeResume=true
+                .toList();
     }
 }

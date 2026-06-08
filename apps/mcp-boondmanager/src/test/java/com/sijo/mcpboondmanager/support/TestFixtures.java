@@ -4,6 +4,7 @@ import com.sijo.mcpboondmanager.dto.candidate.CandidateDetailDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchResponseDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSummaryDto;
+import com.sijo.mcpboondmanager.dto.candidate.ExperienceReference;
 import com.sijo.mcpboondmanager.dto.candidate.TechnicalDocumentDto;
 import com.sijo.mcpboondmanager.dto.common.PaginationMetaDto;
 import com.sijo.mcpboondmanager.dto.dictionary.DictionaryEntryDto;
@@ -63,7 +64,13 @@ public final class TestFixtures {
                 "Ada",
                 "Lovelace",
                 "ada@example.test",
+                null,
+                null,
+                null,
+                null,
                 1,
+                1,
+                "9",
                 "9",
                 2,
                 List.of("idf"),
@@ -80,7 +87,41 @@ public final class TestFixtures {
                 List.of("backend"),
                 List.of("finance"),
                 List.of(new TechnicalDocumentDto.ToolProficiency("IntelliJ", 5)),
-                List.of(new TechnicalDocumentDto.LanguageProficiency("fr", "native"))
+                List.of(new TechnicalDocumentDto.LanguageProficiency("fr", "native")),
+                "4",
+                "2025-01-01",
+                "2026-02-01",
+                null,
+                0,
+                1,
+                1,
+                "LinkedIn",
+                List.of(candidateSummaryReference()),
+                List.of(),
+                List.of(),
+                38837,
+                "Etienne Mboutsou",
+                1,
+                "SIJO"
+        );
+    }
+
+    /** A work reference carrying free-text skills/description (the resume payload includeResume gates). */
+    public static ExperienceReference candidateSummaryReference() {
+        return new ExperienceReference(
+                35102,
+                "Java Developer",
+                "Orchestra",
+                "Paris",
+                "2",
+                "2017",
+                "8",
+                "2017",
+                "",
+                "",
+                0,
+                "Java 7, Spring, Oracle SQL",
+                "Backend development, web services maintenance and PL/SQL optimization."
         );
     }
 
@@ -106,16 +147,27 @@ public final class TestFixtures {
                 "STAGIAIRE",
                 "A. L.",
                 1,
+                0,
+                "",
                 2,
                 "9",
                 List.of("idf"),
                 1,
                 "LinkedIn",
                 "4",
+                List.of(),
+                0,
+                List.of(),
                 "Strong backend profile",
                 "2025-01-01",
                 "2026-02-01",
-                "manual"
+                "manual",
+                38837,
+                "Etienne Mboutsou",
+                38837,
+                "Etienne Mboutsou",
+                1,
+                "SIJO"
         );
     }
 
@@ -123,6 +175,7 @@ public final class TestFixtures {
         return new TechnicalDocumentDto(
                 42,
                 "101",
+                null,
                 "Senior Java Engineer",
                 "Detailed technical profile",
                 "Backend engineer",
@@ -137,7 +190,8 @@ public final class TestFixtures {
                 List.of("backend"),
                 List.of("finance"),
                 List.of(new TechnicalDocumentDto.ToolProficiency("IntelliJ", 5)),
-                List.of(new TechnicalDocumentDto.LanguageProficiency("en", "fluent"))
+                List.of(new TechnicalDocumentDto.LanguageProficiency("en", "fluent")),
+                List.of()
         );
     }
 
@@ -156,7 +210,9 @@ public final class TestFixtures {
 
         return new DictionaryResponseDto(new DictionarySettingDto(
                 new DictionarySettingDto.State(List.of(activeState)),
-                new DictionarySettingDto.TypeOf(List.of(contract)),
+                new DictionarySettingDto.TypeOf(
+                        List.of(contract),
+                        List.of(new DictionaryEntryDto("10", "Consultant"))),
                 List.of(availability),
                 List.of(mobility),
                 List.of(new DictionaryEntryDto("3", "Senior")),

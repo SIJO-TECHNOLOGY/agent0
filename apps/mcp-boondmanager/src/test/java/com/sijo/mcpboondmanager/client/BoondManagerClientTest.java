@@ -4,7 +4,7 @@ import com.sijo.mcpboondmanager.config.BoondManagerProperties;
 import com.sijo.mcpboondmanager.config.WebClientConfig;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateDetailAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateSummaryAttributes;
-import com.sijo.mcpboondmanager.dto.boond.BoondDictionaryAttributes;
+import com.sijo.mcpboondmanager.dto.boond.BoondDictionarySetting;
 import com.sijo.mcpboondmanager.dto.boond.BoondListEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondSingleEnvelope;
 import com.sijo.mcpboondmanager.exception.BoondApiException;
@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BoondManagerClientTest {
 
-    private static final ParameterizedTypeReference<BoondSingleEnvelope<BoondDictionaryAttributes>> DICTIONARY_TYPE =
+    private static final ParameterizedTypeReference<BoondSingleEnvelope<BoondDictionarySetting>> DICTIONARY_TYPE =
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<BoondListEnvelope<BoondCandidateSummaryAttributes>> SEARCH_TYPE =
             new ParameterizedTypeReference<>() {};
@@ -85,7 +85,7 @@ class BoondManagerClientTest {
                 """);
         MDC.put(MdcKeys.CORRELATION_ID, "corr-123");
 
-        BoondSingleEnvelope<BoondDictionaryAttributes> response = client(Duration.ofSeconds(2))
+        BoondSingleEnvelope<BoondDictionarySetting> response = client(Duration.ofSeconds(2))
                 .get("/application/dictionary", DICTIONARY_TYPE);
 
         assertThat(response.data().id()).isEqualTo("dictionary");
@@ -223,7 +223,7 @@ class BoondManagerClientTest {
     void givenBaseUrlFromProperties_whenGet_thenUsesConfiguredServer() {
         respondJson("/base-url-check", 200, "{\"data\": {\"id\": \"x\", \"type\": \"setting\", \"attributes\": {}}}");
 
-        BoondSingleEnvelope<BoondDictionaryAttributes> response = client(Duration.ofSeconds(2))
+        BoondSingleEnvelope<BoondDictionarySetting> response = client(Duration.ofSeconds(2))
                 .get("/base-url-check", DICTIONARY_TYPE);
 
         assertThat(response.data().id()).isEqualTo("x");

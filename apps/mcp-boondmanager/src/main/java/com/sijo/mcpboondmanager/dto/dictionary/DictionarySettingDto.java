@@ -24,7 +24,14 @@ public record DictionarySettingDto(
     public record State(List<DictionaryEntryDto> candidate) {
     }
 
+    /**
+     * Nested {@code typeOf} dictionaries. {@code contract} resolves the {@code contractTypes} filter;
+     * {@code resource} resolves the {@code candidateTypes} filter.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record TypeOf(List<DictionaryEntryDto> contract) {
+    public record TypeOf(
+            List<DictionaryEntryDto> contract,
+            List<DictionaryEntryDto> resource
+    ) {
     }
 }

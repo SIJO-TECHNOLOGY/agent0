@@ -37,7 +37,15 @@ public record BoondDictionarySetting(
     public record State(List<DictionaryEntryDto> candidate) {
     }
 
+    /**
+     * Nested {@code typeOf} dictionaries. {@code contract} resolves the desired-contract-type filter;
+     * {@code resource} resolves the candidate-type filter ({@code candidateTypes} →
+     * {@code setting.typeOf.resource}).
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record TypeOf(List<DictionaryEntryDto> contract) {
+    public record TypeOf(
+            List<DictionaryEntryDto> contract,
+            List<DictionaryEntryDto> resource
+    ) {
     }
 }

@@ -3,6 +3,8 @@ package com.sijo.mcpboondmanager.tools;
 import com.sijo.mcpboondmanager.client.BoondManagerClient;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchResponseDto;
+import com.sijo.mcpboondmanager.dto.candidate.CandidateSummaryDto;
+import com.sijo.mcpboondmanager.dto.candidate.ExperienceReference;
 import com.sijo.mcpboondmanager.exception.BoondApiException;
 import org.springframework.http.HttpStatus;
 import com.sijo.mcpboondmanager.service.BoondManagerCandidateService;
@@ -15,6 +17,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.tool.annotation.Tool;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
 import java.util.List;
 
@@ -40,7 +44,8 @@ class CandidateSearchToolTest {
                 "java",
                 null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null
+                null, null, null, null, null, null,
+                true
         );
 
         assertThat(response).isSameAs(expected);
@@ -86,7 +91,8 @@ class CandidateSearchToolTest {
                 25,
                 List.of("updateDate"),
                 "desc",
-                List.of("name", "title", "state", "availability", "expertiseAreas", "experience")
+                List.of("name", "title", "state", "availability", "expertiseAreas", "experience"),
+                true
         );
 
         assertThat(response).isSameAs(expected);
@@ -111,7 +117,8 @@ class CandidateSearchToolTest {
                 null, null,
                 1,
                 25,
-                null, null, null
+                null, null, null,
+                true
         );
 
         assertThat(response).isSameAs(expected);
@@ -124,21 +131,69 @@ class CandidateSearchToolTest {
     }
 
     @Test
+    void givenIncludeResumeTrue_whenSearchCandidates_thenReturnsFullResultUnchanged() {
+        CandidateSearchResponseDto expected = TestFixtures.searchResponse();
+        when(candidateService.searchCandidates(org.mockito.ArgumentMatchers.any(CandidateSearchRequestDto.class)))
+                .thenReturn(expected);
+
+        CandidateSearchResponseDto response = search(true);
+
+        // includeResume=true is a pure passthrough — same instance, free text intact.
+        assertThat(response).isSameAs(expected);
+        CandidateSummaryDto candidate = response.candidates().getFirst();
+        assertThat(candidate.skills()).isNotBlank();
+        ExperienceReference reference = candidate.references().getFirst();
+        assertThat(reference.skills()).isNotBlank();
+        assertThat(reference.description()).isNotBlank();
+    }
+
+    @Test
+    void givenIncludeResumeFalse_whenSearchCandidates_thenStripsResumeFreeText() {
+        CandidateSearchResponseDto backend = TestFixtures.searchResponse();
+        when(candidateService.searchCandidates(org.mockito.ArgumentMatchers.any(CandidateSearchRequestDto.class)))
+                .thenReturn(backend);
+
+        CandidateSearchResponseDto response = search(false);
+
+        CandidateSummaryDto candidate = response.candidates().getFirst();
+        assertThat(candidate.skills()).isNull();
+        ExperienceReference reference = candidate.references().getFirst();
+        assertThat(reference.skills()).isNull();
+        assertThat(reference.description()).isNull();
+        // Everything else is preserved — only the free text is gated.
+        CandidateSummaryDto original = TestFixtures.candidateSummary();
+        ExperienceReference originalReference = original.references().getFirst();
+        assertThat(candidate.firstName()).isEqualTo(original.firstName());
+        assertThat(candidate.title()).isEqualTo(original.title());
+        assertThat(candidate.diplomas()).isEqualTo(original.diplomas());
+        assertThat(reference.title()).isEqualTo(originalReference.title());
+        assertThat(reference.company()).isEqualTo(originalReference.company());
+        assertThat(reference.startYear()).isEqualTo(originalReference.startYear());
+        assertThat(response.meta()).isEqualTo(backend.meta());
+    }
+
+    @Test
+    void givenNoIncludeResume_whenSearchCandidates_thenDefaultsToStripped() {
+        CandidateSearchResponseDto backend = TestFixtures.searchResponse();
+        when(candidateService.searchCandidates(org.mockito.ArgumentMatchers.any(CandidateSearchRequestDto.class)))
+                .thenReturn(backend);
+
+        CandidateSearchResponseDto response = search(null);
+
+        CandidateSummaryDto candidate = response.candidates().getFirst();
+        assertThat(candidate.skills()).isNull();
+        assertThat(candidate.references().getFirst().skills()).isNull();
+        assertThat(candidate.references().getFirst().description()).isNull();
+    }
+
+    @Test
     void givenBackendException_whenSearchCandidates_thenPropagatesProjectException() {
         BoondApiException exception = new BoondApiException(
                 "backend failed", HttpStatus.INTERNAL_SERVER_ERROR, "/candidates", new RuntimeException());
         when(candidateService.searchCandidates(org.mockito.ArgumentMatchers.any(CandidateSearchRequestDto.class)))
                 .thenThrow(exception);
 
-        assertThatThrownBy(() -> tool().searchCandidates(
-                "java",
-                null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null,
-                null, null,
-                1,
-                25,
-                null, null, null
-        )).isSameAs(exception);
+        assertThatThrownBy(() -> search(null)).isSameAs(exception);
     }
 
     @Test
@@ -171,10 +226,27 @@ class CandidateSearchToolTest {
                 Integer.class,       // maxResults
                 List.class,          // sort
                 String.class,        // order
-                List.class           // columns
+                List.class,          // columns
+                Boolean.class        // includeResume
         ).getAnnotation(Tool.class);
 
         assertThat(annotation.name()).isEqualTo("searchCandidates");
+    }
+
+    @Test
+    void givenToolDescription_whenInspected_thenDocumentsEveryReturnedSummaryField() {
+        Method method = Arrays.stream(CandidateSearchTool.class.getMethods())
+                .filter(m -> m.getName().equals("searchCandidates"))
+                .findFirst()
+                .orElseThrow();
+        String description = method.getAnnotation(Tool.class).description();
+
+        for (RecordComponent component : CandidateSummaryDto.class.getRecordComponents()) {
+            assertThat(description)
+                    .as("@Tool description should document the returned field '%s'", component.getName())
+                    .contains(component.getName());
+        }
+        assertThat(description).contains("includeResume");
     }
 
     @Test
@@ -182,6 +254,16 @@ class CandidateSearchToolTest {
         assertThat(Arrays.stream(CandidateSearchTool.class.getDeclaredFields()).map(Field::getType))
                 .contains(BoondManagerCandidateService.class)
                 .doesNotContain(BoondManagerClient.class);
+    }
+
+    private CandidateSearchResponseDto search(Boolean includeResume) {
+        return tool().searchCandidates(
+                "java",
+                null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null,
+                includeResume
+        );
     }
 
     private CandidateSearchTool tool() {

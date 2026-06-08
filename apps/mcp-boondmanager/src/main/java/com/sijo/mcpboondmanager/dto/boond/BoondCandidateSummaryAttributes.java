@@ -18,12 +18,25 @@ import java.util.List;
  * for most candidates, but a bare {@code yyyy-MM-dd} date string for candidates flagged "available
  * after date". It is therefore typed as {@link String} (an integer id deserializes to its text
  * form) so both shapes deserialize without error.
+ *
+ * <p>{@code lastActionDate} is only populated when the {@code lastActionDate} column is requested via
+ * the search {@code columns} parameter; otherwise BoondManager omits it and it deserializes to
+ * {@code null}. {@code numberOfActivePositionings}, {@code globalEvaluation}, {@code creationDate} and
+ * {@code updateDate} are returned by default and are strong ranking signals. {@code references} is the
+ * candidate's work history (preserved as nested objects, not flattened); {@code evaluations} is kept
+ * raw as it is empty for most candidates and its element shape is account-specific. The list endpoint
+ * does not expose salary or daily-rate (TJM) expectations.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record BoondCandidateSummaryAttributes(
         String firstName,
         String lastName,
         String email1,
+        String email2,
+        String email3,
+        String phone1,
+        String phone2,
+        Integer civility,
         Integer state,
         String availability,
         Integer typeOf,
@@ -37,6 +50,16 @@ public record BoondCandidateSummaryAttributes(
         List<String> expertiseAreas,
         List<String> activityAreas,
         List<BoondTechnicalDocumentAttributes.Tool> tools,
-        List<BoondTechnicalDocumentAttributes.Language> languages
+        List<BoondTechnicalDocumentAttributes.Language> languages,
+        String globalEvaluation,
+        String creationDate,
+        String updateDate,
+        String lastActionDate,
+        Integer numberOfActivePositionings,
+        Integer numberOfResumes,
+        BoondSource source,
+        List<BoondReference> references,
+        List<Object> evaluations,
+        List<BoondSocialNetwork> socialNetworks
 ) {
 }

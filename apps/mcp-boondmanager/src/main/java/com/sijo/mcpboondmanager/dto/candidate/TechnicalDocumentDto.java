@@ -16,11 +16,16 @@ import java.util.List;
  * the dictionary label) so consumers don't need to know BoondManager's dictionary. {@code
  * experienceLabelRaw} is BoondManager's localized label and is <strong>non-authoritative, for debugging
  * only</strong> (not for display or logic).
+ *
+ * <p>{@code references} is the candidate's detailed assignment history (kept as nested
+ * {@link ExperienceReference} objects, never flattened); together with {@code skills} it is the richest
+ * signal for technical-fit assessment. {@code tdLink} is the optional external document link.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record TechnicalDocumentDto(
         Integer id,
         String tdId,
+        String tdLink,
         String title,
         String description,
         String summary,
@@ -35,7 +40,8 @@ public record TechnicalDocumentDto(
         List<String> expertiseAreas,
         List<String> activityAreas,
         List<ToolProficiency> tools,
-        List<LanguageProficiency> languages
+        List<LanguageProficiency> languages,
+        List<ExperienceReference> references
 ) {
 
     /**

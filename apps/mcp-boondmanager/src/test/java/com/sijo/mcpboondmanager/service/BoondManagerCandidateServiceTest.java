@@ -330,7 +330,9 @@ class BoondManagerCandidateServiceTest {
     private BoondDictionaryEnvelope dictionaryEnvelope() {
         BoondDictionarySetting setting = new BoondDictionarySetting(
                 new BoondDictionarySetting.State(List.of(new DictionaryEntryDto("1", "Active"))),
-                new BoondDictionarySetting.TypeOf(List.of(new DictionaryEntryDto("2", "CDI"))),
+                new BoondDictionarySetting.TypeOf(
+                        List.of(new DictionaryEntryDto("2", "CDI")),
+                        List.of(new DictionaryEntryDto("10", "Consultant"))),
                 List.of(new DictionaryEntryDto("9", "Available after date")),
                 List.of(new DictionaryOptionEntryDto(
                         List.of(new DictionaryOptionEntryDto.OptionId("idf", "Ile-de-France")), "Ile-de-France")),
@@ -350,16 +352,18 @@ class BoondManagerCandidateServiceTest {
 
     private BoondListEnvelope<BoondCandidateSummaryAttributes> searchEnvelope() {
         BoondCandidateSummaryAttributes attrs = new BoondCandidateSummaryAttributes(
-                "Ada", "Lovelace", "ada@example.test",
+                "Ada", "Lovelace", "ada@example.test", null, null, null, null, null,
                 1, "9", 2,
                 List.of("idf"), "Paris", "FR",
                 "Senior Java Engineer", 3, "Java, Spring, React",
                 List.of("Engineering school"), List.of("backend"), List.of("finance"),
                 List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
-                List.of(new BoondTechnicalDocumentAttributes.Language("fr", "native")));
+                List.of(new BoondTechnicalDocumentAttributes.Language("fr", "native")),
+                null, null, null, null, null, null, null, null, null, null);
         return new BoondListEnvelope<>(
-                List.of(new BoondData<>("42", "candidate", attrs)),
-                new BoondMeta(new BoondMeta.Totals(1), 1));
+                List.of(new BoondData<>("42", "candidate", attrs, null)),
+                new BoondMeta(new BoondMeta.Totals(1), 1),
+                null);
     }
 
     private BoondSingleEnvelope<BoondCandidateDetailAttributes> detailEnvelope() {
@@ -367,35 +371,38 @@ class BoondManagerCandidateServiceTest {
                 "Ada", "Lovelace", "ada@example.test", null, null,
                 "+33100000000", null, null, null,
                 1, "1990-01-01", "1 rue de test", "75001", "Paris", "FR", null,
-                "STAGIAIRE", "A. L.", 1, 2, "9",
+                "STAGIAIRE", "A. L.", 1, null, 2, "9",
                 List.of("idf"),
                 new BoondCandidateDetailAttributes.Source(1, "LinkedIn"),
-                "4", "Strong backend profile",
+                "4", null, null, null, "Strong backend profile",
                 "2025-01-01", "2026-02-01", "manual");
-        return new BoondSingleEnvelope<>(new BoondData<>("42", "candidate", attrs));
+        return new BoondSingleEnvelope<>(new BoondData<>("42", "candidate", attrs, null), null);
     }
 
     private BoondSingleEnvelope<BoondTechnicalDocumentAttributes> technicalDocumentEnvelope() {
         BoondTechnicalDocumentAttributes attrs = new BoondTechnicalDocumentAttributes(
-                "101", "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
+                "101", null, "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
                 3, "bac5",
                 List.of("Engineering school"), "Java, Spring, PostgreSQL",
                 List.of("backend"), List.of("finance"),
                 List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
-                List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")));
-        return new BoondSingleEnvelope<>(new BoondData<>("42", "candidate", attrs));
+                List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")),
+                null);
+        return new BoondSingleEnvelope<>(new BoondData<>("42", "candidate", attrs, null), null);
     }
 
     private BoondListEnvelope<BoondTechnicalDocumentAttributes> technicalDocumentListEnvelope() {
         BoondTechnicalDocumentAttributes attrs = new BoondTechnicalDocumentAttributes(
-                "101", "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
+                "101", null, "Senior Java Engineer", "Detailed technical profile", "Backend engineer",
                 3, "bac5",
                 List.of("Engineering school"), "Java, Spring, PostgreSQL",
                 List.of("backend"), List.of("finance"),
                 List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
-                List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")));
+                List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")),
+                null);
         return new BoondListEnvelope<>(
-                List.of(new BoondData<>("42", "candidate", attrs)),
-                new BoondMeta(new BoondMeta.Totals(1), 1));
+                List.of(new BoondData<>("42", "candidate", attrs, null)),
+                new BoondMeta(new BoondMeta.Totals(1), 1),
+                null);
     }
 }
