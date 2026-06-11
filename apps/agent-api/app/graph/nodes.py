@@ -66,6 +66,7 @@ from app.services.llm_planner import (
     PlannerConstraints,
 )
 from app.models.warnings import Warning
+from app.services.semantic_scorer import SemanticScorer
 
 
 DEFAULT_ENRICHMENT_LIMIT: Final[int] = 5
@@ -86,6 +87,8 @@ class NodeContext:
     replan_skip_score: float = 0.8
     event_emitter: EventEmitter = field(default_factory=NoopEventEmitter)
     debug_mode: bool = False
+    semantic_scorer: SemanticScorer | None = None
+    semantic_boost_weight: float = 0.15
 
 
 def _replace(state: GraphState, **changes: object) -> GraphState:
@@ -183,7 +186,10 @@ _EXPERIENCE_DICTIONARY_KEYS: Final[tuple[str, ...]] = (
 async def analyze_intent(state: GraphState, _: NodeContext) -> GraphState:
     """Interpret the natural-language query into structured intent."""
     query = state.original_query
-    keywords = extract_keywords(query)
+    # Extract technical/skill terms (removes stopwords, type hints like "dev"/"candidat").
+    # Space-separated terms let BoondManager score by relevance without forcing strict AND.
+    extracted = extract_keywords(query)
+    keywords = extracted if extracted else []
     seniority = extract_seniority(query)
     tool_hints = detect_tools(query)
     candidate_id = extract_candidate_id(query)
@@ -530,7 +536,7 @@ async def _build_search_candidates_inputs(
     if "page" in property_names and "page" not in inputs:
         inputs["page"] = 1
     if "numberPerPage" in property_names and "numberPerPage" not in inputs:
-        inputs["numberPerPage"] = 10
+        inputs["numberPerPage"] = 8
 
     return inputs, warnings
 
@@ -862,6 +868,20 @@ async def execute_mcp_tools(state: GraphState, ctx: NodeContext) -> GraphState:
             for record in raw_records:
                 if isinstance(record, dict):
                     results.append(_record_to_result(record, tool_name))
+
+            # For candidate keyword searches, run a second pass on title+skills
+            # so candidates whose profile title matches (e.g. "Tech Lead Java backend")
+            # are found even when their CV text doesn't contain the exact keywords.
+            if tool_name == SEARCH_CANDIDATES_TOOL and inputs.get("keywords"):
+                title_inputs = {**inputs, "keywordsType": "titleSkills"}
+                title_call, title_records = await _execute_single_tool(
+                    ctx, tool_name, title_inputs
+                )
+                tool_calls.append(title_call)
+                if title_call.status is ToolCallStatus.SUCCESS:
+                    for record in title_records:
+                        if isinstance(record, dict):
+                            results.append(_record_to_result(record, tool_name))
         elif call.status is ToolCallStatus.FAILED:
             warnings.append(
                 Warning(
@@ -1580,14 +1600,64 @@ def _collect_strings(value: object, sink: list[str]) -> None:
             _collect_strings(inner, sink)
 
 
+# Skill-relevant top-level fields from the BoondManager search payload.
+_SKILL_SURFACE_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "jobTitle",
+    "headline",
+    "position",
+    "summary",
+    "description",
+    "skills",
+    "tools",
+    "expertiseAreas",
+    "activityAreas",
+    "languages",
+)
+
+# Skill-relevant fields within the enrichment tech-doc payload.
+_TECH_DOC_SKILL_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "summary",
+    "description",
+    "text",
+    "skills",
+    "tools",
+    "expertiseAreas",
+    "activityAreas",
+    "diplomas",
+    "training",
+)
+
+
 def _evidence_haystack(result: SearchResult) -> str:
-    """Lower-cased string view of every textual field in the result."""
+    """Lower-cased string built only from skill-relevant fields.
+
+    Restricted to job title, skills, expertise, and tech-doc content so that
+    incidental strings in metadata fields (email, IDs, company names, addresses)
+    do not produce false skill matches.
+    """
     parts: list[str] = []
     if result.title:
         parts.append(result.title)
     if result.snippet:
         parts.append(result.snippet)
-    _collect_strings(result.data, parts)
+    flat = _flatten_for_domain(result.data)
+    for field in _SKILL_SURFACE_FIELDS:
+        value = flat.get(field)
+        if value:
+            _collect_strings(value, parts)
+    # Include tech doc skill fields when available.
+    tech = result.data.get(ENRICHMENT_TECH_DOC_KEY)
+    if isinstance(tech, dict):
+        for field in _TECH_DOC_SKILL_FIELDS:
+            value = tech.get(field)
+            if value:
+                _collect_strings(value, parts)
+    # Include CV extracted text via the dedicated reader.
+    resume_text = _resume_haystack(result)
+    if resume_text:
+        parts.append(resume_text)
     return " ".join(parts).lower()
 
 
@@ -1657,6 +1727,15 @@ def _techdoc_haystack(result: SearchResult) -> str:
     parts: list[str] = []
     _collect_strings(payload, parts)
     return " ".join(parts).lower()
+
+
+def _resume_haystack(result: SearchResult) -> str:
+    """Raw CV text extracted from the candidate's PDF resume."""
+    payload = result.data.get(ENRICHMENT_RESUME_KEY)
+    if not isinstance(payload, dict):
+        return ""
+    text = payload.get("extractedText") or payload.get("text") or ""
+    return text.lower() if isinstance(text, str) else ""
 
 
 def _min_years_in(source: object) -> int | None:
@@ -1796,6 +1875,18 @@ def _criteria_status(
                 domain_haystack=_techdoc_domain_text(result),
             )
             verified |= td_hits
+        resume = _resume_haystack(result)
+        if resume:
+            _, cv_hits = evidence_score(
+                resume,
+                skills=skills,
+                domains=domains,
+                role=role,
+                candidate_min_years=parse_years(resume),
+                required_min_years=required_years,
+                domain_haystack=resume,
+            )
+            verified |= cv_hits
         summary = _summary_haystack(result)
         _, sm_hits = evidence_score(
             summary,
@@ -1890,6 +1981,25 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         await _emit_candidate_cards_partial(ctx, state.results)
         return state
 
+    # Collect semantic boosts asynchronously upfront when scorer is available.
+    semantic_boosts: dict[str, float] = {}
+    if ctx.semantic_scorer is not None and (skills or domains):
+        query_terms = list(skills) + list(domains)
+        for result in state.results:
+            if not result.source_tool.startswith("search"):
+                continue
+            haystack = _evidence_haystack(result)
+            try:
+                boost = await ctx.semantic_scorer.boost(
+                    query_terms=query_terms,
+                    candidate_text=haystack,
+                )
+                semantic_boosts[result.id] = boost
+            except Exception:
+                logger.exception(
+                    "semantic_scorer.boost_failed", extra={"candidate_id": result.id}
+                )
+
     re_ranked: list[SearchResult] = []
     for result in state.results:
         if not result.source_tool.startswith("search"):
@@ -1908,9 +2018,19 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             candidate_name=candidate_full_name(result) if requested_name else None,
             priority=priority,
         )
-        # Tiny tie-break for candidates we actually enriched with evidence.
+        # Semantic similarity boost — additive, capped at 1.0. Applied before
+        # the enrichment tie-break so the semantic signal is part of the base
+        # score rather than a separate post-processing step.
+        if score > 0.0 and result.id in semantic_boosts:
+            sem_boost = semantic_boosts[result.id] * ctx.semantic_boost_weight
+            score = min(1.0, score + sem_boost)
+        # Tiny tie-break for candidates enriched with a technical document or CV.
         if score > 0.0 and ENRICHMENT_TECH_DOC_KEY in result.data:
             score = min(1.0, score + 0.03)
+        if score > 0.0 and ENRICHMENT_RESUME_KEY in result.data:
+            resume_text = _resume_haystack(result)
+            if resume_text:
+                score = min(1.0, score + 0.02)
         is_full_match, unmet = _evaluate_match(
             hits,
             skills=skills,
@@ -1930,6 +2050,13 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         )
 
     re_ranked.sort(key=lambda r: r.score, reverse=True)
+
+    # Drop zero-score candidates when positive matches exist, then cap at 25.
+    search_results = [r for r in re_ranked if r.source_tool.startswith("search")]
+    other_results = [r for r in re_ranked if not r.source_tool.startswith("search")]
+    positive = [r for r in search_results if r.score > 0.0]
+    search_results = positive if positive else search_results
+    re_ranked = search_results[:25] + other_results
 
     # Distinguish verified (in a technical document) / visible (in a summary
     # only) / missing, so the message never claims a criterion is unverifiable
@@ -2573,6 +2700,21 @@ async def _execute_search_ladder(
             )
             used_relaxed = search_pass.relaxed
             matched_label = search_pass.label
+            # Always complement with a titleSkills pass so candidates whose
+            # profile title matches (e.g. "Tech Lead Java backend") are included
+            # even when the resumeTd pass already returned results.
+            if search_pass.inputs.get("keywordsType") != "titleSkills":
+                title_inputs, _ = _sanitize_tool_inputs(
+                    {**search_pass.inputs, "keywordsType": "titleSkills"}, schema
+                )
+                title_call, title_records = await _execute_single_tool(
+                    ctx, tool.name, title_inputs
+                )
+                tool_calls.append(title_call)
+                if title_call.status is ToolCallStatus.SUCCESS and title_records:
+                    _absorb_direct_outcome(
+                        title_call, title_records, tool.name, results, warnings, errors
+                    )
             break
 
     # A named-person query that was NOT satisfied by the dedicated name pass

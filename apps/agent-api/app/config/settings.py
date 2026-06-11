@@ -110,6 +110,39 @@ class Settings(BaseSettings):
         default=6, ge=1, le=20,
         description="Hard upper bound on planned tool calls per query.",
     )
+    # --- Semantic scoring (embedding-based skill boost) ----------------------
+    enable_semantic_scoring: bool = Field(
+        default=False,
+        description=(
+            "When true, an OpenAI embedding model computes a cosine-similarity "
+            "boost on top of the text-matching evidence score. Requires "
+            "openai_api_key to be set. Adds one embedding API call per "
+            "candidate per search (batched). Off by default to avoid "
+            "unexpected costs."
+        ),
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        description=(
+            "OpenAI API key used exclusively for semantic scoring embeddings. "
+            "Required when enable_semantic_scoring=true."
+        ),
+    )
+    semantic_model: str = Field(
+        default="text-embedding-3-small",
+        description="OpenAI embedding model used for semantic scoring.",
+    )
+    semantic_boost_weight: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=0.5,
+        description=(
+            "Maximum additive boost applied to the evidence score from "
+            "semantic similarity. 0.15 means a semantically perfect match "
+            "adds up to 0.15 to the evidence score (capped at 1.0)."
+        ),
+    )
+
     llm_planner_role: str = Field(
         default=(
             "You are an expert technical recruiter and CV search, matching, "

@@ -23,6 +23,7 @@ from app.services.event_emitter import (
     NoopEventEmitter,
 )
 from app.services.llm_planner import LlmPlanner
+from app.services.semantic_scorer import SemanticScorer
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ class SearchService:
         replan_skip_score: float = 0.8,
         agent_trace: bool = False,
         agent_trace_verbose: bool = False,
+        semantic_scorer: SemanticScorer | None = None,
+        semantic_boost_weight: float = 0.15,
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
@@ -52,6 +55,8 @@ class SearchService:
         self._replan_skip_score = replan_skip_score
         self._agent_trace = agent_trace
         self._agent_trace_verbose = agent_trace_verbose
+        self._semantic_scorer = semantic_scorer
+        self._semantic_boost_weight = semantic_boost_weight
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -70,6 +75,8 @@ class SearchService:
             replan_skip_score=self._replan_skip_score,
             event_emitter=emitter,
             debug_mode=debug_mode,
+            semantic_scorer=self._semantic_scorer,
+            semantic_boost_weight=self._semantic_boost_weight,
         )
 
     async def search(
