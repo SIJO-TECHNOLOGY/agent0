@@ -203,13 +203,20 @@ public class BoondManagerCandidateService {
         String documentPath = "/documents/" + document.id();
         byte[] bytes;
         try {
-            bytes = client.getBytes(documentPath, DOCUMENT_DOWNLOAD_TIMEOUT);
-        } catch (ExternalServiceException ex) {
-            // Download failed or timed out — return metadata only.
-            log.warn("CV document download failed for candidate {} (doc={}): {}",
-                    candidateId, document.id(), ex.getMessage());
+            // Use Accept: */* so BoondManager serves the binary file rather than JSON.
+            bytes = client.getBytes(documentPath, DOCUMENT_DOWNLOAD_TIMEOUT, "*/*");
+        } catch (ExternalServiceException | BoondApiException ex) {
+            // Download failed, timed out, or returned an HTTP error — return metadata only.
+            log.warn("CV document download failed for candidate {} (doc={}, fileName={}): {}",
+                    candidateId, document.id(), document.fileName(), ex.getMessage());
             return new CandidateCvDto(candidateId, document.id(), document.fileName(),
                     document.contentType(), 0, false, "");
+        }
+
+        if (log.isDebugEnabled() && bytes != null && bytes.length >= 4) {
+            log.debug("CV doc for candidate {} (doc={}, fileName={}, size={}) starts with bytes: {:02X} {:02X} {:02X} {:02X}",
+                    candidateId, document.id(), document.fileName(), bytes.length,
+                    bytes[0] & 0xFF, bytes[1] & 0xFF, bytes[2] & 0xFF, bytes[3] & 0xFF);
         }
 
         String normalizedText = "";
@@ -217,14 +224,17 @@ public class BoondManagerCandidateService {
             try {
                 String text = extractPdfText(bytes);
                 normalizedText = text == null ? "" : text.trim();
+                log.info("CV PDF extracted for candidate {} (doc={}, chars={})",
+                        candidateId, document.id(), normalizedText.length());
             } catch (ExternalServiceException ex) {
                 // PDF could not be parsed (encrypted, corrupted, or scanned image).
                 log.warn("CV PDF text extraction failed for candidate {} (doc={}, contentType={}): {}",
                         candidateId, document.id(), document.contentType(), ex.getMessage());
             }
         } else {
-            log.debug("CV document for candidate {} is not a parseable PDF (contentType={}, size={}), skipping text extraction",
-                    candidateId, document.contentType(), bytes == null ? 0 : bytes.length);
+            log.warn("CV document for candidate {} is not a parseable PDF (doc={}, fileName={}, contentType={}, size={}) — first bytes may reveal format",
+                    candidateId, document.id(), document.fileName(),
+                    document.contentType(), bytes == null ? 0 : bytes.length);
         }
 
         return new CandidateCvDto(

@@ -33,7 +33,7 @@ public class BoondManagerClient {
     }
 
     public byte[] getBytes(String path) {
-        return getBytes(path, null);
+        return getBytes(path, null, null);
     }
 
     /**
@@ -41,16 +41,19 @@ public class BoondManagerClient {
      *
      * @param path            relative API path
      * @param timeoutOverride per-call timeout; when null the WebClient default applies
+     * @param acceptOverride  Accept header value; when null the WebClient default (application/json) applies
      */
-    public byte[] getBytes(String path, Duration timeoutOverride) {
+    public byte[] getBytes(String path, Duration timeoutOverride, String acceptOverride) {
         String correlationId = MDC.get(MdcKeys.CORRELATION_ID);
-        log.debug("Calling BoondManager GET (bytes) {}", path);
+        log.debug("Calling BoondManager GET (bytes) {} accept={}", path, acceptOverride);
         try {
-            var mono = webClient.get()
+            var spec = webClient.get()
                     .uri(path)
-                    .header(CorrelationIdFilter.HEADER_NAME, correlationId == null ? "" : correlationId)
-                    .retrieve()
-                    .bodyToMono(byte[].class);
+                    .header(CorrelationIdFilter.HEADER_NAME, correlationId == null ? "" : correlationId);
+            if (acceptOverride != null) {
+                spec = spec.header("Accept", acceptOverride);
+            }
+            var mono = spec.retrieve().bodyToMono(byte[].class);
             if (timeoutOverride != null) {
                 mono = mono.timeout(timeoutOverride);
             }
