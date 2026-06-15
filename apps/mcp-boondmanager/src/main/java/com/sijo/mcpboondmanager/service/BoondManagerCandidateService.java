@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.time.Duration;
 import com.sijo.mcpboondmanager.client.BoondManagerClient;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateAdministrativeAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateDetailAttributes;
@@ -61,6 +62,8 @@ public class BoondManagerCandidateService {
             new ParameterizedTypeReference<>() {};
     private static final Logger log = LoggerFactory.getLogger(BoondManagerCandidateService.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    // Cap document downloads to avoid blocking enrichment when BoondManager is slow.
+    private static final Duration DOCUMENT_DOWNLOAD_TIMEOUT = Duration.ofSeconds(15);
 
     private final BoondManagerClient client;
 
@@ -198,18 +201,30 @@ public class BoondManagerCandidateService {
         }
 
         String documentPath = "/documents/" + document.id();
-        byte[] bytes = client.getBytes(documentPath);
+        byte[] bytes;
+        try {
+            bytes = client.getBytes(documentPath, DOCUMENT_DOWNLOAD_TIMEOUT);
+        } catch (ExternalServiceException ex) {
+            // Download failed or timed out — return metadata only.
+            log.warn("CV document download failed for candidate {} (doc={}): {}",
+                    candidateId, document.id(), ex.getMessage());
+            return new CandidateCvDto(candidateId, document.id(), document.fileName(),
+                    document.contentType(), 0, false, "");
+        }
 
         String normalizedText = "";
-        try {
-            String text = extractPdfText(bytes);
-            normalizedText = text == null ? "" : text.trim();
-        } catch (ExternalServiceException ex) {
-            // PDF could not be parsed (encrypted, corrupted, or non-PDF format).
-            // Return the document metadata so callers know the file exists, but
-            // with hasContent=false so downstream agents skip text-based analysis.
-            log.warn("CV PDF text extraction failed for candidate {} (doc={}): {}",
-                    candidateId, document.id(), ex.getMessage());
+        if (isPdfContent(document.contentType(), bytes)) {
+            try {
+                String text = extractPdfText(bytes);
+                normalizedText = text == null ? "" : text.trim();
+            } catch (ExternalServiceException ex) {
+                // PDF could not be parsed (encrypted, corrupted, or scanned image).
+                log.warn("CV PDF text extraction failed for candidate {} (doc={}, contentType={}): {}",
+                        candidateId, document.id(), document.contentType(), ex.getMessage());
+            }
+        } else {
+            log.debug("CV document for candidate {} is not a parseable PDF (contentType={}, size={}), skipping text extraction",
+                    candidateId, document.contentType(), bytes == null ? 0 : bytes.length);
         }
 
         return new CandidateCvDto(
@@ -237,6 +252,19 @@ public class BoondManagerCandidateService {
     private static boolean isNotFound(RuntimeException ex) {
         return ex instanceof BoondApiException boondEx
                 && HttpStatus.NOT_FOUND.value() == boondEx.status().value();
+    }
+
+    /**
+     * Returns true when the file is a PDF — either by declared content-type or
+     * by the magic bytes {@code %PDF} at the start of the payload.
+     */
+    private static boolean isPdfContent(String contentType, byte[] bytes) {
+        if (contentType != null && contentType.toLowerCase(Locale.ROOT).contains("pdf")) {
+            return true;
+        }
+        // Fallback: check PDF magic bytes when content-type is absent or wrong.
+        return bytes != null && bytes.length >= 4
+                && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F';
     }
 
     private static String extractPdfText(byte[] bytes) {
