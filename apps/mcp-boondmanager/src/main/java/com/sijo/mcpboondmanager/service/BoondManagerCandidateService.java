@@ -2,6 +2,8 @@ package com.sijo.mcpboondmanager.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.sijo.mcpboondmanager.client.BoondManagerClient;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateAdministrativeAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateDetailAttributes;
@@ -57,6 +59,7 @@ public class BoondManagerCandidateService {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<BoondListEnvelope<BoondTechnicalDocumentAttributes>> TD_LIST_TYPE =
             new ParameterizedTypeReference<>() {};
+    private static final Logger log = LoggerFactory.getLogger(BoondManagerCandidateService.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final BoondManagerClient client;
@@ -66,6 +69,10 @@ public class BoondManagerCandidateService {
     }
 
     public DictionaryResponseDto getDictionary() {
+        return getDictionary(null);
+    }
+
+    public DictionaryResponseDto getDictionary(String language) {
         try {
             BoondDictionaryEnvelope envelope = client.get(DICTIONARY_PATH, DICTIONARY_TYPE);
             return toDictionaryResponse(envelope);
@@ -192,8 +199,18 @@ public class BoondManagerCandidateService {
 
         String documentPath = "/documents/" + document.id();
         byte[] bytes = client.getBytes(documentPath);
-        String text = extractPdfText(bytes);
-        String normalizedText = text == null ? "" : text.trim();
+
+        String normalizedText = "";
+        try {
+            String text = extractPdfText(bytes);
+            normalizedText = text == null ? "" : text.trim();
+        } catch (ExternalServiceException ex) {
+            // PDF could not be parsed (encrypted, corrupted, or non-PDF format).
+            // Return the document metadata so callers know the file exists, but
+            // with hasContent=false so downstream agents skip text-based analysis.
+            log.warn("CV PDF text extraction failed for candidate {} (doc={}): {}",
+                    candidateId, document.id(), ex.getMessage());
+        }
 
         return new CandidateCvDto(
                 candidateId,
@@ -229,6 +246,7 @@ public class BoondManagerCandidateService {
         try (PDDocument document = Loader.loadPDF(bytes)) {
             return new PDFTextStripper().getText(document);
         } catch (IOException ex) {
+            // Propagate as typed exception so getCandidateCV can log and recover.
             throw new ExternalServiceException("Unable to extract text from candidate CV PDF",
                     "/documents", ex);
         }
@@ -399,6 +417,10 @@ public class BoondManagerCandidateService {
                 attrs.country(),
                 attrs.title(),
                 attrs.experience(),
+                null,   // experienceMinYears — resolved by agent-api via dictionary
+                false,  // experienceOpenEnded
+                false,  // experienceSpecified
+                null,   // experienceLabelRaw
                 attrs.skills(),
                 attrs.diplomas(),
                 attrs.expertiseAreas(),
@@ -478,6 +500,10 @@ public class BoondManagerCandidateService {
                 a.description(),
                 a.summary(),
                 a.experience(),
+                null,   // experienceMinYears — resolved by agent-api via dictionary
+                false,  // experienceOpenEnded
+                false,  // experienceSpecified
+                null,   // experienceLabelRaw
                 a.training(),
                 a.diplomas(),
                 a.skills(),
