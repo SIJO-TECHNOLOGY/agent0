@@ -67,6 +67,13 @@ from app.services.llm_planner import (
 )
 from app.models.warnings import Warning
 from app.services.semantic_scorer import SemanticScorer
+from app.agents.agent1.normalizer import (
+    normalize_candidates as _agent1_normalize,
+    NORM_EXPERIENCE_YEARS,
+    NORM_SKILLS,
+    NORM_LANGUAGES,
+    NORM_TITLE,
+)
 
 
 DEFAULT_ENRICHMENT_LIMIT: Final[int] = 5
@@ -1589,6 +1596,27 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     return _replace(state, results=enriched_results, tool_calls=tool_calls)
 
 
+async def normalize_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
+    """Agent1 — normalise candidate data quality before matching.
+
+    Compares the same information across BoondManager structured fields, CV
+    text, and technical document, then writes a ``_normalized_*`` view into
+    each result's data dict.  Agent0's matching (``rank_candidates``) reads
+    those normalised keys so it never scores raw, incomplete BoondManager data.
+    """
+    if not state.results:
+        return state
+
+    normalised = _agent1_normalize(state.results)
+
+    logger.info(
+        "graph.normalize_candidates",
+        extra={"count": len(normalised)},
+    )
+
+    return _replace(state, results=normalised)
+
+
 def _collect_strings(value: object, sink: list[str]) -> None:
     if isinstance(value, str):
         sink.append(value)
@@ -1658,6 +1686,14 @@ def _evidence_haystack(result: SearchResult) -> str:
     resume_text = _resume_haystack(result)
     if resume_text:
         parts.append(resume_text)
+    # Include Agent1 normalised skills and languages (may add entries absent
+    # from BoondManager structured fields).
+    norm_skills = result.data.get(NORM_SKILLS)
+    if isinstance(norm_skills, list):
+        _collect_strings(norm_skills, parts)
+    norm_langs = result.data.get(NORM_LANGUAGES)
+    if isinstance(norm_langs, list):
+        _collect_strings(norm_langs, parts)
     return " ".join(parts).lower()
 
 
@@ -1757,12 +1793,16 @@ def _min_years_in(source: object) -> int | None:
 
 
 def _record_experience_min_years(result: SearchResult) -> int | None:
-    """MCP-resolved minimum years of experience for the candidate (or None).
+    """Best years-of-experience estimate for the candidate (or None).
 
-    BoondManager (via the MCP server) resolves the experience level id to a
-    canonical ``experienceMinYears`` on both the search summary and the
-    technical document; ``None`` means "not specified".
+    Prefers Agent1's normalised value (cross-validated across BoondManager,
+    CV, and technical document) over the raw BoondManager figure.
     """
+    # Agent1 normalised value takes precedence.
+    norm = result.data.get(NORM_EXPERIENCE_YEARS)
+    if isinstance(norm, int) and norm > 0:
+        return norm
+
     for source in (
         result.data,
         result.data.get("attributes"),
