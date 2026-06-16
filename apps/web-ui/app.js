@@ -609,7 +609,8 @@ function renderMessage(role, text) {
   message.append(buildMessageHead(role), body);
   elements.messages.appendChild(message);
   setUiState(role === "error" ? "error" : "active");
-  scrollToBottom();
+  // Auto-scroll only when the user sends a message, not for assistant responses.
+  if (role === "user") scrollToBottom();
 
   return message;
 }
@@ -710,7 +711,6 @@ function renderCandidateDetail(candidate) {
   );
   elements.messages.appendChild(detail);
   setUiState("active");
-  scrollToBottom();
 }
 
 function renderTechnicalSummary(ui) {
@@ -762,7 +762,6 @@ function renderTechnicalSummary(ui) {
 
   elements.messages.appendChild(card);
   setUiState("active");
-  scrollToBottom();
 }
 
 function renderClarificationForm(response) {
@@ -804,7 +803,6 @@ function renderClarificationForm(response) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
-  scrollToBottom();
 }
 
 async function submitClarification(form, sourceResponse) {
@@ -863,7 +861,6 @@ function renderCandidateCards(candidates, ui = {}) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
-  scrollToBottom();
 
   return wrapper;
 }
@@ -1116,7 +1113,6 @@ function renderLoading() {
   message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
-  scrollToBottom();
 
   return message;
 }
@@ -1138,7 +1134,6 @@ function renderThinking() {
   message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
-  scrollToBottom();
 
   let currentStep = null;
 
@@ -1177,7 +1172,6 @@ function renderThinking() {
       }
       steps.appendChild(li);
       currentStep = { li, icon };
-      scrollToBottom();
     },
     finish() {
       completeStep(currentStep);

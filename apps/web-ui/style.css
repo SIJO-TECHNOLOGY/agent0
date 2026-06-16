@@ -626,6 +626,14 @@ button.footer-pill:hover {
   flex-shrink: 0;
 }
 
+.header-logo {
+  height: 34px;
+  width: auto;
+  flex: 0 0 auto;
+  display: block;
+  object-fit: contain;
+}
+
 .header-title {
   min-width: 0;
   overflow: hidden;
