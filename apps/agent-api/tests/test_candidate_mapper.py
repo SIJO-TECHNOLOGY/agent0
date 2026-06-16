@@ -450,3 +450,48 @@ def test_contract_preferences_do_not_show_unfilled_contract_labels() -> None:
     )
 
     assert card.contract_preferences == []
+
+
+def test_agent1_normalized_experience_surfaces_on_card() -> None:
+    # Agent1 writes _normalized_experience_years; it must survive the mapper's
+    # internal-key filter and populate experience_years on the card.
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "firstName": "Houssame",
+                "_normalized_experience_years": 6,
+                "_normalized_experience_source": "profile_text",
+            },
+        )
+    )
+    assert card.experience_years == 6.0
+
+
+def test_agent1_normalized_skills_surface_on_card() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "firstName": "Ziaad",
+                "_normalized_skills": ["Python", "SQL"],
+            },
+        )
+    )
+    assert "Python" in card.skills
+    assert "SQL" in card.skills
+
+
+def test_agent1_normalized_languages_surface_on_card() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "firstName": "Ziaad",
+                "_normalized_languages": ["Anglais (courant)", "Français"],
+            },
+        )
+    )
+    langs = {entry.get("language") for entry in card.languages}
+    assert "Anglais" in langs
+    assert "Français" in langs

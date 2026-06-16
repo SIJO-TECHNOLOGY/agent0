@@ -27,7 +27,8 @@ flowchart TD
     A["discover_mcp_tools"] --> B["plan_with_llm"]
     B --> C["execute_llm_plan"]
     C --> D["enrich_candidates"]
-    D --> E["evaluate_results"]
+    D --> N["normalize_candidates (Agent1)"]
+    N --> E["evaluate_results"]
     E --> F["rank_candidates"]
     F --> G["reflect_on_results"]
     G -->|"LLM: needs_replan (budget left)"| B
@@ -73,7 +74,8 @@ flowchart TD
     E --> F["replan_if_needed"]
     F -->|replan| B
     F -->|continue| G["enrich_candidates"]
-    G --> H["rank_candidates"]
+    G --> N["normalize_candidates (Agent1)"]
+    N --> H["rank_candidates"]
     H --> I["generate_final_response"]
 ```
 
@@ -85,6 +87,8 @@ flowchart TD
 | `build_plan` | Produce a bounded execution plan with clear steps and expected tool needs. |
 | `select_tools` | Match plan steps to available MCP tools, preferring dynamically discovered tool metadata. |
 | `execute_mcp_tools` | Execute selected MCP tools asynchronously, collect outputs, and normalize failures. |
+| `enrich_candidates` | Fan-out enrichment: per candidate, fetch detail, technical document, CV, and administrative data via MCP and merge them into the candidate's `data` under `_enrichment_*` keys. |
+| `normalize_candidates` | **Agent1 — data-quality pass.** Pure-Python heuristics (no LLM, no I/O) that reconcile the same information across BoondManager structured fields, the technical document, and the CV, then write a normalised view into `result.data` under `_normalized_*` keys (experience years, skills, languages, title). See [Agent1](#agent1--candidate-data-normalisation). |
 | `evaluate_results` | Assess result quality, coverage, duplicates, confidence, and missing information. |
 | `replan_if_needed` | Deterministic fallback only: decide whether to re-enter planning with bounded retries or proceed to final response. |
 | `reflect_on_results` | LLM workflow only: ask the LLM whether the ranked results warrant one more guided, bounded replan; set `replan_feedback` under budget. |
@@ -119,7 +123,72 @@ The graph state should be represented with typed Pydantic models or typed dictio
 - `select_tools` moves to `execute_mcp_tools`; missing tool matches become warnings or errors.
 - `execute_mcp_tools` moves to `evaluate_results` with successful, partial, or failed tool outcomes.
 - `evaluate_results` records quality signals and confidence.
-- `replan_if_needed` either loops back to `build_plan` or proceeds to `generate_final_response`.
+- `replan_if_needed` either loops back to `build_plan` or proceeds to `enrich_candidates`.
+- `enrich_candidates` always moves to `normalize_candidates` (Agent1) before ranking, so the ranker and the card mapper read reconciled data rather than raw, incomplete BoondManager fields.
+
+## Agent1 — Candidate Data Normalisation
+
+`normalize_candidates` (module `app/agents/agent1/normalizer.py`) is a dedicated
+**data-quality layer** that runs between enrichment and matching. Its single
+responsibility is reconciling the same fact across the three available sources —
+BoondManager structured fields, the technical document, and the CV text — and
+writing a normalised view back into each `result.data`.
+
+Design constraints (v1):
+
+- **Pure Python heuristics** — no LLM calls, no new I/O. All inputs already live
+  in `result.data` from `enrich_candidates`.
+- **Non-destructive** — the raw BoondManager payload is preserved untouched;
+  Agent1 only *adds* `_normalized_*` keys.
+- **Idempotent** — running it twice yields the same result.
+
+Keys written into `result.data`:
+
+| Key | Meaning |
+| --- | --- |
+| `_normalized_experience_years` | Best years-of-experience estimate. |
+| `_normalized_experience_source` | Which source won: `boondmanager`, `technical_document`, `cv`, or `profile_text`. |
+| `_normalized_skills` | Deduplicated union of skills (structured + free-text). |
+| `_normalized_languages` | Deduplicated union of languages (structured + CV). |
+| `_normalized_title` | Best job-title estimate. |
+
+### Experience resolution
+
+1. **Structured BoondManager `experienceMinYears` is authoritative** — when
+   present it is used directly (curated data).
+2. Otherwise, fall back to experience-qualified figures mined from free text, in
+   order of reliability: technical document → CV → profile title/snippet.
+3. Free-text mining only counts a number when it is **explicitly tied to an
+   experience keyword** in the same clause (e.g. "6 years of Experience",
+   "3+ years of hands-on technical experience", "16 ans d'expérience"). Stray
+   numbers — an age ("40 ans"), a duration ("4 years of data"), company history
+   ("société fondée il y a 40 ans") — are ignored. Values are capped at 50 years.
+
+### Skills & languages
+
+- Skills come from BoondManager structured fields first, then from the technical
+  document and CV free text matched against the shared `KNOWN_SKILL_PATTERNS`
+  table. Comma/newline-separated `skills` strings are split into individual tags
+  (no giant blob), and overly long tokens (sentences) are dropped.
+- Languages come from structured fields, supplemented by language mentions
+  detected in the CV (with level qualifiers when present).
+
+### Surfacing in the frontend card
+
+The card mapper (`candidate_mapper.py`) strips every `result.data` key starting
+with `_` unless it is whitelisted. Agent1's `_normalized_*` keys are therefore
+listed in `_SAFE_INTERNAL_FIELDS` and consumed by `_first_number`
+(experience), `_extract_skills`, and `_extract_languages`. **Any new
+`_normalized_*` key must be both whitelisted there and read by the relevant
+extractor, or it will never reach the card.**
+
+### Shared skill patterns & import boundary
+
+`KNOWN_SKILL_PATTERNS` lives in the dependency-free module `app/skill_patterns.py`
+and is imported by both `candidate_mapper.py` and Agent1. It is kept outside
+`app.services` on purpose: importing it from `app.services.candidate_mapper`
+would trigger `app.services.__init__` → `search_service` → `graph.nodes` →
+Agent1, creating a circular import.
 
 ## Retry Strategy
 

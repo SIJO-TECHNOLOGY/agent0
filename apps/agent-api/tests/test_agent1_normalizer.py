@@ -32,10 +32,25 @@ def _result(data: dict | None = None, title: str = "") -> SearchResult:
 # ── experience normalisation ──────────────────────────────────────────────────
 
 class TestNormalizeExperience:
-    def test_prefers_cv_years_over_boond_when_higher(self):
+    def test_structured_boond_years_are_authoritative(self):
+        # BoondManager's structured experienceMinYears is curated and wins over
+        # any free-text mention (avoids inflated values mined from CV prose).
         result = _result(
             data={
-                "experienceMinYears": 1,
+                "experienceMinYears": 16,
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": "40 ans. Société fondée il y a 40 ans.",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 16
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
+
+    def test_uses_cv_years_when_boond_missing(self):
+        result = _result(
+            data={
                 "_enrichment_resume": {
                     "hasContent": True,
                     "extractedText": "Développeur Java depuis 2021, 3 ans d'expérience Java",
@@ -52,12 +67,42 @@ class TestNormalizeExperience:
         assert out.data[NORM_EXPERIENCE_YEARS] == 5
         assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
 
-    def test_prefers_tech_doc_years_over_boond(self):
+    def test_uses_tech_doc_years_when_boond_missing(self):
         result = _result(
             data={
-                "experienceMinYears": 1,
                 "_enrichment_technical_document": {
                     "text": "3 ans d'expérience Java",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 3
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "technical_document"
+
+    def test_ignores_unqualified_year_mentions(self):
+        # Numbers not tied to an experience keyword must be ignored, so a CV
+        # that says "40 ans" (age) or "4 years of data" never inflates XP.
+        result = _result(
+            data={
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": (
+                        "40 ans. Analyzed 4 years of data. "
+                        "5 ans d'expérience en finance."
+                    ),
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 5
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv"
+
+    def test_extracts_years_from_techdoc_summary(self):
+        # "3+ years of hands-on technical experience" lives in the summary field.
+        result = _result(
+            data={
+                "_enrichment_technical_document": {
+                    "summary": "Senior Data Engineer with 3+ years of hands-on technical experience building production level solutions.",
                 },
             }
         )
@@ -117,8 +162,10 @@ class TestNormalizeSkills:
             "docker" in s for s in skills_lower
         )
 
-    def test_does_not_mine_cv_when_boond_rich(self):
-        # BoondManager already has 5+ skills — CV mining is skipped.
+    def test_pattern_skills_extracted_from_cv_even_when_boond_rich(self):
+        # Known tech skills (via KNOWN_SKILL_PATTERNS) are always extracted from
+        # the CV, even when BoondManager already provides rich structured data.
+        # This ensures skills mentioned in free-text prose surface in the card.
         result = _result(
             data={
                 "skills": ["Java", "Spring", "Kafka", "Docker", "K8s"],
@@ -130,8 +177,28 @@ class TestNormalizeSkills:
         )
         out = normalize_candidate(result)
         skills_lower = [s.lower() for s in out.data[NORM_SKILLS]]
-        # "python" should NOT appear since CV mining is skipped.
-        assert "python" not in skills_lower
+        # Python is a known pattern → should be extracted from CV text.
+        assert "python" in skills_lower
+        # Boond structured skills must still be present.
+        assert "java" in skills_lower
+
+    def test_heuristic_tokens_not_extracted_when_boond_rich(self):
+        # Heuristic free-text mining (capitalised tokens) is suppressed when
+        # boond already provides 3+ skills — only pattern-based labels appear.
+        result = _result(
+            data={
+                "skills": ["Java", "Spring", "Kafka"],
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": "Expert in Zephyr methodology and Blorq frameworks",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        skills_lower = [s.lower() for s in out.data[NORM_SKILLS]]
+        # "Zephyr" and "Blorq" are not in KNOWN_SKILL_PATTERNS → not extracted.
+        assert "zephyr" not in skills_lower
+        assert "blorq" not in skills_lower
 
     def test_empty_when_no_skill_data(self):
         out = normalize_candidate(_result())

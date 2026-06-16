@@ -30,6 +30,8 @@ The Agent API now follows the **Architectural Paradigm Shift: From Single-Shot P
 - Reflect on ranked results in the LLM workflow and decide whether a bounded replan is warranted.
 - Select MCP tools.
 - Orchestrate LangGraph nodes.
+- Enrich candidates with detail, technical document, and CV data via MCP.
+- Normalize candidate data quality before matching (Agent1): reconcile experience, skills, and languages across BoondManager fields, the technical document, and the CV.
 - Aggregate, deduplicate, rank, and summarize results.
 - Normalize BoondManager MCP results into UI-friendly response models.
 - Return `conversation_id`, `message`, and `ui` to the web UI by default.
@@ -84,6 +86,30 @@ Internal metadata such as interpreted intent, execution plan, tool calls, confid
 ## System Context
 
 This module implements the Agentic Backend described in the [Sijo AI Agent Architecture](../../docs/architecture/sijo-ai-agent-architecture.md). It should preserve the boundary between LangGraph orchestration and deterministic MCP tool execution.
+
+## Diagnostic Scripts
+
+`scripts/fetch_candidate.py` fetches a candidate's raw data — detail, technical
+document, and extracted CV text — directly through the running MCP server (not the
+FastAPI agent). Useful for verifying what BoondManager actually returns for a
+profile. Run it from `apps/agent-api` with the MCP server up:
+
+```bash
+# find a candidate id by name, then fetch everything for the single match
+python scripts/fetch_candidate.py --name "Firstname Lastname"
+
+# list candidates matching a name (no fetch)
+python scripts/fetch_candidate.py --search "Lastname"
+
+# fetch by id; optionally only the CV
+python scripts/fetch_candidate.py 38101 --only cv
+
+# custom MCP URL (default: http://localhost:8080/mcp, override with MCP_SERVER_URL)
+python scripts/fetch_candidate.py 38101 --url http://localhost:8001/mcp
+```
+
+The MCP server must be running and configured with a valid
+`BOONDMANAGER_JWT_CLIENT` token, otherwise CV download returns no content.
 
 ## Documentation
 

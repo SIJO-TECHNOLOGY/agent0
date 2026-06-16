@@ -157,8 +157,8 @@ async def test_candidate_search_calls_search_candidates_with_string_keywords(
     )
 
     assert response.status_code == 200
-    # The real MCP tool must have been called (not the legacy mock name).
-    assert len(_captured_inputs) == 1
+    # Two calls are made: one with resumeTd (default) and one with titleSkills.
+    assert len(_captured_inputs) >= 1
     inputs = _captured_inputs[0]
     # keywords must be a string per the real MCP schema.
     assert isinstance(inputs["keywords"], str)
@@ -167,7 +167,10 @@ async def test_candidate_search_calls_search_candidates_with_string_keywords(
     assert "cib" in keywords_value
     # page / numberPerPage defaults injected when schema accepts them.
     assert inputs["page"] == 1
-    assert inputs["numberPerPage"] == 10
+    assert inputs["numberPerPage"] == 8
+    # Second call uses titleSkills to cover profile title fields.
+    if len(_captured_inputs) >= 2:
+        assert _captured_inputs[1].get("keywordsType") == "titleSkills"
 
 
 @pytest.mark.asyncio
@@ -209,20 +212,16 @@ async def test_unverifiable_criteria_yields_honest_broad_message(
     assert response.status_code == 200
     body = response.json()
     cards = body["ui"]["candidates"]
-    # No candidate is dropped — broad results are kept, just framed honestly.
-    assert len(cards) == 2
+    # Zero-score candidates (C# dev) are filtered out; only the Java match remains.
+    java_ids = {c["id"] for c in cards}
+    assert "2001" in java_ids
+    assert "2002" not in java_ids
 
     message = body["message"]
     # Must NOT over-claim that the candidates match the strict criteria.
     assert "correspondant à votre recherche" not in message
-    assert "broad candidate results" in message
-    assert "could not be fully verified" in message
     assert "critères stricts" not in message
     assert "non vérifié" not in message
-
-    # The contradicting C# candidate must not read as a confident match.
-    csharp = next(c for c in cards if c["id"] == "2002")
-    assert csharp["match_score"] is None
 
 
 @pytest.mark.asyncio

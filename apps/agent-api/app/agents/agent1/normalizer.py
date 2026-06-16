@@ -29,6 +29,7 @@ import re
 from typing import Final
 
 from app.models.results import SearchResult
+from app.skill_patterns import KNOWN_SKILL_PATTERNS
 
 logger = logging.getLogger(__name__)
 
@@ -48,37 +49,50 @@ _ENRICHMENT_ADMINISTRATIVE_KEY: Final[str] = "_enrichment_administrative"
 
 # --- experience extraction ------------------------------------------------
 
-_YEARS_RE: Final[re.Pattern[str]] = re.compile(
-    r"(\d+)\s*(?:ans?|années?|year[s]?\s*(?:of\s*experience)?)",
-    re.IGNORECASE,
+# Year figures are only trusted when they are explicitly tied to *experience*,
+# otherwise free-text mining grabs unrelated numbers ("4 years of data",
+# "40 ans" referring to an age/date, company history, etc.). We require an
+# experience keyword adjacent to the number, in either order.
+_UNIT = r"(?:ans?|années?|years?)"
+_EXP_KW = r"(?:expérience|experience|exp\b)"
+
+_YEARS_RES: Final[tuple[re.Pattern[str], ...]] = (
+    # "6 years of Experience", "3+ years of hands-on technical experience",
+    # "10 ans d'expérience" — number → unit → (short gap) → experience keyword.
+    # The gap excludes sentence/clause separators (. , ;) so the number and the
+    # experience keyword must sit in the same clause — "40 ans. … expérience"
+    # never links the age to the keyword.
+    re.compile(
+        rf"(\d{{1,2}})\s*\+?\s*{_UNIT}[\s\w'’\-/]{{0,40}}?{_EXP_KW}",
+        re.IGNORECASE,
+    ),
+    # "expérience: 16 ans", "experience of 12 years", "expérience de 16 ans" —
+    # keyword → short connector only (:, of, de, d', en) → number → unit.
+    # The connector is deliberately tight so "experience and 30 years old"
+    # does NOT link the age to the experience keyword.
+    re.compile(
+        rf"{_EXP_KW}\s*(?::|of|de|d['’]|en)?\s*(\d{{1,2}})\s*\+?\s*{_UNIT}",
+        re.IGNORECASE,
+    ),
 )
-# Seniority title keywords → approximate minimum years.
-_TITLE_SENIORITY: Final[dict[str, int]] = {
-    "junior": 1,
-    "mid": 3,
-    "confirmed": 3,
-    "confirmé": 3,
-    "senior": 5,
-    "lead": 7,
-    "principal": 8,
-    "architect": 8,
-    "architecte": 8,
-    "expert": 8,
-    "staff": 8,
-}
 
 
 def _parse_years_from_text(text: str) -> int | None:
-    """Largest explicit years-of-experience figure in free text."""
+    """Largest experience-qualified years figure in free text.
+
+    Only counts numbers explicitly tied to an experience keyword, so stray
+    mentions ("4 years of data", "40 ans" as an age) are ignored.
+    """
     best: int | None = None
-    for match in _YEARS_RE.finditer(text):
-        try:
-            value = int(match.group(1))
-        except (ValueError, TypeError):
-            continue
-        # Sanity cap: ignore implausible values (> 50 years).
-        if 0 < value <= 50 and (best is None or value > best):
-            best = value
+    for pattern in _YEARS_RES:
+        for match in pattern.finditer(text):
+            try:
+                value = int(match.group(1))
+            except (ValueError, TypeError):
+                continue
+            # Sanity cap: ignore implausible values (> 50 years).
+            if 0 < value <= 50 and (best is None or value > best):
+                best = value
     return best
 
 
@@ -103,47 +117,93 @@ def _years_from_boond(data: dict[str, object]) -> int | None:
     return None
 
 
-def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | None]:
-    """Return (best_years, source_label) by reconciling all sources.
+# Top-level text fields in result.data that may contain experience mentions.
+_TOP_LEVEL_TEXT_FIELDS: Final[tuple[str, ...]] = (
+    "title", "headline", "snippet", "description", "summary",
+    "resumeTd", "resume", "skills",
+)
+# Tech doc nested text fields.
+_TECH_DOC_TEXT_FIELDS: Final[tuple[str, ...]] = (
+    "text", "description", "summary", "skills", "title",
+)
 
-    Strategy: prefer the highest plausible figure across sources, because
-    BoondManager often stores the minimum experience band while the CV or
-    technical document mentions the actual years worked.
+
+def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | None]:
+    """Return (best_years, source_label) reconciling structured + free-text data.
+
+    Strategy:
+      1. Trust BoondManager's structured ``experienceMinYears`` when present —
+         it is curated and authoritative.
+      2. Otherwise fall back to experience-qualified figures mined from free
+         text (tech doc → CV → profile title/snippet), taking the highest
+         plausible value. Free-text mining only counts numbers explicitly tied
+         to an experience keyword, so stray "X years" mentions are ignored.
     """
     boond_years = _years_from_boond(data)
+    if boond_years is not None:
+        return boond_years, "boondmanager"
 
-    cv_years: int | None = None
-    resume = data.get(_ENRICHMENT_RESUME_KEY)
-    if isinstance(resume, dict):
-        text = resume.get("extractedText") or resume.get("text") or ""
-        if isinstance(text, str) and text:
-            cv_years = _parse_years_from_text(text)
-
+    # Tech doc free-text fields (summary may say "3+ years of hands-on experience")
     techdoc_years: int | None = None
     techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
     if isinstance(techdoc, dict):
-        text = str(techdoc.get("text") or techdoc.get("description") or "")
-        techdoc_years = _parse_years_from_text(text)
+        td_text = " ".join(
+            str(techdoc.get(f))
+            for f in _TECH_DOC_TEXT_FIELDS
+            if isinstance(techdoc.get(f), str) and techdoc.get(f)
+        )
+        techdoc_years = _parse_years_from_text(td_text) if td_text else None
 
-    candidates = [
-        (boond_years, "boondmanager"),
-        (cv_years, "cv"),
+    # CV extracted text
+    cv_years: int | None = None
+    resume = data.get(_ENRICHMENT_RESUME_KEY)
+    if isinstance(resume, dict):
+        cv_text = resume.get("extractedText") or resume.get("text") or ""
+        if isinstance(cv_text, str) and cv_text:
+            cv_years = _parse_years_from_text(cv_text)
+
+    # Top-level text (title like "Python Engineer 6 years of Experience", snippet)
+    top_text = " ".join(
+        str(data.get(f))
+        for f in _TOP_LEVEL_TEXT_FIELDS
+        if isinstance(data.get(f), str) and data.get(f)
+    )
+    top_years = _parse_years_from_text(top_text) if top_text else None
+
+    # Free-text fallback, in order of reliability; take the highest qualified hit.
+    for years, source in (
         (techdoc_years, "technical_document"),
-    ]
-    best_years: int | None = None
-    best_source: str | None = None
-    for years, source in candidates:
-        if years is not None and (best_years is None or years > best_years):
-            best_years = years
-            best_source = source
+        (cv_years, "cv"),
+        (top_years, "profile_text"),
+    ):
+        if years is not None:
+            return years, source
 
-    return best_years, best_source
+    return None, None
 
 
 # --- skills extraction ----------------------------------------------------
 
+# Delimiters used by BoondManager's free-text "skills" field.
+_SKILL_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"[,;/\n\r]+")
+# Max length of a single skill token; longer = a sentence, not a skill.
+_MAX_SKILL_TOKEN_LEN: Final[int] = 40
+
+
+def _add_skill_token(token: str, sink: list[str]) -> None:
+    """Append a cleaned skill token, dropping blobs and overlong sentences."""
+    cleaned = token.strip()
+    if cleaned and len(cleaned) <= _MAX_SKILL_TOKEN_LEN:
+        sink.append(cleaned)
+
+
 def _collect_boond_skills(data: dict[str, object]) -> list[str]:
-    """Extract skills from BoondManager structured fields (detail + tech-doc)."""
+    """Extract skills from BoondManager structured fields (detail + tech-doc).
+
+    The ``skills`` field is often a single comma/newline-separated string
+    (e.g. "python, java, scala, sql") — split it so each becomes its own
+    tag rather than one giant blob.
+    """
     skills: list[str] = []
     for source in (data, data.get("attributes"), data.get(_ENRICHMENT_TECH_DOC_KEY), data.get(_ENRICHMENT_DETAIL_KEY)):
         if not isinstance(source, dict):
@@ -151,20 +211,23 @@ def _collect_boond_skills(data: dict[str, object]) -> list[str]:
         for field in ("skills", "tools", "expertiseAreas"):
             value = source.get(field)
             if isinstance(value, str) and value.strip():
-                skills.append(value.strip())
+                for part in _SKILL_SPLIT_RE.split(value):
+                    _add_skill_token(part, skills)
             elif isinstance(value, list):
                 for item in value:
                     if isinstance(item, str) and item.strip():
-                        skills.append(item.strip())
+                        _add_skill_token(item, skills)
                     elif isinstance(item, dict):
-                        label = item.get("label") or item.get("name") or item.get("title")
+                        label = (
+                            item.get("tool")
+                            or item.get("label")
+                            or item.get("name")
+                            or item.get("title")
+                        )
                         if isinstance(label, str) and label.strip():
-                            skills.append(label.strip())
+                            _add_skill_token(label, skills)
     return skills
 
-
-# Minimum length for a skill token extracted from free text.
-_MIN_SKILL_LEN: Final[int] = 2
 
 # Common tech skill patterns: recognise capitalised/upper-case tokens and
 # known compound phrases.  Kept minimal for v1; Agent1 can be extended with
@@ -206,23 +269,59 @@ def _extract_skills_from_text(text: str, boond_skills: set[str]) -> list[str]:
     return found
 
 
+def _pattern_skills_from_text(text: str, seen: set[str]) -> list[str]:
+    """Extract known tech skills from free text using the shared pattern list.
+
+    Uses the same patterns as candidate_mapper so the skill labels are
+    identical and the frontend deduplicates them correctly.
+    """
+    found: list[str] = []
+    for pattern, label in KNOWN_SKILL_PATTERNS:
+        if label.lower() not in seen and re.search(pattern, text, re.IGNORECASE):
+            found.append(label)
+            seen.add(label.lower())
+    return found
+
+
 def _normalize_skills(data: dict[str, object]) -> list[str]:
-    """Union of skills from all sources, deduplicated (case-insensitive)."""
-    boond = _collect_boond_skills(data)
+    """Union of skills from all sources, deduplicated (case-insensitive).
+
+    Priority:
+    1. BoondManager structured fields (most reliable, already curated)
+    2. Tech doc free-text fields (summary, description, text) — catches
+       skills mentioned in prose but not added to the structured list
+    3. CV extracted text — widest coverage but noisiest
+    """
     result: list[str] = []
     seen: set[str] = set()
-    for skill in boond:
+
+    # 1. Structured fields from BoondManager / tech doc / detail
+    for skill in _collect_boond_skills(data):
         if skill.lower() not in seen:
             result.append(skill)
             seen.add(skill.lower())
 
-    # Supplement from CV when structured data is sparse.
+    # 2. Tech doc free-text (summary, description, text)
+    techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
+    if isinstance(techdoc, dict):
+        for field in ("summary", "description", "text", "skills"):
+            value = techdoc.get(field)
+            if isinstance(value, str) and value.strip():
+                for skill in _pattern_skills_from_text(value, seen):
+                    result.append(skill)
+
+    # 3. CV extracted text — only when structured + tech doc are sparse
     resume = data.get(_ENRICHMENT_RESUME_KEY)
     if isinstance(resume, dict):
-        text = str(resume.get("extractedText") or resume.get("text") or "")
-        if text:
-            extra = _extract_skills_from_text(text, seen)
-            result.extend(extra[:20])  # cap to avoid noise
+        cv_text = str(resume.get("extractedText") or resume.get("text") or "")
+        if cv_text:
+            # Pattern-based extraction first (reliable labels)
+            for skill in _pattern_skills_from_text(cv_text, seen):
+                result.append(skill)
+            # Heuristic fallback only when still very sparse
+            if len(result) < 3:
+                for skill in _extract_skills_from_text(cv_text, seen):
+                    result.append(skill)
 
     return result
 
@@ -360,6 +459,13 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     with an updated ``data`` dict. The original payload is untouched.
     """
     data = dict(result.data)
+
+    # Expose SearchResult scalar fields into data so _normalize_* functions
+    # have a single dict to scan without needing access to the full result.
+    if result.title and "title" not in data:
+        data["title"] = result.title
+    if result.snippet and "snippet" not in data:
+        data["snippet"] = result.snippet
 
     exp_years, exp_source = _normalize_experience(data)
     skills = _normalize_skills(data)

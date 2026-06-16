@@ -18,6 +18,7 @@ from typing import Final
 
 from app.models.api import CandidateCard
 from app.models.results import SearchResult
+from app.skill_patterns import KNOWN_SKILL_PATTERNS as _KNOWN_SKILL_PATTERNS
 
 # Tool name prefixes that, by MCP convention, return a relevance score.
 # Detail-style lookups (e.g. ``getCandidateDetail``) do not, so their
@@ -44,6 +45,7 @@ _EXPERIENCE_FIELDS: Final[tuple[str, ...]] = (
     "experienceYears",
     "yearsOfExperience",
     "experience_years",
+    "_normalized_experience_years",  # Agent1 extraction from CV/tech-doc free text
 )
 
 _CITY_FIELDS: Final[tuple[str, ...]] = ("city", "town", "locality")
@@ -112,80 +114,11 @@ _SKILL_TEXT_FIELDS: Final[tuple[str, ...]] = (
     # as a dedicated step in _extract_skills regardless of whether other
     # structured skills were found, so it must not be treated as a fallback.
 )
-_KNOWN_SKILL_PATTERNS: Final[tuple[tuple[str, str], ...]] = (
-    # Languages
-    (r"\bjava\b", "Java"),
-    (r"\bj2ee\b", "J2EE"),
-    (r"\bc\+\+", "C++"),
-    (r"\bc#\b", "C#"),
-    (r"\bpython\b", "Python"),
-    (r"\bphp\b", "PHP"),
-    (r"\b\.net\b", ".NET"),
-    (r"\bscala\b", "Scala"),
-    (r"\bkotlin\b", "Kotlin"),
-    (r"\brust\b", "Rust"),
-    (r"\bgo\b|\bgolang\b", "Go"),
-    (r"\bswift\b", "Swift"),
-    (r"\btyescript\b|\bts\b", "TypeScript"),
-    (r"\bjavascript\b|\bjs\b", "JavaScript"),
-    # Frameworks / libs
-    (r"\bspring\s*boot\b", "Spring Boot"),
-    (r"\bspring\b", "Spring"),
-    (r"\bhibernate\b", "Hibernate"),
-    (r"\bjsp\b", "JSP"),
-    (r"\bjsf\b", "JSF"),
-    (r"\bstruts\b", "Struts"),
-    (r"\bangular\b", "Angular"),
-    (r"\breact\b", "React"),
-    (r"\bvue\b", "Vue.js"),
-    (r"\bnode(?:\.js)?\b", "Node.js"),
-    (r"\bdjango\b", "Django"),
-    (r"\bflask\b", "Flask"),
-    # Data / messaging
-    (r"\bkafka\b", "Kafka"),
-    (r"\brabbit\s*mq\b", "RabbitMQ"),
-    (r"\belastic\s*search\b|\belasticsearch\b", "Elasticsearch"),
-    (r"\bspark\b", "Spark"),
-    (r"\bhadoop\b", "Hadoop"),
-    # Databases
-    (r"\bsql\b", "SQL"),
-    (r"\bpostgre\b|\bpostgresql\b", "PostgreSQL"),
-    (r"\bmysql\b", "MySQL"),
-    (r"\boracle\b", "Oracle"),
-    (r"\bmongo\s*db\b|\bmongodb\b", "MongoDB"),
-    (r"\bredis\b", "Redis"),
-    # Infrastructure / cloud
-    (r"\bdocker\b", "Docker"),
-    (r"\bkubernetes\b|\bk8s\b", "Kubernetes"),
-    (r"\baws\b", "AWS"),
-    (r"\bazure\b", "Azure"),
-    (r"\bgcp\b|\bgoogle\s*cloud\b", "GCP"),
-    (r"\bjenkins\b", "Jenkins"),
-    (r"\bci\s*/\s*cd\b|\bcicd\b", "CI/CD"),
-    (r"\bdevops\b", "DevOps"),
-    (r"\bterraform\b", "Terraform"),
-    # Finance / domain
-    (r"\bfixe[sd]?\s*income\b|\bobligations?\b", "Produits de taux"),
-    (r"\bderivativ[esi]+\b|\bderivés?\b", "Dérivés"),
-    (r"\bmarket\s*data\b", "Market Data"),
-    (r"\bfrontoffice\b|\bfront\s*office\b", "Front Office"),
-    (r"\bmiddleoffice\b|\bmiddle\s*office\b", "Middle Office"),
-    (r"\brisque?\b|\brisk\b", "Gestion du risque"),
-    (r"\btrading\b", "Trading"),
-    (r"\bbloomberg\b", "Bloomberg"),
-    (r"\breuters\b|\brefinitiv\b", "Reuters/Refinitiv"),
-    # Frontend
-    (r"\bfront[-\s]?end\b", "Front-end"),
-    (r"\bback[-\s]?end\b", "Back-end"),
-    (r"\bmicroservice", "Microservices"),
-    (r"\bapi\s*rest\b|\brestful\b|\brest\s*api\b", "REST API"),
-    (r"\bsoap\b", "SOAP"),
-    (r"\bxml\b", "XML"),
-    (r"\bjson\b", "JSON"),
-    (r"\bgit\b", "Git"),
-    (r"\bscrum\b|\bagile\b", "Agile/Scrum"),
-    (r"\bjira\b", "Jira"),
-)
+# Re-exported from the dependency-free app.skill_patterns module so existing
+# imports (`from app.services.candidate_mapper import KNOWN_SKILL_PATTERNS`)
+# keep working. The patterns live outside app.services to avoid a circular
+# import with Agent1 (see app/skill_patterns.py).
+KNOWN_SKILL_PATTERNS = _KNOWN_SKILL_PATTERNS
 
 _BOOND_URL_FIELDS: Final[tuple[str, ...]] = ("boondUrl", "boond_url", "url", "link")
 _HIGHLIGHTS_FIELDS: Final[tuple[str, ...]] = (
@@ -282,6 +215,13 @@ _SAFE_INTERNAL_FIELDS: Final[tuple[str, ...]] = (
     "_resolvedLanguageLabels",
     "_resolvedActivityAreaLabels",
     "_sourceLabel",
+    # Agent1 normalised fields — must survive the internal-key filter so the
+    # card can surface experience/skills/languages reconciled from CV & tech doc.
+    "_normalized_experience_years",
+    "_normalized_experience_source",
+    "_normalized_skills",
+    "_normalized_languages",
+    "_normalized_title",
 )
 
 # Internal data keys we never surface in candidate cards.
@@ -585,16 +525,25 @@ def _extract_skills(data: dict[str, object]) -> list[str]:
     for text_key in ("description", "summary", "snippet"):
         text_val = data.get(text_key)
         if isinstance(text_val, str) and text_val.strip():
-            for pattern, label in _KNOWN_SKILL_PATTERNS:
+            for pattern, label in KNOWN_SKILL_PATTERNS:
                 if re.search(pattern, text_val, flags=re.IGNORECASE):
                     _add(label, enforce_length=False)
 
     # ALWAYS extract from CV PDF text regardless of other sources.
     resume_text = data.get("_resumeText")
     if isinstance(resume_text, str) and resume_text.strip():
-        for pattern, label in _KNOWN_SKILL_PATTERNS:
+        for pattern, label in KNOWN_SKILL_PATTERNS:
             if re.search(pattern, resume_text, flags=re.IGNORECASE):
                 _add(label, enforce_length=False)
+
+    # Agent1 normalized skills — extracted from tech doc and CV free text.
+    # Added last so structured / pattern-matched skills above take priority,
+    # but Agent1 fills gaps (e.g. Python found in tech doc prose).
+    norm_skills = data.get("_normalized_skills")
+    if isinstance(norm_skills, list):
+        for skill in norm_skills:
+            if isinstance(skill, str):
+                _add(skill, enforce_length=False)
 
     return out
 
@@ -610,7 +559,7 @@ def _infer_skills_from_text(data: dict[str, object]) -> list[str]:
         return []
 
     skills: list[str] = []
-    for pattern, label in _KNOWN_SKILL_PATTERNS:
+    for pattern, label in KNOWN_SKILL_PATTERNS:
         if re.search(pattern, haystack, flags=re.IGNORECASE) and label not in skills:
             skills.append(label)
     return skills[:20]
@@ -772,14 +721,31 @@ def _extract_tools(data: dict[str, object]) -> list[dict[str, object]]:
 def _extract_languages(data: dict[str, object]) -> list[dict[str, object]]:
     resolved = data.get("_resolvedLanguageLabels")
     if isinstance(resolved, list) and resolved:
-        return [dict(item) for item in resolved if isinstance(item, dict)]
-    return _extract_named_entries(
-        data,
-        _LANGUAGES_FIELDS,
-        name_fields=("language", "name", "label"),
-        label_name="language",
-        level_fields=("level", "levelLabel"),
-    )
+        structured = [dict(item) for item in resolved if isinstance(item, dict)]
+    else:
+        structured = _extract_named_entries(
+            data,
+            _LANGUAGES_FIELDS,
+            name_fields=("language", "name", "label"),
+            label_name="language",
+            level_fields=("level", "levelLabel"),
+        )
+
+    # Supplement with Agent1 languages extracted from CV free text.
+    norm_langs = data.get("_normalized_languages")
+    if isinstance(norm_langs, list) and norm_langs:
+        existing = {e.get("language", "").lower() for e in structured if isinstance(e, dict)}
+        for entry in norm_langs:
+            if not isinstance(entry, str):
+                continue
+            # entry format: "Anglais" or "Anglais (courant)"
+            lang_name = entry.split("(")[0].strip()
+            if lang_name.lower() not in existing:
+                level = entry[len(lang_name):].strip().strip("()")
+                structured.append({"language": lang_name, "level": level or None})
+                existing.add(lang_name.lower())
+
+    return structured
 
 
 def _build_technical_summary(data: dict[str, object]) -> str | None:

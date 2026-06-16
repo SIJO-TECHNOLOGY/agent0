@@ -86,7 +86,9 @@ async def test_analyze_intent_extracts_keywords_and_seniority() -> None:
 
     assert result.interpreted_intent is not None
     assert result.interpreted_intent.objective == "find_consultants"
-    assert "python" in result.interpreted_intent.entities
+    # The full query is sent as a single entity so BoondManager receives the phrase intact.
+    assert len(result.interpreted_intent.entities) == 1
+    assert "python" in result.interpreted_intent.entities[0].lower()
     assert result.interpreted_intent.constraints.get("seniority") == "senior"
 
 
@@ -249,7 +251,7 @@ async def test_select_tools_picks_search_candidates_over_legacy_mock() -> None:
     assert step.inputs == {
         "keywords": "java cib",
         "page": 1,
-        "numberPerPage": 10,
+        "numberPerPage": 8,
     }
 
 

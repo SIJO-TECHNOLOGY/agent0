@@ -338,9 +338,11 @@ async def test_rank_promotes_candidates_with_matching_evidence() -> None:
 
     result = await rank_candidates(state, _ctx(MockMcpClient()))
 
-    # Evidence-rich candidate must end up first.
+    # Evidence-rich candidate is the only one kept (zero-score candidate dropped).
     assert result.results[0].id == "2"
-    assert result.results[0].score > result.results[1].score
+    assert result.results[0].score > 0.0
+    # Candidate with no evidence is filtered out.
+    assert all(r.id != "1" for r in result.results)
 
 
 @pytest.mark.asyncio
@@ -368,9 +370,11 @@ async def test_rank_scores_by_evidence_fraction_and_nulls_zero_evidence() -> Non
     by_id = {r.id: r.score for r in result.results}
     assert by_id["2"] == 1.0
     assert by_id["1"] == 0.5
-    assert by_id["3"] == 0.0
-    # Best-evidenced first, contradicting candidate last.
-    assert [r.id for r in result.results] == ["2", "1", "3"]
+    # C# developer has no evidence and is filtered out (zero-score removed when positives exist).
+    assert "3" not in by_id
+    # Best-evidenced first.
+    assert result.results[0].id == "2"
+    assert result.results[1].id == "1"
 
 
 @pytest.mark.asyncio
