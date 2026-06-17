@@ -134,7 +134,16 @@ responsibility is reconciling the same fact across the three available sources �
 BoondManager structured fields, the technical document, and the CV text — and
 writing a normalised view back into each `result.data`.
 
-Design constraints (v1):
+Agent1 has two passes:
+
+1. A **deterministic pass** (always on) — pure-Python heuristics that produce
+   the `_normalized_*` values and *detect conflicts* (`_normalized_conflicts`).
+2. An optional **LLM reconciliation pass** (`app/agents/agent1/reconciler.py`,
+   off by default) — only the candidates the deterministic pass flagged as
+   incoherent are sent to an LLM that judges coherence across experience,
+   skills, languages, and title. See [LLM reconciliation](#llm-reconciliation).
+
+Design constraints of the deterministic pass:
 
 - **Pure Python heuristics** — no LLM calls, no new I/O. All inputs already live
   in `result.data` from `enrich_candidates`.
@@ -147,10 +156,11 @@ Keys written into `result.data`:
 | Key | Meaning |
 | --- | --- |
 | `_normalized_experience_years` | Best years-of-experience estimate. |
-| `_normalized_experience_source` | Which source won: `boondmanager`, `technical_document`, `cv`, or `profile_text`. |
+| `_normalized_experience_source` | Which source won: `boondmanager`, `technical_document`, `cv`, `profile_text`, or `llm`. |
 | `_normalized_skills` | Deduplicated union of skills (structured + free-text). |
 | `_normalized_languages` | Deduplicated union of languages (structured + CV). |
 | `_normalized_title` | Best job-title estimate. |
+| `_normalized_conflicts` | List of detected coherence-conflict reasons (internal; never surfaced on the card). |
 
 ### Experience resolution
 
@@ -173,6 +183,42 @@ Keys written into `result.data`:
 - Languages come from structured fields, supplemented by language mentions
   detected in the CV (with level qualifiers when present).
 
+### LLM reconciliation
+
+The deterministic pass is fast and reliable but rigid: every tricky case (an age
+"40 ans" sitting next to "16 ans d'expérience") must be anticipated in code. The
+optional LLM layer adds **non-deterministic decisional flexibility** for exactly
+those cases, while keeping the deterministic result as the baseline/fallback.
+
+How it works:
+
+1. The deterministic pass records conflict reasons in `_normalized_conflicts`,
+   e.g. `age_present_with_experience`, `experience_multiple_figures`,
+   `experience_vs_structured_disagreement`, `title_seniority_mismatch`.
+2. In the `normalize_candidates` node, **only the conflicting candidates** are
+   sent to the reconciler — coherent candidates skip the LLM entirely (zero
+   cost in the common case). All conflicting candidates go in **one batched
+   call** per search.
+3. The LLM receives the grounded text (CV, technical document, title) plus the
+   deterministic values, and returns a validated JSON `Agent1Judgement` per
+   candidate with a `confidence`. It is instructed to never invent data and to
+   distinguish experience from age / durations.
+4. A judgement overrides the deterministic value **only when `confidence ≥
+   `settings.agent1_confidence_threshold`** (default 0.6); the winning
+   experience source is then `llm`.
+
+Guardrails:
+
+- **Off by default** (`AGENT1_LLM_RECONCILIATION=false`); Agent1 stays purely
+  deterministic until enabled.
+- **Fail-safe** — any LLM/parse/validation error returns no judgements, so the
+  deterministic result is kept (`Agent1Reconciler.reconcile` never raises).
+- **Bounded** — capped at `agent1_max_reconcile_candidates` per search; CV/tech
+  texts are truncated before sending.
+- **Determinism trade-off** — by design this pass is non-deterministic on
+  conflicting candidates only; tests mock the `ChatFn`, so the deterministic
+  suite stays stable.
+
 ### Surfacing in the frontend card
 
 The card mapper (`candidate_mapper.py`) strips every `result.data` key starting
@@ -180,7 +226,8 @@ with `_` unless it is whitelisted. Agent1's `_normalized_*` keys are therefore
 listed in `_SAFE_INTERNAL_FIELDS` and consumed by `_first_number`
 (experience), `_extract_skills`, and `_extract_languages`. **Any new
 `_normalized_*` key must be both whitelisted there and read by the relevant
-extractor, or it will never reach the card.**
+extractor, or it will never reach the card.** (`_normalized_conflicts` is
+deliberately *not* whitelisted — it is internal-only and never shown.)
 
 ### Shared skill patterns & import boundary
 

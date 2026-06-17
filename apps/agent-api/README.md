@@ -31,7 +31,7 @@ The Agent API now follows the **Architectural Paradigm Shift: From Single-Shot P
 - Select MCP tools.
 - Orchestrate LangGraph nodes.
 - Enrich candidates with detail, technical document, and CV data via MCP.
-- Normalize candidate data quality before matching (Agent1): reconcile experience, skills, and languages across BoondManager fields, the technical document, and the CV.
+- Normalize candidate data quality before matching (Agent1): reconcile experience, skills, and languages across BoondManager fields, the technical document, and the CV. A deterministic pass always runs; an optional, off-by-default LLM pass (`AGENT1_LLM_RECONCILIATION`) judges coherence on conflicting candidates only.
 - Aggregate, deduplicate, rank, and summarize results.
 - Normalize BoondManager MCP results into UI-friendly response models.
 - Return `conversation_id`, `message`, and `ui` to the web UI by default.
@@ -86,6 +86,26 @@ Internal metadata such as interpreted intent, execution plan, tool calls, confid
 ## System Context
 
 This module implements the Agentic Backend described in the [Sijo AI Agent Architecture](../../docs/architecture/sijo-ai-agent-architecture.md). It should preserve the boundary between LangGraph orchestration and deterministic MCP tool execution.
+
+## Agent1 LLM Reconciliation (optional)
+
+Agent1's deterministic normalisation always runs. The optional LLM "coherence
+judge" — which only fires on candidates whose data the deterministic pass flags
+as conflicting (e.g. an age clashing with the stated experience) — is enabled
+with:
+
+```bash
+AGENT1_LLM_RECONCILIATION=true       # default false
+AGENT1_CONFIDENCE_THRESHOLD=0.6      # min confidence to override deterministic
+AGENT1_MAX_RECONCILE_CANDIDATES=10   # hard cap of LLM-judged candidates / search
+LLM_PROVIDER=anthropic               # reuses the planner's LLM settings
+LLM_MODEL=claude-sonnet-4-6
+LLM_API_KEY=...
+```
+
+When the flag is off or no LLM key is configured, Agent1 stays purely
+deterministic. Any LLM/parse error is non-fatal: the deterministic result is
+kept. See [LangGraph Agent Design → Agent1](./docs/langgraph-agent-design.md).
 
 ## Diagnostic Scripts
 

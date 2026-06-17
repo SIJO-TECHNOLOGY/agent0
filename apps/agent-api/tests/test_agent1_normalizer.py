@@ -48,6 +48,38 @@ class TestNormalizeExperience:
         assert out.data[NORM_EXPERIENCE_YEARS] == 16
         assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
 
+    def test_clear_cv_statement_overrides_structured_level(self):
+        # Policy: a years figure CLEARLY stated in the CV ("X years of
+        # experience") wins over the structured level band.
+        result = _result(
+            data={
+                "_experienceLabel": "10 à 15 ans",
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": "12 years of experience in software.",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 12
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv"
+
+    def test_unclear_cv_number_keeps_structured_level(self):
+        # An age / incidental number in the CV is NOT a clear experience
+        # statement, so the structured level band is shown instead (no number).
+        result = _result(
+            data={
+                "_experienceLabel": "10 à 15 ans",
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": "40 ans. Société fondée il y a 40 ans.",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] is None
+        assert out.data[NORM_EXPERIENCE_SOURCE] is None
+
     def test_uses_cv_years_when_boond_missing(self):
         result = _result(
             data={
@@ -60,6 +92,24 @@ class TestNormalizeExperience:
         out = normalize_candidate(result)
         assert out.data[NORM_EXPERIENCE_YEARS] == 3
         assert out.data[NORM_EXPERIENCE_SOURCE] == "cv"
+
+    def test_cv_age_does_not_shadow_experience_line(self):
+        # Real failing case: the CV states the candidate's age ("40 ans") on
+        # one line and his experience ("16 ans d'expérience") on another. The
+        # age must never be read as experience — Agent1 must pick 16, not 40,
+        # even when PDF extraction collapses the lines onto one.
+        for cv_text in (
+            "40 ans 16 ans d'expérience",
+            "40 ans. 16 ans d'expérience en finance.",
+            "Âge: 40 ans   Expérience: 16 ans",
+            "16 ans d'expérience 40 ans",
+        ):
+            result = _result(
+                data={"_enrichment_resume": {"hasContent": True, "extractedText": cv_text}}
+            )
+            out = normalize_candidate(result)
+            assert out.data[NORM_EXPERIENCE_YEARS] == 16, cv_text
+            assert out.data[NORM_EXPERIENCE_SOURCE] == "cv"
 
     def test_falls_back_to_boond_when_cv_missing(self):
         result = _result(data={"experienceMinYears": 5})

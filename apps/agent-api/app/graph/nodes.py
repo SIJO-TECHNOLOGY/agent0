@@ -70,10 +70,13 @@ from app.services.semantic_scorer import SemanticScorer
 from app.agents.agent1.normalizer import (
     normalize_candidates as _agent1_normalize,
     NORM_EXPERIENCE_YEARS,
+    NORM_EXPERIENCE_SOURCE,
     NORM_SKILLS,
     NORM_LANGUAGES,
     NORM_TITLE,
+    NORM_CONFLICTS,
 )
+from app.agents.agent1.reconciler import Agent1Reconciler, ReconcileInput
 
 
 DEFAULT_ENRICHMENT_LIMIT: Final[int] = 5
@@ -96,6 +99,7 @@ class NodeContext:
     debug_mode: bool = False
     semantic_scorer: SemanticScorer | None = None
     semantic_boost_weight: float = 0.15
+    agent1_reconciler: Agent1Reconciler | None = None
 
 
 def _replace(state: GraphState, **changes: object) -> GraphState:
@@ -1596,22 +1600,104 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     return _replace(state, results=enriched_results, tool_calls=tool_calls)
 
 
+def _reconcile_input_from_result(result: SearchResult) -> ReconcileInput:
+    """Build the grounded LLM input from a normalised SearchResult."""
+    data = result.data
+    resume = data.get(ENRICHMENT_RESUME_KEY)
+    cv_text = ""
+    if isinstance(resume, dict):
+        cv_text = str(resume.get("extractedText") or resume.get("text") or "")
+    techdoc = data.get(ENRICHMENT_TECH_DOC_KEY)
+    techdoc_text = ""
+    if isinstance(techdoc, dict):
+        techdoc_text = " ".join(
+            str(techdoc.get(f))
+            for f in ("title", "summary", "description", "text", "skills")
+            if isinstance(techdoc.get(f), str) and techdoc.get(f)
+        )
+    skills = data.get(NORM_SKILLS)
+    langs = data.get(NORM_LANGUAGES)
+    conflicts = data.get(NORM_CONFLICTS)
+    exp = data.get(NORM_EXPERIENCE_YEARS)
+    return ReconcileInput(
+        candidate_id=str(result.id),
+        title=data.get(NORM_TITLE) if isinstance(data.get(NORM_TITLE), str) else result.title,
+        cv_text=cv_text,
+        techdoc_text=techdoc_text,
+        conflicts=list(conflicts) if isinstance(conflicts, list) else [],
+        det_experience_years=exp if isinstance(exp, int) else None,
+        det_skills=list(skills) if isinstance(skills, list) else [],
+        det_languages=list(langs) if isinstance(langs, list) else [],
+    )
+
+
+def _apply_judgement(result: SearchResult, judgement) -> SearchResult:
+    """Overlay an LLM judgement onto a result's normalised keys.
+
+    Only non-empty fields override; empty lists/None leave the deterministic
+    value intact so the LLM can refine without erasing good data.
+    """
+    data = dict(result.data)
+    if judgement.experience_years is not None:
+        data[NORM_EXPERIENCE_YEARS] = judgement.experience_years
+        data[NORM_EXPERIENCE_SOURCE] = "llm"
+    elif judgement.experience_label:
+        # LLM judged that only a band is honest → drop the numeric guess so the
+        # card falls back to the experience label.
+        data[NORM_EXPERIENCE_YEARS] = None
+        data[NORM_EXPERIENCE_SOURCE] = "llm"
+    if judgement.skills:
+        data[NORM_SKILLS] = list(judgement.skills)
+    if judgement.languages:
+        data[NORM_LANGUAGES] = list(judgement.languages)
+    if judgement.title:
+        data[NORM_TITLE] = judgement.title
+    return result.model_copy(update={"data": data})
+
+
 async def normalize_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     """Agent1 — normalise candidate data quality before matching.
 
-    Compares the same information across BoondManager structured fields, CV
-    text, and technical document, then writes a ``_normalized_*`` view into
-    each result's data dict.  Agent0's matching (``rank_candidates``) reads
-    those normalised keys so it never scores raw, incomplete BoondManager data.
+    Two passes:
+      1. Deterministic heuristics reconcile BoondManager fields, CV text, and
+         the technical document into ``_normalized_*`` keys, and flag any
+         data-coherence conflicts (``_normalized_conflicts``).
+      2. When an LLM reconciler is configured, the *conflicting* candidates are
+         sent (batched, grounded) to the LLM, which judges coherence across
+         experience/skills/languages/title; confident judgements overlay the
+         deterministic values. Coherent candidates skip the LLM entirely.
+
+    Agent0's matching (``rank_candidates``) reads the normalised keys so it
+    never scores raw, incomplete BoondManager data.
     """
     if not state.results:
         return state
 
     normalised = _agent1_normalize(state.results)
+    conflicted = [
+        r for r in normalised
+        if isinstance(r.data.get(NORM_CONFLICTS), list) and r.data.get(NORM_CONFLICTS)
+    ]
+
+    applied = 0
+    if ctx.agent1_reconciler is not None and conflicted:
+        inputs = [_reconcile_input_from_result(r) for r in conflicted]
+        judgements = await ctx.agent1_reconciler.reconcile(inputs)
+        if judgements:
+            normalised = [
+                _apply_judgement(r, judgements[str(r.id)])
+                if str(r.id) in judgements else r
+                for r in normalised
+            ]
+            applied = len(judgements)
 
     logger.info(
         "graph.normalize_candidates",
-        extra={"count": len(normalised)},
+        extra={
+            "count": len(normalised),
+            "conflicted": len(conflicted),
+            "llm_applied": applied,
+        },
     )
 
     return _replace(state, results=normalised)

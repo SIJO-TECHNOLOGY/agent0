@@ -110,6 +110,29 @@ class Settings(BaseSettings):
         default=6, ge=1, le=20,
         description="Hard upper bound on planned tool calls per query.",
     )
+    # --- Agent1 LLM reconciliation (data-coherence judge) --------------------
+    agent1_llm_reconciliation: bool = Field(
+        default=False,
+        description=(
+            "When true, Agent1 sends candidates whose data the deterministic "
+            "pass flags as incoherent (e.g. an age conflicting with the stated "
+            "experience) to the LLM, which judges coherence across experience, "
+            "skills, languages, and title and returns a reconciled view. Only "
+            "conflicting candidates trigger a call (one batched call per "
+            "search). Requires LLM credentials. Off by default to avoid cost."
+        ),
+    )
+    agent1_confidence_threshold: float = Field(
+        default=0.6, ge=0.0, le=1.0,
+        description=(
+            "Minimum confidence for an Agent1 LLM judgement to override the "
+            "deterministic result. Below this, the deterministic value is kept."
+        ),
+    )
+    agent1_max_reconcile_candidates: int = Field(
+        default=10, ge=1, le=50,
+        description="Hard cap on candidates sent to the Agent1 LLM per search.",
+    )
     # --- Semantic scoring (embedding-based skill boost) ----------------------
     enable_semantic_scoring: bool = Field(
         default=False,

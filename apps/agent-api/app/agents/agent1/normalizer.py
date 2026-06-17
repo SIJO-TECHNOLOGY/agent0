@@ -40,6 +40,9 @@ NORM_EXPERIENCE_SOURCE: Final[str] = "_normalized_experience_source"
 NORM_SKILLS: Final[str] = "_normalized_skills"
 NORM_LANGUAGES: Final[str] = "_normalized_languages"
 NORM_TITLE: Final[str] = "_normalized_title"
+# Conflict reasons detected by the deterministic pass; non-empty means the
+# candidate's data is ambiguous and is a candidate for LLM reconciliation.
+NORM_CONFLICTS: Final[str] = "_normalized_conflicts"
 
 # Enrichment payload keys (mirrors nodes.py constants).
 _ENRICHMENT_TECH_DOC_KEY: Final[str] = "_enrichment_technical_document"
@@ -56,44 +59,60 @@ _ENRICHMENT_ADMINISTRATIVE_KEY: Final[str] = "_enrichment_administrative"
 _UNIT = r"(?:ans?|années?|years?)"
 _EXP_KW = r"(?:expérience|experience|exp\b)"
 
-_YEARS_RES: Final[tuple[re.Pattern[str], ...]] = (
-    # "6 years of Experience", "3+ years of hands-on technical experience",
-    # "10 ans d'expérience" — number → unit → (short gap) → experience keyword.
-    # The gap excludes sentence/clause separators (. , ;) so the number and the
-    # experience keyword must sit in the same clause — "40 ans. … expérience"
-    # never links the age to the keyword.
-    re.compile(
-        rf"(\d{{1,2}})\s*\+?\s*{_UNIT}[\s\w'’\-/]{{0,40}}?{_EXP_KW}",
-        re.IGNORECASE,
-    ),
-    # "expérience: 16 ans", "experience of 12 years", "expérience de 16 ans" —
-    # keyword → short connector only (:, of, de, d', en) → number → unit.
-    # The connector is deliberately tight so "experience and 30 years old"
-    # does NOT link the age to the experience keyword.
-    re.compile(
-        rf"{_EXP_KW}\s*(?::|of|de|d['’]|en)?\s*(\d{{1,2}})\s*\+?\s*{_UNIT}",
-        re.IGNORECASE,
-    ),
+# Gap allowed between the number+unit and the experience keyword. Letters,
+# spaces, apostrophes, hyphens and slashes only — crucially NO digits, so a
+# nearby age ("40 ans") can never jump over an intervening figure ("16 ans
+# d'expérience") to reach the keyword. Sentence separators (. , ;) are also
+# excluded, keeping the number and keyword in the same clause.
+_EXP_GAP = r"[\sA-Za-zÀ-ÿ'’\-/]{0,40}?"
+
+# High-precision pattern: keyword → MANDATORY connector (:, of, de, d', en) →
+# number → unit. e.g. "Expérience: 16 ans", "experience of 10 years". The
+# connector requirement means a labelled field like "Expérience: 16 ans" is
+# read unambiguously, and "d'expérience 40 ans" (age after the keyword, no
+# connector) is NOT captured.
+_YEARS_RE_KEYWORD_FIRST: Final[re.Pattern[str]] = re.compile(
+    rf"{_EXP_KW}\s*(?::|of|de|d['’]|en)\s*(\d{{1,2}})\s*\+?\s*{_UNIT}",
+    re.IGNORECASE,
+)
+
+# Fallback pattern: number → unit → (digit-free gap) → keyword. e.g.
+# "16 ans d'expérience", "3+ years of hands-on technical experience". The
+# digit-free gap stops a nearby age ("40 ans") from jumping over an
+# intervening figure to reach the keyword.
+_YEARS_RE_NUMBER_FIRST: Final[re.Pattern[str]] = re.compile(
+    rf"(\d{{1,2}})\s*\+?\s*{_UNIT}{_EXP_GAP}{_EXP_KW}",
+    re.IGNORECASE,
 )
 
 
+def _largest_match(pattern: re.Pattern[str], text: str) -> int | None:
+    best: int | None = None
+    for match in pattern.finditer(text):
+        try:
+            value = int(match.group(1))
+        except (ValueError, TypeError):
+            continue
+        # Sanity cap: ignore implausible values (> 50 years).
+        if 0 < value <= 50 and (best is None or value > best):
+            best = value
+    return best
+
+
 def _parse_years_from_text(text: str) -> int | None:
-    """Largest experience-qualified years figure in free text.
+    """Experience-qualified years figure in free text.
 
     Only counts numbers explicitly tied to an experience keyword, so stray
     mentions ("4 years of data", "40 ans" as an age) are ignored.
+
+    The high-precision "keyword: number" form is tried first; only if it finds
+    nothing do we fall back to the looser "number ... keyword" form. This avoids
+    a labelled age ("40 ans   Expérience: 16 ans") being misread as 40.
     """
-    best: int | None = None
-    for pattern in _YEARS_RES:
-        for match in pattern.finditer(text):
-            try:
-                value = int(match.group(1))
-            except (ValueError, TypeError):
-                continue
-            # Sanity cap: ignore implausible values (> 50 years).
-            if 0 < value <= 50 and (best is None or value > best):
-                best = value
-    return best
+    keyword_first = _largest_match(_YEARS_RE_KEYWORD_FIRST, text)
+    if keyword_first is not None:
+        return keyword_first
+    return _largest_match(_YEARS_RE_NUMBER_FIRST, text)
 
 
 def _years_from_boond(data: dict[str, object]) -> int | None:
@@ -131,20 +150,44 @@ _TECH_DOC_TEXT_FIELDS: Final[tuple[str, ...]] = (
 def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | None]:
     """Return (best_years, source_label) reconciling structured + free-text data.
 
-    Strategy:
-      1. Trust BoondManager's structured ``experienceMinYears`` when present —
-         it is curated and authoritative.
-      2. Otherwise fall back to experience-qualified figures mined from free
-         text (tech doc → CV → profile title/snippet), taking the highest
-         plausible value. Free-text mining only counts numbers explicitly tied
-         to an experience keyword, so stray "X years" mentions are ignored.
+    Strategy (policy: trust the CV when it *clearly* states experience):
+      1. If the CV explicitly states a years-of-experience figure (a number
+         tied to an experience keyword, e.g. "3+ years of hands-on technical
+         experience", "16 ans d'expérience"), use it — the candidate's own
+         clear statement wins over the structured field, which is often a
+         coarse band or stale.
+      2. Else trust BoondManager's structured ``experienceMinYears``.
+      3. Else, if a structured experience *level* is present
+         (``_experienceLabel``, e.g. "10 à 15 ans") but no exact figure, show
+         that band label instead of guessing a number (numeric years stay None).
+      4. Else fall back to experience-qualified figures from the technical
+         document, then the profile title/snippet.
+
+    Free-text mining only counts a number explicitly tied to an experience
+    keyword in the same clause, so an age ("40 ans"), a duration ("4 years of
+    data"), or company history never inflates the value.
     """
+    # 1. CV — the candidate's own clearly-stated experience takes priority.
+    cv_years: int | None = None
+    resume = data.get(_ENRICHMENT_RESUME_KEY)
+    if isinstance(resume, dict):
+        cv_text = resume.get("extractedText") or resume.get("text") or ""
+        if isinstance(cv_text, str) and cv_text:
+            cv_years = _parse_years_from_text(cv_text)
+    if cv_years is not None:
+        return cv_years, "cv"
+
+    # 2. Structured BoondManager min-years.
     boond_years = _years_from_boond(data)
     if boond_years is not None:
         return boond_years, "boondmanager"
 
-    # Tech doc free-text fields (summary may say "3+ years of hands-on experience")
-    techdoc_years: int | None = None
+    # 3. Structured experience level (band) — show the label, don't guess a number.
+    exp_label = data.get("_experienceLabel")
+    if isinstance(exp_label, str) and exp_label.strip():
+        return None, None
+
+    # 4. Technical document, then profile title/snippet.
     techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
     if isinstance(techdoc, dict):
         td_text = " ".join(
@@ -152,32 +195,18 @@ def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | No
             for f in _TECH_DOC_TEXT_FIELDS
             if isinstance(techdoc.get(f), str) and techdoc.get(f)
         )
-        techdoc_years = _parse_years_from_text(td_text) if td_text else None
+        td_years = _parse_years_from_text(td_text) if td_text else None
+        if td_years is not None:
+            return td_years, "technical_document"
 
-    # CV extracted text
-    cv_years: int | None = None
-    resume = data.get(_ENRICHMENT_RESUME_KEY)
-    if isinstance(resume, dict):
-        cv_text = resume.get("extractedText") or resume.get("text") or ""
-        if isinstance(cv_text, str) and cv_text:
-            cv_years = _parse_years_from_text(cv_text)
-
-    # Top-level text (title like "Python Engineer 6 years of Experience", snippet)
     top_text = " ".join(
         str(data.get(f))
         for f in _TOP_LEVEL_TEXT_FIELDS
         if isinstance(data.get(f), str) and data.get(f)
     )
     top_years = _parse_years_from_text(top_text) if top_text else None
-
-    # Free-text fallback, in order of reliability; take the highest qualified hit.
-    for years, source in (
-        (techdoc_years, "technical_document"),
-        (cv_years, "cv"),
-        (top_years, "profile_text"),
-    ):
-        if years is not None:
-            return years, source
+    if top_years is not None:
+        return top_years, "profile_text"
 
     return None, None
 
@@ -450,6 +479,104 @@ def _normalize_title(data: dict[str, object], current_title: str | None) -> str 
     return current_title
 
 
+# --- conflict detection ---------------------------------------------------
+
+# An age mention: "40 ans", "âgé de 40 ans", "40 years old", "aged 40".
+_AGE_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(\d{2})\s*(?:ans?\b(?!\s*(?:d['’\s]*|de\s+)?exp)|years?\s*old\b)"
+    r"|âgé[e]?\s*(?:de\s*)?(\d{2})\s*ans?"
+    r"|aged\s*(\d{2})\b",
+    re.IGNORECASE,
+)
+# Seniority keywords in a title, mapped to a rough minimum years expectation.
+_TITLE_SENIORITY_MIN: Final[dict[str, int]] = {
+    "junior": 0, "débutant": 0, "stagiaire": 0,
+    "senior": 5, "confirmé": 3, "lead": 7, "principal": 8,
+    "architecte": 8, "architect": 8, "expert": 8, "staff": 8,
+}
+
+
+def _experience_text(data: dict[str, object]) -> str:
+    """Combined free text used for experience conflict checks (CV + tech doc + title)."""
+    parts: list[str] = []
+    resume = data.get(_ENRICHMENT_RESUME_KEY)
+    if isinstance(resume, dict):
+        parts.append(str(resume.get("extractedText") or resume.get("text") or ""))
+    techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
+    if isinstance(techdoc, dict):
+        parts.extend(
+            str(techdoc.get(f)) for f in _TECH_DOC_TEXT_FIELDS
+            if isinstance(techdoc.get(f), str)
+        )
+    for f in ("title", "headline", "snippet", "description", "summary"):
+        if isinstance(data.get(f), str):
+            parts.append(str(data.get(f)))
+    return " ".join(p for p in parts if p)
+
+
+def _all_qualified_years(text: str) -> set[int]:
+    """All distinct experience-qualified year figures in the text."""
+    found: set[int] = set()
+    for pattern in (_YEARS_RE_KEYWORD_FIRST, _YEARS_RE_NUMBER_FIRST):
+        for match in pattern.finditer(text):
+            try:
+                value = int(match.group(1))
+            except (ValueError, TypeError):
+                continue
+            if 0 < value <= 50:
+                found.add(value)
+    return found
+
+
+def detect_conflicts(
+    data: dict[str, object],
+    *,
+    exp_years: int | None,
+    exp_source: str | None,
+) -> list[str]:
+    """Return a list of data-coherence conflict reasons (empty = coherent).
+
+    A non-empty result marks the candidate as ambiguous — a good target for
+    LLM reconciliation. Heuristic and conservative: it flags *suspicion*, the
+    LLM does the actual judging.
+    """
+    reasons: list[str] = []
+    text = _experience_text(data)
+
+    # 1. Several different experience figures stated in the text.
+    qualified = _all_qualified_years(text)
+    if len(qualified) >= 2:
+        reasons.append("experience_multiple_figures")
+
+    # 2. An age mention coexists with an experience figure (the 40-vs-16 trap).
+    if exp_years is not None and _AGE_RE.search(text):
+        reasons.append("age_present_with_experience")
+
+    # 3. Free-text experience disagrees with the structured BoondManager value.
+    boond_years = _years_from_boond(data)
+    if (
+        exp_years is not None
+        and boond_years is not None
+        and exp_source != "boondmanager"
+        and abs(exp_years - boond_years) >= 3
+    ):
+        reasons.append("experience_vs_structured_disagreement")
+
+    # 4. Title seniority keyword inconsistent with the resolved years.
+    title = data.get(NORM_TITLE) or data.get("title")
+    if isinstance(title, str) and exp_years is not None:
+        low = title.lower()
+        for kw, min_years in _TITLE_SENIORITY_MIN.items():
+            if kw in low:
+                if kw in ("junior", "débutant", "stagiaire") and exp_years >= 7:
+                    reasons.append("title_seniority_mismatch")
+                elif min_years >= 5 and exp_years < 2:
+                    reasons.append("title_seniority_mismatch")
+                break
+
+    return reasons
+
+
 # --- public API -----------------------------------------------------------
 
 def normalize_candidate(result: SearchResult) -> SearchResult:
@@ -478,6 +605,9 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     data[NORM_LANGUAGES] = languages
     data[NORM_TITLE] = title
 
+    conflicts = detect_conflicts(data, exp_years=exp_years, exp_source=exp_source)
+    data[NORM_CONFLICTS] = conflicts
+
     logger.debug(
         "agent1.normalize_candidate",
         extra={
@@ -486,6 +616,7 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
             "exp_source": exp_source,
             "skills_count": len(skills),
             "languages_count": len(languages),
+            "conflicts": conflicts,
         },
     )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from app.agents.agent1.reconciler import Agent1Reconciler
 from app.graph.nodes import DEFAULT_LLM_PLAN_STEPS, NodeContext
 from app.graph.workflow import run_workflow
 from app.mcp.client import McpClient
@@ -45,6 +46,7 @@ class SearchService:
         agent_trace_verbose: bool = False,
         semantic_scorer: SemanticScorer | None = None,
         semantic_boost_weight: float = 0.15,
+        agent1_reconciler: Agent1Reconciler | None = None,
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
@@ -57,6 +59,7 @@ class SearchService:
         self._agent_trace_verbose = agent_trace_verbose
         self._semantic_scorer = semantic_scorer
         self._semantic_boost_weight = semantic_boost_weight
+        self._agent1_reconciler = agent1_reconciler
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -77,6 +80,7 @@ class SearchService:
             debug_mode=debug_mode,
             semantic_scorer=self._semantic_scorer,
             semantic_boost_weight=self._semantic_boost_weight,
+            agent1_reconciler=self._agent1_reconciler,
         )
 
     async def search(

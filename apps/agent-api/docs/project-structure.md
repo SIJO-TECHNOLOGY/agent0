@@ -31,7 +31,7 @@ apps/agent-api/
 | Path | Responsibility |
 | --- | --- |
 | `app/api` | FastAPI routers, request validation, and response serialization. |
-| `app/agents/agent1` | Agent1 candidate data-normalisation node: pure-Python heuristics that reconcile experience, skills, languages, and title across BoondManager fields, the technical document, and the CV. No LLM, no I/O. |
+| `app/agents/agent1` | Agent1 candidate data-normalisation node. `normalizer.py`: deterministic heuristics that reconcile experience, skills, languages, and title and flag conflicts. `reconciler.py`: optional, off-by-default LLM pass that judges coherence on the *conflicting* candidates only (grounded, batched, confidence-gated, fail-safe). |
 | `app/graph` | LangGraph state, graph construction, node definitions, and transition logic. |
 | `app/services` | Application services that coordinate graph execution and response assembly. |
 | `app/mcp` | MCP client integration, tool discovery, tool execution, and MCP error mapping. |
