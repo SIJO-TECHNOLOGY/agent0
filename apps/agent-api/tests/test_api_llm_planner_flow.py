@@ -106,6 +106,7 @@ _DETAIL_BY_ID: dict[int, dict[str, object]] = {
             "lastName": "Martin",
             "jobTitle": "Senior Backend Engineer",
             "experienceYears": 12,
+            "typeOf": 2,
         },
     },
     41925: {
@@ -170,7 +171,18 @@ async def _dictionary_handler(
     inputs: dict[str, object],
 ) -> list[dict[str, object]]:
     _calls.append(("getDictionary", dict(inputs)))
-    return []
+    return [
+        {
+            "setting": {
+                "typeOf": {
+                    "contract": [
+                        {"id": 2, "label": "CDI"},
+                        {"id": 3, "label": "Freelance"},
+                    ]
+                }
+            }
+        }
+    ]
 
 
 # ----- fake LLM planner ----------------------------------------------------
@@ -373,9 +385,8 @@ async def test_llm_flow_calls_tools_in_planned_order(
 
     tool_sequence = [name for name, _ in _calls]
     # searchCandidates first, then evidence enrichment via the technical
-    # document. getCandidateDetail is no longer used for criteria enrichment.
+    # document. getCandidateDetail may run later for display-only fields.
     assert tool_sequence[0] == "searchCandidates"
-    assert "getCandidateDetail" not in tool_sequence
     assert "getCandidateTechnicalDocument" in tool_sequence
 
 
@@ -407,8 +418,26 @@ async def test_llm_flow_fans_out_tech_doc_calls_per_candidate(
         if name == "getCandidateTechnicalDocument"
     }
     assert tech_ids == {41924, 41925}
-    # getCandidateDetail is not used for criteria enrichment.
-    assert not any(name == "getCandidateDetail" for name, _ in _calls)
+    detail_ids = {
+        int(args.get("candidateId") or args.get("id") or 0)
+        for name, args in _calls
+        if name == "getCandidateDetail"
+    }
+    assert detail_ids == {41924, 41925}
+
+
+@pytest.mark.asyncio
+async def test_llm_flow_resolves_contract_from_candidate_detail(
+    candidate_search_client: AsyncClient,
+) -> None:
+    response = await candidate_search_client.post(
+        "/api/search", json={"query": QUERY_FUZZY, "filters": {}}
+    )
+    assert response.status_code == 200
+
+    candidates = response.json()["ui"]["candidates"]
+    by_id = {candidate["id"]: candidate for candidate in candidates}
+    assert by_id["41924"]["contract_preferences"] == ["CDI"]
 
 
 @pytest.mark.asyncio
@@ -419,7 +448,7 @@ async def test_llm_flow_respects_max_enrichments_cap(
         "/api/search", json={"query": QUERY_FUZZY, "filters": {}}
     )
     # Default max_enrichments=5; only 2 search results exist so we expect 2
-    # technical-document enrichment calls (detail is not used).
+    # technical-document enrichment calls.
     tech_count = sum(
         1 for name, _ in _calls if name == "getCandidateTechnicalDocument"
     )

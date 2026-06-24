@@ -38,6 +38,6 @@ public record BoondDictionarySetting(
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record TypeOf(List<DictionaryEntryDto> contract) {
+    public record TypeOf(List<DictionaryEntryDto> contract, List<DictionaryEntryDto> resource) {
     }
 }

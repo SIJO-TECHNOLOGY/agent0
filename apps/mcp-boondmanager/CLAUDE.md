@@ -108,13 +108,19 @@ Do not implement:
 
 | Tool | Class | Description |
 |---|---|---|
-| `getDictionary` | `BoondDictionaryTool` | Retrieves all BoondManager reference data (diploma levels, contract types, availability types, experience levels, expertise areas, activity sectors, tools, languages, candidate states). Must be called before `searchCandidates` to resolve human-readable values to their IDs. |
+| `getDictionary` | `BoondDictionaryTool` | Retrieves all BoondManager reference data: diploma levels, contract types (`setting.typeOf.contract`: CDI/CDD/Freelance/etc.), resource types (`setting.typeOf.resource`: Salarié/Portage/Freelance/etc.), availability types, experience levels, expertise areas, activity sectors, tools, languages, candidate states. Must be called before `searchCandidates` to resolve human-readable values to their IDs. |
 | `searchCandidates` | `CandidateSearchTool` | Searches candidates with a rich set of optional filters: keyword search (with `keywordsType`), candidate states/types, availability/contract/experience, expertise & activity areas, mobility, languages, tools, evaluations, sources, profile completeness (`shields`), geographic search (location/coordinates + radius), date-range filters, sorting, and response-column selection. Returns a paginated list of profiles. See the parameter table below. |
-| `getCandidateDetail` | `CandidateDetailTool` | Retrieves the detailed information profile of a candidate by ID (BoondManager `GET /candidates/{id}/information`): contact details (emails, phones, fax), civility, date of birth, postal address, pipeline state, desired contract type, availability, mobility zones, sourcing origin, global evaluation, information notes, and creation/update metadata. BoondManager does not expose salary/TJM on this endpoint. Call after `searchCandidates`. |
-| `getCandidateTechnicalDocument` | `CandidateTechnicalDocTool` | Retrieves the technical document (CV / skills profile) of a candidate (BoondManager `GET /candidates/{id}/technical-data`): title, skills text, experience level, training/diploma level, diplomas, expertise domains, activity sectors, tools with proficiency level, languages with level, and summary. The `id` field is the candidate id and `tdId` is the technical-document id. Call after `getCandidateDetail` for deep skills analysis. |
+| `getCandidateDetail` | `CandidateDetailTool` | Retrieves the profile from `GET /candidates/{id}/information`: contact details, civility, date of birth, postal address, pipeline state, resource type (`typeOf` resolves via `setting.typeOf.resource` — **not** the desired contract type), availability, mobility zones, sourcing origin, global evaluation, information notes, creation/update metadata. Call after `searchCandidates`. |
+| `getCandidateAdministrative` | `CandidateAdministrativeTool` | Retrieves administrative data from `GET /candidates/{id}/administrative`: salary expectations, daily rate / TJM, currency, and the **desired contract type** (`desiredContract` field, resolves via `setting.typeOf.contract`). This is the **authoritative source** for `contract_preferences`. `desiredContract: -1` means not set. Call after `searchCandidates`. |
+| `getCandidateTechnicalDocument` | `CandidateTechnicalDocTool` | Retrieves the technical document (CV / skills profile) from `GET /candidates/{id}/technical-data`: title, skills text, experience level, training/diploma level, diplomas, expertise domains, activity sectors, tools with proficiency level, languages with level, and summary. The `id` field is the candidate id and `tdId` is the technical-document id. Call after `getCandidateDetail` for deep skills analysis. |
 
 **Call order enforced by descriptions:**
 `getDictionary` → `searchCandidates` → `getCandidateDetail` → `getCandidateTechnicalDocument`
+                                     → `getCandidateAdministrative`
+
+**Important field disambiguation:**
+- `typeOf` in `getCandidateDetail` (`/information`) → **resource type** → resolves via `setting.typeOf.resource`
+- `desiredContract` in `getCandidateAdministrative` (`/administrative`) → **desired contract type** → resolves via `setting.typeOf.contract`
 
 #### `searchCandidates` — Parameters
 

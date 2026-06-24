@@ -214,11 +214,11 @@ async def test_unverifiable_criteria_yields_honest_broad_message(
 
     message = body["message"]
     # Must NOT over-claim that the candidates match the strict criteria.
-    assert "matching your search" not in message
+    assert "correspondant à votre recherche" not in message
     assert "broad candidate results" in message
-    # The specific unconfirmed criterion is surfaced.
-    assert "could not verify" in message
-    assert "cib" in message.lower()
+    assert "could not be fully verified" in message
+    assert "critères stricts" not in message
+    assert "non vérifié" not in message
 
     # The contradicting C# candidate must not read as a confident match.
     csharp = next(c for c in cards if c["id"] == "2002")

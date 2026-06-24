@@ -45,6 +45,13 @@ def get_search_service(
     if isinstance(override, SearchService):
         return override
     llm_planner = getattr(request.app.state, "llm_planner", None)
+    semantic_scorer = None
+    if settings.enable_semantic_scoring and settings.openai_api_key:
+        from app.services.semantic_scorer import get_semantic_scorer
+        semantic_scorer = get_semantic_scorer(
+            api_key=settings.openai_api_key,
+            model=settings.semantic_model,
+        )
     return SearchService(
         mcp_client=mcp_client,
         max_replan_attempts=settings.max_replan_attempts,
@@ -55,4 +62,6 @@ def get_search_service(
         replan_skip_score=settings.replan_skip_score,
         agent_trace=settings.agent_trace != "off",
         agent_trace_verbose=settings.agent_trace == "verbose",
+        semantic_scorer=semantic_scorer,
+        semantic_boost_weight=settings.semantic_boost_weight,
     )

@@ -109,7 +109,7 @@ Preferred response:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "I found candidates matching your search.",
+  "message": "J'ai trouvé des profils proches de votre recherche. Certains points restent à confirmer dans les dossiers candidats.",
   "ui": {
     "type": "candidate_cards"
   }
@@ -121,7 +121,7 @@ Legacy response remains supported:
 ```json
 {
   "conversation_id": "conv_123",
-  "answer": "I found candidates matching your search.",
+  "answer": "J'ai trouvé des profils proches de votre recherche.",
   "candidates": []
 }
 ```
@@ -147,11 +147,11 @@ Preferred response:
 ```json
 {
   "conversation_id": "conv_123",
-  "message": "I found 5 candidates matching your search.",
+  "message": "J'ai trouvé 5 profils proches de votre recherche. Je les ai classés selon les informations disponibles ; certains points restent à confirmer dans les dossiers candidats.",
   "ui": {
     "type": "candidate_cards",
-    "title": "278 relevant profiles found",
-    "subtitle": "7 profiles available immediately",
+    "title": "5 profils candidats trouvés",
+    "subtitle": "2 profils disponibles rapidement",
     "filters_summary": ["Java", "Senior", "Paris", "Finance"],
     "candidates": [
       {
@@ -159,16 +159,20 @@ Preferred response:
         "full_name": "Sarah Martin",
         "title": "Backend Java Engineer",
         "experience_years": 7,
+        "experience_label": "7 ans",
         "location": "Paris",
         "availability": "Available immediately",
         "skills": ["Java", "Spring", "Kafka"],
         "match_score": 0.86,
         "summary": "Confirmed backend profile.",
         "boond_url": "https://ui.boondmanager.com/",
+        "state_label": "Vivier",
         "contract_preferences": ["CDI", "Freelance"],
         "salary_expectation": "55k",
         "tjm": "600",
         "mobility": "Paris and hybrid",
+        "source": "Linkedin Recruiter",
+        "last_update": "2026-06-01",
         "ai_evaluation": {
           "label": "AI evaluation",
           "score_label": "Ideal match - 92%",
@@ -188,7 +192,17 @@ Preferred response:
         "highlights": ["Java", "Spring Boot", "Euronext"],
         "strengths": ["Strong Java/Spring alignment"],
         "watch_points": ["Availability should be confirmed"],
-        "technical_summary": "Solid Java/Spring backend profile."
+        "technical_summary": "Solid Java/Spring backend profile.",
+        "diplomas": ["Bac+5"],
+        "expertise_areas": ["Banque"],
+        "activity_areas": ["Business Analyst"],
+        "tools": [
+          { "name": "Java", "level": 5 },
+          { "name": "Spring Boot", "level": 4 }
+        ],
+        "languages": [
+          { "language": "Anglais", "level": "Courant" }
+        ]
       }
     ]
   }
@@ -206,16 +220,20 @@ above the cards when present.
 | `full_name` | string | Displayed as card and drawer title. |
 | `title` | string | Candidate title or target role. |
 | `experience_years` | number \| null | Displayed as years when known. |
+| `experience_label` | string \| null | Preferred display label for experience when available. |
 | `location` | string \| null | Candidate location or remote information. |
 | `availability` | string \| null | Free text availability. |
 | `skills` | string[] | Displayed as skill tags. |
 | `match_score` | number \| null | Float from `0` to `1`, displayed as a percentage. |
 | `summary` | string \| null | Candidate summary. |
 | `boond_url` | string \| null | Opens BoondManager in a new tab when present. |
+| `state_label` | string \| null | Candidate state label, displayed in the card metadata. |
 | `contract_preferences` | string[] | Optional contract preferences. |
 | `salary_expectation` | string \| null | Optional salary expectation. |
 | `tjm` | string \| null | Optional daily rate. |
 | `mobility` | string \| null | Optional mobility or remote preference. |
+| `source` | string \| null | Optional sourcing origin/detail. |
+| `last_update` | string \| null | Optional last update date. |
 | `ai_evaluation` | object \| null | Optional AI match explanation block. |
 | `match_explanation` | object \| null | Alternative name for `ai_evaluation`. |
 | `experiences` | object[] | Optional recent experiences. Cards display up to 3. |
@@ -226,9 +244,19 @@ above the cards when present.
 | `weaknesses` | string[] | Alternative name for watch points. |
 | `vigilance_points` | string[] | Alternative name for watch points. |
 | `technical_summary` | string \| null | Optional technical note shown in the drawer. |
+| `diplomas` | string[] | Optional diplomas/training list. |
+| `expertise_areas` | string[] | Optional expertise areas. |
+| `activity_areas` | string[] | Optional activity sectors/domains. |
+| `tools` | object[] | Optional tools/technologies, each with `name` and optional `level`. |
+| `languages` | object[] | Optional languages, each with `language` and optional `level`. |
 
 All enriched fields are optional. The frontend must remain stable when they are
 absent.
+
+The backend should resolve BoondManager dictionary IDs into display labels before
+returning candidate cards when possible. This applies especially to experience,
+availability, state, mobility, activity areas, tools, and languages. Raw
+experience level IDs must not be displayed as literal years.
 
 ## AI Evaluation Object
 
@@ -254,6 +282,35 @@ absent.
   "period": "May 2023 - present"
 }
 ```
+
+## Tool Object
+
+```json
+{
+  "name": "SQL",
+  "level": 1
+}
+```
+
+`level` may be a number or string depending on the source. The frontend formats
+numeric levels as `N/5`.
+
+## Language Object
+
+```json
+{
+  "language": "Anglais",
+  "level": "Courant"
+}
+```
+
+## User-Facing Message Tone
+
+Candidate-search messages should be concise and natural. If the workflow had to
+broaden the search or could not confirm every criterion from technical-document
+evidence, the message should say that the returned profiles are close and that
+some points remain to confirm. It should not expose internal warning codes,
+criteria diagnostics, or long parenthesized implementation details.
 
 ## Lightweight Frontend Controls
 

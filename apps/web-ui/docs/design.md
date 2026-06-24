@@ -107,8 +107,11 @@ Cards should show:
 - Location
 - Contract preference
 - Availability
+- Candidate state
+- Mobility
 - Summary
 - Skills
+- Diplomas, tools, and languages when useful
 - Recent experiences
 - AI evaluation when provided
 - Strengths and watch points when provided
@@ -146,6 +149,11 @@ matching skill tags visually.
 
 When `candidate.experiences` is present, display up to three recent experiences
 in candidate cards and more detail in the drawer when useful.
+
+When `candidate.diplomas`, `candidate.tools`, or `candidate.languages` are
+present, show a compact "Informations profil" section in the card. Keep it
+short: diplomas, language levels, and tool levels should support quick scanning,
+not turn the card into a full CV.
 
 ## Candidate Detail
 
@@ -197,6 +205,17 @@ The drawer can display optional enriched fields:
 - Availability
 - AI evaluation
 - Technical summary
+- Diplomas
+- Expertise and activity areas
+- Tools with levels
+- Languages with levels
+- Candidate state, source, and last update
+
+## Header Identity
+
+The header contains a reserved user-name slot, but it should remain visually
+empty until real authentication identity display is implemented. Do not show a
+mock or development user name in production-facing UI.
 
 ## Responsive Behavior
 

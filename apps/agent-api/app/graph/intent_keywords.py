@@ -14,6 +14,118 @@ from typing import Final
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.\-]{1,}")
 
+# ---------------------------------------------------------------------------
+# Skill aliases — maps common abbreviations / alternate spellings to their
+# canonical lowercase form used in BoondManager skill labels and scoring.
+# Keys are the raw token (post-accent-strip, lowercase); values are canonical.
+# ---------------------------------------------------------------------------
+SKILL_ALIASES: Final[dict[str, str]] = {
+    # JavaScript ecosystem
+    "js": "javascript",
+    "ts": "typescript",
+    "nodejs": "node.js",
+    "node": "node.js",
+    "reactjs": "react",
+    "vuejs": "vue",
+    "react.js": "react",
+    "vue.js": "vue",
+    "nextjs": "next.js",
+    "nuxtjs": "nuxt.js",
+    # Cloud / infra
+    "k8s": "kubernetes",
+    "kube": "kubernetes",
+    "tf": "terraform",
+    "gcp": "google cloud",
+    "aws": "amazon web services",
+    # Databases
+    "pg": "postgresql",
+    "psql": "postgresql",
+    "mongo": "mongodb",
+    "es": "elasticsearch",
+    # ML / data
+    "ml": "machine learning",
+    "dl": "deep learning",
+    "nlp": "natural language processing",
+    "cv": "computer vision",
+    "sklearn": "scikit-learn",
+    "tf2": "tensorflow",
+    # CI/CD
+    "gh": "github",
+    "gh-actions": "github actions",
+    "gitlab-ci": "gitlab",
+    "jenkins-x": "jenkins",
+    # Languages
+    "py": "python",
+    "rb": "ruby",
+    "cs": "c#",
+    "cpp": "c++",
+    "golang": "go",
+    # French → English tech terms (multilinguisme item 7)
+    "apprentissage automatique": "machine learning",
+    "traitement du langage": "natural language processing",
+    "vision artificielle": "computer vision",
+    "nuage": "cloud",
+    "conteneur": "docker",
+    "conteneurs": "docker",
+    "orchestration": "kubernetes",
+    "base de donnees": "database",
+    "bases de donnees": "database",
+    "developpement web": "web development",
+    "developpement mobile": "mobile development",
+    "intelligence artificielle": "artificial intelligence",
+    "ia": "artificial intelligence",
+}
+
+# ---------------------------------------------------------------------------
+# Language normalisation — French technical role/domain terms mapped to their
+# English equivalents so FR queries score consistently against EN profiles.
+# Applied at tokenisation time in extract_keywords().
+# ---------------------------------------------------------------------------
+LANG_NORMALIZATIONS: Final[dict[str, str]] = {
+    # Roles
+    "developpeur": "developer",
+    "ingenieur": "engineer",
+    "architecte": "architect",
+    "analyste": "analyst",
+    "concepteur": "designer",
+    "testeur": "tester",
+    "auditeur": "auditor",
+    "administrateur": "administrator",
+    "responsable": "manager",
+    "directeur": "director",
+    "chef": "lead",
+    # Domains / sectors
+    "banque": "banking",
+    "assurance": "insurance",
+    "finance": "finance",
+    "paiement": "payment",
+    "paiements": "payments",
+    "sante": "healthcare",
+    "immobilier": "real estate",
+    "energie": "energy",
+    "telecom": "telecom",
+    "telecoms": "telecom",
+    "transport": "transport",
+    "logistique": "logistics",
+    "commerce": "retail",
+    "distribution": "retail",
+    # Generic tech words
+    "securite": "security",
+    "reseau": "network",
+    "reseaux": "network",
+    "systeme": "system",
+    "systemes": "system",
+    "donnees": "data",
+    "performance": "performance",
+    "integration": "integration",
+    "migration": "migration",
+    "transformation": "transformation",
+    "numerique": "digital",
+    "agile": "agile",
+    "scrum": "scrum",
+    "devops": "devops",
+}
+
 # Matches phrases like "candidate id 41924", "candidateId=41924", "candidate#41924",
 # and the common typo "cadidate id 41924". Requires an "id"-style anchor so we
 # don't over-trigger on stray numbers.
@@ -244,7 +356,7 @@ _STOPWORDS: Final[frozenset[str]] = frozenset(
 
 
 _YEARS_EXPERIENCE_RE: Final[re.Pattern[str]] = re.compile(
-    r"\b(\d{1,2})\s*\+?\s*(?:year|yr)s?\b",
+    r"\b(\d{1,2})\s*\+?\s*(?:year|yr|an)s?\b",
     re.IGNORECASE,
 )
 
@@ -254,6 +366,20 @@ def tokenize(query: str) -> list[str]:
     normalized = unicodedata.normalize("NFKD", query)
     without_accents = "".join(char for char in normalized if not unicodedata.combining(char))
     return [match.group(0).lower() for match in WORD_RE.finditer(without_accents)]
+
+
+def _normalize_token(token: str) -> str:
+    """Apply language normalisation then skill alias resolution to a single token.
+
+    Lang normalisation maps French technical words to their English equivalents
+    (e.g. "developpeur" → "developer") so queries in French score consistently
+    against English-labelled profiles.  Alias resolution then maps common
+    abbreviations to their canonical form (e.g. "k8s" → "kubernetes").
+    Both tables are applied in order so a French abbreviation (e.g. "ia" →
+    "artificial intelligence") is handled correctly.
+    """
+    step1 = LANG_NORMALIZATIONS.get(token, token)
+    return SKILL_ALIASES.get(step1, step1)
 
 
 def extract_keywords(query: str) -> list[str]:
@@ -266,10 +392,11 @@ def extract_keywords(query: str) -> list[str]:
             continue
         if token in _TYPE_HINTS:
             continue
-        if token in seen:
+        normalized = _normalize_token(token)
+        if normalized in seen:
             continue
-        seen.add(token)
-        keywords.append(token)
+        seen.add(normalized)
+        keywords.append(normalized)
     return keywords
 
 

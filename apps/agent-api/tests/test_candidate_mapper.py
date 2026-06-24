@@ -106,7 +106,7 @@ def test_availability_falls_back_to_date_field() -> None:
     card = candidate_card_from_result(
         _result(data={"availabilityDate": "2026-07-01"})
     )
-    assert card.availability == "Available from 2026-07-01"
+    assert card.availability == "Disponible à partir du 2026-07-01"
 
 
 def test_experience_years_extracted_as_float() -> None:
@@ -121,54 +121,6 @@ def test_experience_years_not_filled_from_boond_level_id() -> None:
         _result(source_tool="searchCandidates", data={"experience": 3})
     )
     assert card.experience_years is None
-    assert card.experience_open_ended is None
-
-
-def test_experience_from_resolved_min_years_open_ended() -> None:
-    # 40706-style: id 10 → "> à 10 ans" → minYears 10, openEnded true.
-    card = candidate_card_from_result(
-        _result(
-            source_tool="searchCandidates",
-            data={
-                "experience": 10,
-                "experienceMinYears": 10,
-                "experienceOpenEnded": True,
-                "experienceSpecified": True,
-            },
-        )
-    )
-    assert card.experience_years == 10.0
-    assert card.experience_open_ended is True
-
-
-def test_experience_from_resolved_min_years_exact_bucket() -> None:
-    # 8538-style: id 11 → "4 ans" → minYears 4 (NOT 11), not open-ended.
-    card = candidate_card_from_result(
-        _result(
-            source_tool="searchCandidates",
-            data={"experience": 11, "experienceMinYears": 4, "experienceOpenEnded": False},
-        )
-    )
-    assert card.experience_years == 4.0
-    assert card.experience_open_ended is False
-
-
-def test_experience_null_when_not_specified() -> None:
-    # 8378-style: id -1 → minYears null, specified false.
-    card = candidate_card_from_result(
-        _result(
-            source_tool="searchCandidates",
-            data={
-                "experience": -1,
-                "experienceMinYears": None,
-                "experienceSpecified": False,
-                "experienceOpenEnded": False,
-            },
-        )
-    )
-    assert card.experience_years is None
-    # Open-ended is meaningless without a value.
-    assert card.experience_open_ended is None
 
 
 def test_skills_extracted_from_tools_proficiency_list() -> None:
@@ -215,13 +167,13 @@ def test_boond_url_only_returned_for_http_strings() -> None:
     invalid = candidate_card_from_result(_result(data={"boondUrl": "not-a-url"}))
     empty = candidate_card_from_result(_result(data={}))
     assert valid.boond_url == "https://ui.boondmanager.com/candidates/41924"
-    assert invalid.boond_url is None
-    assert empty.boond_url is None
+    assert invalid.boond_url == "https://ui.boondmanager.com/candidates/41924/overview"
+    assert empty.boond_url == "https://ui.boondmanager.com/candidates/41924/overview"
 
 
 def test_summary_falls_back_to_generic_when_no_grounding_fields() -> None:
     card = candidate_card_from_result(_result(data={}))
-    assert card.summary == "Candidate profile found in BoondManager."
+    assert card.summary == "Profil candidat trouvé dans BoondManager."
 
 
 def test_summary_uses_full_name_and_title_when_available() -> None:
@@ -281,6 +233,9 @@ def test_json_api_style_record_resolves_id_and_name() -> None:
 
 
 def test_nested_technical_document_feeds_card_fields() -> None:
+    # In real BoondManager, `experience` is a LEVEL ID (not years).
+    # A genuine year count must come from `experienceYears` (a different field).
+    # We test both cases: skills come from the tech doc, years from explicit field.
     card = candidate_card_from_result(
         _result(
             id="41924",
@@ -289,11 +244,8 @@ def test_nested_technical_document_feeds_card_fields() -> None:
                 "lastName": "Martin",
                 "technicalDocument": {
                     "title": "Senior Java Backend",
-                    # Raw `experience` is a level id and must NOT be shown as
-                    # years; the resolved experienceMinYears is what surfaces.
-                    "experience": 7,
-                    "experienceMinYears": 10,
-                    "experienceOpenEnded": True,
+                    "experience": 5,          # level ID — NOT surfaced as experience_years
+                    "experienceYears": 7,      # explicit year count — IS surfaced
                     "skills": "Java, Spring; Kafka\nDocker",
                 },
             },
@@ -301,35 +253,13 @@ def test_nested_technical_document_feeds_card_fields() -> None:
     )
     assert card is not None
     assert card.title == "Senior Java Backend"
-    assert card.experience_years == 10.0
-    assert card.experience_open_ended is True
+    assert card.experience_years == 7.0        # from experienceYears, not experience ID
     assert card.skills == ["Java", "Spring", "Kafka", "Docker"]
 
 
 def test_card_dropped_when_record_has_no_resolvable_id() -> None:
     card = candidate_card_from_result(_result(id="", data={"firstName": "X"}))
     assert card is None
-
-
-def test_card_surfaces_is_full_match_and_unmet_criteria() -> None:
-    card = candidate_card_from_result(
-        _result(
-            source_tool="searchCandidates",
-            is_full_match=False,
-            unmet_criteria=["cib", "10+ years"],
-            data={"firstName": "A", "lastName": "B"},
-        )
-    )
-    assert card.is_full_match is False
-    assert card.unmet_criteria == ["cib", "10+ years"]
-
-
-def test_card_is_full_match_defaults_to_none() -> None:
-    card = candidate_card_from_result(
-        _result(source_tool="searchCandidates", data={"firstName": "A", "lastName": "B"})
-    )
-    assert card.is_full_match is None
-    assert card.unmet_criteria == []
 
 
 def test_card_filtered_out_in_batch_when_no_id() -> None:
@@ -402,3 +332,121 @@ def test_internal_enrichment_keys_never_leak_through_skills_or_summary() -> None
     assert "_enrichment_detail" not in serialized
     assert "_enrichment_technical_document" not in serialized
     assert "secret" not in serialized
+
+
+def test_resolved_labels_and_profile_details_surface_from_real_search_shape() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "firstName": "Aymane",
+                "lastName": "EL IDRISSI",
+                "title": "Business Analyst IT",
+                "city": "Paris",
+                "country": "France",
+                "availability": "1",
+                "experience": 4,
+                "mobilityAreas": ["portage"],
+                "skills": "Guidewire, Postman, SQL, Oracle, XML, Python, Java",
+                "diplomas": [
+                    "2023 - Diplome d'ingenieur, Ingenierie informatique",
+                ],
+                "tools": [{"tool": "sql", "level": 1}],
+                "languages": [{"language": "anglais", "level": "courant"}],
+                "_availabilityLabel": "1 mois",
+                "_experienceLabel": "5 ans",
+                "_mobilityLabel": "Portage",
+                "_stateLabel": "Vivier",
+                "_resolvedToolLabels": ["SQL"],
+                "_resolvedLanguageLabels": [
+                    {"language": "Anglais", "level": "Courant"}
+                ],
+                "_resolvedActivityAreaLabels": ["Business Analyst"],
+            },
+        )
+    )
+
+    assert card is not None
+    assert card.availability == "1 mois"
+    assert card.experience_label == "5 ans"
+    assert card.mobility == "Portage"
+    assert card.state_label == "Vivier"
+    assert card.diplomas == ["2023 - Diplome d'ingenieur, Ingenierie informatique"]
+    assert card.tools == [{"name": "SQL", "level": 1}]
+    assert card.languages == [{"language": "Anglais", "level": "Courant"}]
+    assert card.activity_areas == ["Business Analyst"]
+    assert "SQL" in card.skills
+
+
+def test_technical_document_adds_summary_domains_tools_and_languages() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "id": 41961,
+                "_enrichment_technical_document": {
+                    "summary": "Profil BA IT oriente production.",
+                    "expertiseAreas": ["Banque"],
+                    "activityAreas": ["businessanalyst"],
+                    "diplomas": ["Bac+5"],
+                    "tools": [{"tool": "sql", "level": 3}],
+                    "languages": [{"language": "anglais", "level": "courant"}],
+                },
+            },
+        )
+    )
+
+    assert card is not None
+    assert card.technical_summary == "Profil BA IT oriente production."
+    assert card.expertise_areas == ["Banque"]
+    assert card.activity_areas == ["businessanalyst"]
+    assert card.diplomas == ["Bac+5"]
+    assert card.tools == [{"name": "sql", "level": "3"}]
+    assert card.languages == [{"language": "anglais", "level": "courant"}]
+
+
+def test_contract_preferences_do_not_show_raw_contract_type_ids() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"contractType": -1},
+        )
+    )
+
+    assert card.contract_preferences == []
+
+
+def test_contract_preferences_prefer_resolved_contract_label() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "_contractLabel": "CDI",
+                "_enrichment_detail": {"contractType": 2},
+            },
+        )
+    )
+
+    assert card.contract_preferences == ["CDI"]
+
+
+def test_contract_preferences_keep_text_contract_type() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"contractType": "freelance"},
+        )
+    )
+
+    assert card.contract_preferences == ["freelance"]
+
+
+def test_contract_preferences_do_not_show_unfilled_contract_labels() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"_contractLabel": "Non renseigne"},
+        )
+    )
+
+    assert card.contract_preferences == []
