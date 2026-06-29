@@ -242,6 +242,36 @@ class TestGraduationEstimate:
         assert out.data[NORM_EXPERIENCE_YEARS] == 12
         assert out.data[NORM_EXPERIENCE_SOURCE] == "cv"
 
+    def test_no_experience_anywhere_uses_graduation_without_conflict(self):
+        # No experience figure anywhere, no structured level → estimate from the
+        # graduation year even though there is no conflict.
+        result = _result(
+            data={
+                "_enrichment_technical_document": {
+                    "diplomas": ["Master informatique - ENSEEIHT 2015"],
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        expected = date.today().year - 2015
+        assert out.data[NORM_EXPERIENCE_YEARS] == expected
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "graduation"
+
+    def test_structured_band_preferred_over_graduation(self):
+        # A curated experience-level band is shown rather than a graduation
+        # estimate when there is no conflict and no explicit figure.
+        result = _result(
+            data={
+                "_experienceLabel": "10 à 15 ans",
+                "_enrichment_technical_document": {
+                    "diplomas": ["Master informatique 2015"],
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] is None
+        assert out.data[NORM_EXPERIENCE_SOURCE] is None
+
     def test_no_conflict_does_not_trigger_graduation(self):
         # A graduation year alone (no conflict) does not override; the rule is
         # "conflict AND no explicit figure".

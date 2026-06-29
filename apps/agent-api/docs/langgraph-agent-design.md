@@ -181,14 +181,21 @@ tried first and the gap is digit-free, so an age ("40 ans"), a duration
 ("4 years of data"), company history, or an age line sitting next to an
 experience line are never mis-read. Values are capped at 50 years.
 
-**Graduation fallback.** When the candidate's data is *conflicting*
-(`_normalized_conflicts` non-empty) **and** no experience figure was explicitly
-stated in the CV, Agent1 estimates years from the **graduation year**:
-`current_year − latest graduation end year`, where the graduation year is the
-most recent year found in an education context (technical-document
-diplomas/training or the CV's education section). Source `graduation`. This
-gives an objective anchor for ambiguous profiles instead of trusting a misread
-number. If no graduation year is found, the deterministic value is kept.
+**Graduation fallback.** Agent1 estimates years from the **graduation year**
+(`current_year − latest graduation end year`, taken from technical-document
+diplomas/training or the CV's education section; a "2017-2020" range uses the
+end year) in two cases:
+
+1. the data is *conflicting* (`_normalized_conflicts` non-empty) **and** no
+   figure was explicitly stated in the CV — an objective anchor instead of a
+   misread number; or
+2. **no experience figure exists anywhere** **and** there is no structured
+   experience-level band to display — so the card shows an estimate rather than
+   nothing.
+
+Source `graduation`. A curated experience-level band (case 2's exclusion) is
+always preferred over an estimate, and if no graduation year is found the prior
+deterministic value is kept.
 
 ### Skills & languages
 

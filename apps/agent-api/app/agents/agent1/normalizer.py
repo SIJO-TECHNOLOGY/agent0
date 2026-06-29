@@ -682,10 +682,17 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
 
     conflicts = detect_conflicts(data, exp_years=exp_years, exp_source=exp_source)
 
-    # Graduation-based estimate: when the data is conflicting AND no experience
-    # figure was explicitly stated in the CV, fall back to estimating years
-    # from the most recent graduation year (current year − graduation year).
-    if conflicts and exp_source != "cv":
+    # Graduation-based estimate. Used as a fallback in two cases:
+    #   1. the data is conflicting AND no figure was explicitly stated in the CV;
+    #   2. no experience figure exists anywhere AND there is no structured
+    #      experience level band to display (so we'd otherwise show nothing).
+    # In both, we estimate years from the most recent graduation year.
+    exp_label = data.get("_experienceLabel")
+    has_band = isinstance(exp_label, str) and bool(exp_label.strip())
+    needs_estimate = (conflicts and exp_source != "cv") or (
+        exp_years is None and not has_band
+    )
+    if needs_estimate:
         grad_years = _estimate_years_from_graduation(data)
         if grad_years is not None:
             exp_years = grad_years
