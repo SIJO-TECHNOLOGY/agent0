@@ -197,6 +197,15 @@ Source `graduation`. A curated experience-level band (case 2's exclusion) is
 always preferred over an estimate, and if no graduation year is found the prior
 deterministic value is kept.
 
+**Cross-checks (comparison only).** The graduation estimate and the sum of the
+CV's per-role durations (`_sum_experience_durations`, e.g. "(4 ans 10 mois)" +
+"(2 ans 2 mois)" …) are computed for every candidate and compared against the
+resolved experience. A divergence ≥ 3 years raises a conflict
+(`experience_vs_graduation_disagreement` / `experience_vs_duration_disagreement`)
+so the discrepancy surfaces (and feeds LLM reconciliation when enabled). The
+duration sum is a *signal only* — it never becomes the displayed value — since
+simultaneous roles can be double-counted.
+
 ### Skills & languages
 
 - Skills come from BoondManager structured fields first, then from the technical
@@ -217,7 +226,10 @@ How it works:
 
 1. The deterministic pass records conflict reasons in `_normalized_conflicts`,
    e.g. `age_present_with_experience`, `experience_multiple_figures`,
-   `experience_vs_structured_disagreement`, `title_seniority_mismatch`.
+   `experience_vs_structured_disagreement`, `title_seniority_mismatch`,
+   `experience_vs_graduation_disagreement` (the resolved years disagree with the
+   graduation-year estimate), `experience_vs_duration_disagreement` (they
+   disagree with the sum of the CV's per-role durations).
 2. In the `normalize_candidates` node, **only the conflicting candidates** are
    sent to the reconciler — coherent candidates skip the LLM entirely (zero
    cost in the common case). All conflicting candidates go in **one batched

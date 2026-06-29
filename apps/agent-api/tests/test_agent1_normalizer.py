@@ -7,12 +7,14 @@ import pytest
 from datetime import date
 
 from app.agents.agent1.normalizer import (
+    NORM_CONFLICTS,
     NORM_EXPERIENCE_SOURCE,
     NORM_EXPERIENCE_YEARS,
     NORM_LANGUAGES,
     NORM_SKILLS,
     NORM_TITLE,
     _estimate_years_from_graduation,
+    _sum_experience_durations,
     normalize_candidate,
     normalize_candidates,
 )
@@ -207,6 +209,47 @@ class TestGraduationEstimate:
         # Latest end year is 2016 → 2026 - 2016 = 10.
         assert _estimate_years_from_graduation(data, current_year=2026) == 10
 
+    def test_structured_diplomas_count_all_years_no_keyword_needed(self):
+        # The tech-doc `diplomas` field IS a list of diplomas, so every year
+        # counts — even when the diploma type ("Maitrise") isn't a known keyword.
+        # The latest degree (2008) wins over the baccalauréat (2004).
+        data = {
+            "_enrichment_technical_document": {
+                "diplomas": [
+                    "2008 - Maitrise - informatique de gestion, FSEGN",
+                    "2004 - Baccalauréat - Mathématiques",
+                ],
+            }
+        }
+        assert _estimate_years_from_graduation(data, current_year=2026) == 18
+
+    def test_cv_freetext_ignores_job_years_near_no_diploma_kw(self):
+        # A job start year not next to a diploma keyword must not be taken; only
+        # the diploma date is used.
+        data = {
+            "_enrichment_resume": {
+                "hasContent": True,
+                "extractedText": (
+                    "Master informatique 2013\n"
+                    "EXPERIENCE\n"
+                    "Developpeur JAVA 2018 - 2021 chez Amundi\n"
+                ),
+            }
+        }
+        # Graduation = 2013 (master), not 2021 (current job).
+        assert _estimate_years_from_graduation(data, current_year=2026) == 13
+
+    def test_job_title_engineer_not_taken_as_graduation(self):
+        # "Ingénieur" as a JOB TITLE (LinkedIn-style) must not make its job year
+        # a graduation year.
+        data = {
+            "_enrichment_resume": {
+                "hasContent": True,
+                "extractedText": "Ingénieur JAVA/JEE février 2019 - juin 2019\n",
+            }
+        }
+        assert _estimate_years_from_graduation(data, current_year=2026) is None
+
     def test_no_graduation_year_returns_none(self):
         data = {"_enrichment_resume": {"hasContent": True, "extractedText": "no dates here"}}
         assert _estimate_years_from_graduation(data, current_year=2026) is None
@@ -272,20 +315,67 @@ class TestGraduationEstimate:
         assert out.data[NORM_EXPERIENCE_YEARS] is None
         assert out.data[NORM_EXPERIENCE_SOURCE] is None
 
-    def test_no_conflict_does_not_trigger_graduation(self):
-        # A graduation year alone (no conflict) does not override; the rule is
-        # "conflict AND no explicit figure".
+    def test_graduation_disagreement_corrects_non_cv_source(self):
+        # The diploma cross-checks another source: structured says 5 years but
+        # the (tech-doc/CV) graduation implies far more → the estimate wins.
+        grad_year = 2010
+        expected = date.today().year - grad_year
         result = _result(
             data={
                 "experienceMinYears": 5,
-                "_enrichment_resume": {
-                    "hasContent": True,
-                    "extractedText": "Master en informatique 2010.",
+                "_enrichment_technical_document": {
+                    "diplomas": [f"Master informatique {grad_year}"],
                 },
             }
         )
         out = normalize_candidate(result)
-        assert out.data[NORM_EXPERIENCE_YEARS] == 5
+        assert out.data[NORM_EXPERIENCE_YEARS] == expected
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "graduation"
+
+    def test_sum_experience_durations_from_cv(self):
+        cv = (
+            "Dev senior juillet 2019 - Present (4 ans 10 mois)\n"
+            "Consultant décembre 2016 - janvier 2019 (2 ans 2 mois)\n"
+            "Stage 2015 - 2015 (moins d'un an)\n"
+        )
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        # 58 + 26 + 6 months = 90 → round(90/12) = 8 (note: 7.5 rounds to 8).
+        assert _sum_experience_durations(data) == 8
+
+    def test_sum_durations_none_when_absent(self):
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": "no durations"}}
+        assert _sum_experience_durations(data) is None
+
+    def test_duration_sum_flags_conflict_with_resolved_experience(self):
+        # Structured says 20 years, but the CV durations sum to ~3 → conflict
+        # flagged (comparison only; the displayed value is not forced here).
+        result = _result(
+            data={
+                "experienceMinYears": 20,
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": "Dev 2021 - Present (3 ans)\n",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert "experience_vs_duration_disagreement" in out.data[NORM_CONFLICTS]
+
+    def test_graduation_agreement_keeps_structured(self):
+        # When the graduation estimate agrees with the structured value (within
+        # the margin), there is no conflict and the structured value is kept.
+        grad_year = 2010
+        structured = date.today().year - grad_year  # exact match → no disagreement
+        result = _result(
+            data={
+                "experienceMinYears": structured,
+                "_enrichment_technical_document": {
+                    "diplomas": [f"Master informatique {grad_year}"],
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == structured
         assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
 
 

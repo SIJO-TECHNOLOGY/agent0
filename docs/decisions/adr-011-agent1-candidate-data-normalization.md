@@ -51,6 +51,12 @@ Pure-Python heuristics, no LLM, no I/O — fast, free, idempotent.
   `_normalized_conflicts` — e.g. `age_present_with_experience`,
   `experience_multiple_figures`, `experience_vs_structured_disagreement`,
   `title_seniority_mismatch`.
+- **Cross-checks (comparison only).** The graduation-year estimate and the sum
+  of the CV's per-role durations are computed for every candidate and compared
+  against the resolved experience; a divergence ≥ 3 years raises a conflict
+  (`experience_vs_graduation_disagreement` / `experience_vs_duration_disagreement`).
+  The duration sum is never used as the displayed value (simultaneous roles can
+  be double-counted) — only as a coherence signal.
 - **Graduation fallback.** Experience is estimated from the graduation year
   (`current_year − latest education end year`, parsed from technical-document
   diplomas/training or the CV education section) when either (a) the data is
