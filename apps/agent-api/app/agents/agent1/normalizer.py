@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date
 from typing import Final
 
 from app.models.results import SearchResult
@@ -133,6 +134,80 @@ def _years_from_boond(data: dict[str, object]) -> int | None:
                         return v
                 except ValueError:
                     pass
+    return None
+
+
+# --- graduation-based experience estimate ---------------------------------
+
+# A 4-digit graduation year (1970–2049); excludes implausible values.
+_YEAR_RE: Final[re.Pattern[str]] = re.compile(r"\b(19[7-9]\d|20[0-4]\d)\b")
+# Education-section headers in a CV (FR/EN).
+_EDU_HEADER_RE: Final[re.Pattern[str]] = re.compile(
+    r"(ACADEMIC|EDUCATION|FORMATION|DIPL[OÔ]ME|QUALIFICATION|"
+    r"[ÉE]TUDES|SCOLARIT|CURSUS|PARCOURS\s+ACAD)",
+    re.IGNORECASE,
+)
+# Diploma keywords; a year near one is treated as a graduation year.
+_DIPLOMA_KW_RE: Final[re.Pattern[str]] = re.compile(
+    r"(master|licence|bachelor|ing[ée]nieur|engineering|meng|m\.?sc|b\.?sc|"
+    r"phd|doctorat|mba|dut|bts|magist[èe]re|baccalaur[ée]at|bac\s*\+?\s*\d|"
+    r"dipl[ôo]m|universit[ée]|university|[ée]cole|school)",
+    re.IGNORECASE,
+)
+# Maximum plausible experience an estimate may yield.
+_MAX_PLAUSIBLE_YEARS: Final[int] = 50
+
+
+def _education_years(text: str) -> set[int]:
+    """Years that appear in an education context (section header or near a diploma kw)."""
+    years: set[int] = set()
+    if not text:
+        return years
+    header = _EDU_HEADER_RE.search(text)
+    if header:
+        window = text[header.start(): header.start() + 600]
+        years.update(int(y) for y in _YEAR_RE.findall(window))
+    for kw in _DIPLOMA_KW_RE.finditer(text):
+        segment = text[max(0, kw.start() - 45): kw.end() + 45]
+        years.update(int(y) for y in _YEAR_RE.findall(segment))
+    return years
+
+
+def _estimate_years_from_graduation(
+    data: dict[str, object], *, current_year: int | None = None
+) -> int | None:
+    """Estimate years of experience as ``current_year - latest_graduation_year``.
+
+    The graduation year is the most recent end year found in an education
+    context, taken from the technical-document diplomas/training and the CV
+    text. Returns None when no plausible graduation year is found or the
+    resulting estimate is out of range.
+    """
+    year_now = current_year if current_year is not None else date.today().year
+
+    parts: list[str] = []
+    techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
+    if isinstance(techdoc, dict):
+        for field in ("diplomas", "training"):
+            value = techdoc.get(field)
+            if isinstance(value, str):
+                parts.append(value)
+            elif isinstance(value, list):
+                parts.extend(str(item) for item in value if item)
+    resume = data.get(_ENRICHMENT_RESUME_KEY)
+    if isinstance(resume, dict):
+        cv_text = resume.get("extractedText") or resume.get("text") or ""
+        if isinstance(cv_text, str):
+            parts.append(cv_text)
+
+    years = _education_years(" \n ".join(p for p in parts if p))
+    plausible = [y for y in years if y <= year_now]
+    if not plausible:
+        return None
+
+    estimate = year_now - max(plausible)
+    if 0 <= estimate <= _MAX_PLAUSIBLE_YEARS:
+        return estimate
     return None
 
 
@@ -606,6 +681,18 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     data[NORM_TITLE] = title
 
     conflicts = detect_conflicts(data, exp_years=exp_years, exp_source=exp_source)
+
+    # Graduation-based estimate: when the data is conflicting AND no experience
+    # figure was explicitly stated in the CV, fall back to estimating years
+    # from the most recent graduation year (current year − graduation year).
+    if conflicts and exp_source != "cv":
+        grad_years = _estimate_years_from_graduation(data)
+        if grad_years is not None:
+            exp_years = grad_years
+            exp_source = "graduation"
+            data[NORM_EXPERIENCE_YEARS] = exp_years
+            data[NORM_EXPERIENCE_SOURCE] = exp_source
+
     data[NORM_CONFLICTS] = conflicts
 
     logger.debug(

@@ -51,6 +51,13 @@ Pure-Python heuristics, no LLM, no I/O — fast, free, idempotent.
   `_normalized_conflicts` — e.g. `age_present_with_experience`,
   `experience_multiple_figures`, `experience_vs_structured_disagreement`,
   `title_seniority_mismatch`.
+- **Graduation fallback.** When the data is conflicting AND no experience
+  figure was explicitly stated in the CV, experience is estimated from the
+  graduation year (`current_year − latest education end year`, parsed from
+  technical-document diplomas/training or the CV education section). Source
+  `graduation`. This is a deterministic, objective anchor for ambiguous
+  profiles; if no graduation year is found, the prior deterministic value
+  stands.
 
 ### 2. LLM reconciliation pass (optional, off by default)
 

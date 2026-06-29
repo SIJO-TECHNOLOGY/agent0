@@ -156,7 +156,7 @@ Keys written into `result.data`:
 | Key | Meaning |
 | --- | --- |
 | `_normalized_experience_years` | Best years-of-experience estimate. |
-| `_normalized_experience_source` | Which source won: `boondmanager`, `technical_document`, `cv`, `profile_text`, or `llm`. |
+| `_normalized_experience_source` | Which source won: `cv`, `boondmanager`, `technical_document`, `profile_text`, `graduation`, or `llm`. |
 | `_normalized_skills` | Deduplicated union of skills (structured + free-text). |
 | `_normalized_languages` | Deduplicated union of languages (structured + CV). |
 | `_normalized_title` | Best job-title estimate. |
@@ -164,15 +164,31 @@ Keys written into `result.data`:
 
 ### Experience resolution
 
-1. **Structured BoondManager `experienceMinYears` is authoritative** — when
-   present it is used directly (curated data).
-2. Otherwise, fall back to experience-qualified figures mined from free text, in
-   order of reliability: technical document → CV → profile title/snippet.
-3. Free-text mining only counts a number when it is **explicitly tied to an
-   experience keyword** in the same clause (e.g. "6 years of Experience",
-   "3+ years of hands-on technical experience", "16 ans d'expérience"). Stray
-   numbers — an age ("40 ans"), a duration ("4 years of data"), company history
-   ("société fondée il y a 40 ans") — are ignored. Values are capped at 50 years.
+Priority order:
+
+1. **A clearly-stated CV figure wins** — a number explicitly tied to an
+   experience keyword in the CV ("16 ans d'expérience", "3+ years of hands-on
+   technical experience"). Source `cv`.
+2. Structured BoondManager `experienceMinYears`. Source `boondmanager`.
+3. A structured experience *level* band (`_experienceLabel`, e.g. "10 à 15
+   ans"): no numeric guess, the card shows the band label.
+4. Experience-qualified figures from the technical document, then the profile
+   title/snippet. Sources `technical_document` / `profile_text`.
+
+Free-text mining only counts a number **explicitly tied to an experience
+keyword** in the same clause; the high-precision "keyword: number" form is
+tried first and the gap is digit-free, so an age ("40 ans"), a duration
+("4 years of data"), company history, or an age line sitting next to an
+experience line are never mis-read. Values are capped at 50 years.
+
+**Graduation fallback.** When the candidate's data is *conflicting*
+(`_normalized_conflicts` non-empty) **and** no experience figure was explicitly
+stated in the CV, Agent1 estimates years from the **graduation year**:
+`current_year − latest graduation end year`, where the graduation year is the
+most recent year found in an education context (technical-document
+diplomas/training or the CV's education section). Source `graduation`. This
+gives an objective anchor for ambiguous profiles instead of trusting a misread
+number. If no graduation year is found, the deterministic value is kept.
 
 ### Skills & languages
 

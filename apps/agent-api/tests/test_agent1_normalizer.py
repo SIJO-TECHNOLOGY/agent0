@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import pytest
 
+from datetime import date
+
 from app.agents.agent1.normalizer import (
     NORM_EXPERIENCE_SOURCE,
     NORM_EXPERIENCE_YEARS,
     NORM_LANGUAGES,
     NORM_SKILLS,
     NORM_TITLE,
+    _estimate_years_from_graduation,
     normalize_candidate,
     normalize_candidates,
 )
@@ -177,6 +180,82 @@ class TestNormalizeExperience:
         )
         out = normalize_candidate(result)
         assert out.data[NORM_EXPERIENCE_YEARS] == 3
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
+
+
+class TestGraduationEstimate:
+    def test_estimate_from_diploma_range_end_year(self):
+        # "2017-2020" → end year 2020; estimate = current_year - 2020.
+        data = {
+            "_enrichment_technical_document": {
+                "diplomas": ["Master MEng - ENSEEIHT 2017-2020"],
+            }
+        }
+        assert _estimate_years_from_graduation(data, current_year=2026) == 6
+
+    def test_estimate_takes_latest_graduation(self):
+        data = {
+            "_enrichment_resume": {
+                "hasContent": True,
+                "extractedText": (
+                    "FORMATION\n"
+                    "Licence informatique 2014\n"
+                    "Master data science 2016\n"
+                ),
+            }
+        }
+        # Latest end year is 2016 → 2026 - 2016 = 10.
+        assert _estimate_years_from_graduation(data, current_year=2026) == 10
+
+    def test_no_graduation_year_returns_none(self):
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": "no dates here"}}
+        assert _estimate_years_from_graduation(data, current_year=2026) is None
+
+    def test_conflict_without_explicit_cv_uses_graduation(self):
+        # Structured says 4 years, but the CV shows an age (conflict) and a
+        # graduation year → Agent1 estimates from the diploma instead.
+        result = _result(
+            data={
+                "experienceMinYears": 4,
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": "45 ans. Master en informatique 2010.",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        expected = date.today().year - 2010
+        assert out.data[NORM_EXPERIENCE_YEARS] == expected
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "graduation"
+
+    def test_explicit_cv_figure_blocks_graduation_estimate(self):
+        # An explicit CV experience figure wins; graduation is not used.
+        result = _result(
+            data={
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": "40 ans. 12 years of experience. Master 2010.",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 12
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv"
+
+    def test_no_conflict_does_not_trigger_graduation(self):
+        # A graduation year alone (no conflict) does not override; the rule is
+        # "conflict AND no explicit figure".
+        result = _result(
+            data={
+                "experienceMinYears": 5,
+                "_enrichment_resume": {
+                    "hasContent": True,
+                    "extractedText": "Master en informatique 2010.",
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 5
         assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
 
 
