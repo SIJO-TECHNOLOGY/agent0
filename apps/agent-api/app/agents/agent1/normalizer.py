@@ -137,6 +137,39 @@ def _years_from_boond(data: dict[str, object]) -> int | None:
     return None
 
 
+# Experience-level label fields (resolved by nodes.py from the BoondManager
+# dictionary, e.g. "3 ans", "> à 10 ans", "Pas d'expérience").
+_EXP_LABEL_FIELDS: Final[tuple[str, ...]] = (
+    "_experienceLabel", "experienceLabel", "experience_label",
+)
+
+
+def _years_from_experience_label(data: dict[str, object]) -> int | None:
+    """Years parsed from the resolved BoondManager experience-level label.
+
+    This BoondManager dictionary encodes experience as near-1:1 year levels
+    ("1 an", "2 ans", … "10 ans", "> à 10 ans", "Pas d'expérience"), so the
+    label is a curated, structured experience figure — not just a coarse band.
+    """
+    label: str | None = None
+    for field in _EXP_LABEL_FIELDS:
+        value = data.get(field)
+        if isinstance(value, str) and value.strip():
+            label = value.strip()
+            break
+    if label is None:
+        return None
+    low = label.lower()
+    if "pas d" in low and "exp" in low:  # "Pas d'expérience"
+        return 0
+    match = re.search(r"\d{1,2}", label)
+    if match:
+        value = int(match.group(0))
+        if 0 <= value <= 50:
+            return value
+    return None
+
+
 # --- graduation-based experience estimate ---------------------------------
 
 # A 4-digit graduation year (1970–2049); excludes implausible values.
@@ -159,6 +192,11 @@ _MAX_PLAUSIBLE_YEARS: Final[int] = 50
 # Year gap above which the resolved experience and the graduation-year estimate
 # are considered to disagree (a conflict worth flagging / reconciling).
 _GRAD_DISAGREE_MARGIN: Final[int] = 3
+# Experience sources weak enough that the graduation estimate may override them
+# on conflict. Curated sources (cv, boondmanager, experience_level) are not here.
+_GRAD_OVERRIDABLE_SOURCES: Final[frozenset[str]] = frozenset(
+    {"technical_document", "profile_text"}
+)
 
 
 def _education_years(text: str) -> set[int]:
@@ -302,9 +340,10 @@ def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | No
          clear statement wins over the structured field, which is often a
          coarse band or stale.
       2. Else trust BoondManager's structured ``experienceMinYears``.
-      3. Else, if a structured experience *level* is present
-         (``_experienceLabel``, e.g. "10 à 15 ans") but no exact figure, show
-         that band label instead of guessing a number (numeric years stay None).
+      3. Else use the BoondManager experience *level* (``_experienceLabel`` →
+         years, e.g. "3 ans" → 3): a curated, near-1:1 figure the recruiter set.
+         Using it (rather than ignoring it) keeps the card and the ranking score
+         on the SAME value.
       4. Else fall back to experience-qualified figures from the technical
          document, then the profile title/snippet.
 
@@ -327,10 +366,10 @@ def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | No
     if boond_years is not None:
         return boond_years, "boondmanager"
 
-    # 3. Structured experience level (band) — show the label, don't guess a number.
-    exp_label = data.get("_experienceLabel")
-    if isinstance(exp_label, str) and exp_label.strip():
-        return None, None
+    # 3. BoondManager experience level (recruiter-set), parsed to a number.
+    level_years = _years_from_experience_label(data)
+    if level_years is not None:
+        return level_years, "experience_level"
 
     # 4. Technical document, then profile title/snippet.
     techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
@@ -791,22 +830,39 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
         duration_sum=duration_sum,
     )
 
-    # Graduation-based estimate. Used as a fallback in two cases:
-    #   1. the data is conflicting AND no figure was explicitly stated in the CV
-    #      (this now includes a graduation-vs-experience disagreement, so a
-    #      diploma year in the technical document can correct another source);
-    #   2. no experience figure exists anywhere AND there is no structured
-    #      experience level band to display (so we'd otherwise show nothing).
-    exp_label = data.get("_experienceLabel")
-    has_band = isinstance(exp_label, str) and bool(exp_label.strip())
-    needs_estimate = (conflicts and exp_source != "cv") or (
-        exp_years is None and not has_band
+    # Graduation-based estimate. It only REPLACES the value in two cases:
+    #   1. no experience figure exists anywhere → graduation fills the gap;
+    #   2. the value came from a SHAKY text-mined source (technical document /
+    #      profile text) AND the data is conflicting → graduation corrects it.
+    # Curated sources (cv, experienceMinYears, the recruiter-set experience
+    # level) are NEVER auto-overridden — a conflict is only flagged, and the LLM
+    # reconciler (when enabled) decides using the full CV. This keeps the card
+    # and the ranking score on the same value and respects recruiter data.
+    needs_estimate = exp_years is None or (
+        bool(conflicts) and exp_source in _GRAD_OVERRIDABLE_SOURCES
     )
     if needs_estimate and grad_years is not None:
         exp_years = grad_years
         exp_source = "graduation"
         data[NORM_EXPERIENCE_YEARS] = exp_years
         data[NORM_EXPERIENCE_SOURCE] = exp_source
+
+    # Re-evaluate conflicts on the FINAL experience value so that an age now
+    # coexisting with the estimate, or a graduation/duration disagreement, is
+    # flagged. A graduation estimate is itself uncertain, so always flag it —
+    # this routes such candidates to the LLM reconciler (when enabled), which
+    # reads the whole CV and is far more reliable than regex on messy exports.
+    conflicts = detect_conflicts(
+        data,
+        exp_years=exp_years,
+        exp_source=exp_source,
+        grad_estimate=grad_years,
+        duration_sum=duration_sum,
+    )
+    if exp_source == "graduation":
+        conflicts = [*conflicts, "experience_estimated_from_graduation"]
+    # Deduplicate, preserve order.
+    conflicts = list(dict.fromkeys(conflicts))
 
     data[NORM_CONFLICTS] = conflicts
 

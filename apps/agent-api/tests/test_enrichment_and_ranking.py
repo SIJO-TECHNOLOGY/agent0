@@ -8,9 +8,29 @@ from app.graph.nodes import (
     ENRICHMENT_DETAIL_KEY,
     ENRICHMENT_TECH_DOC_KEY,
     NodeContext,
+    _candidate_min_years,
     enrich_candidates,
     rank_candidates,
 )
+
+
+def test_candidate_min_years_trusts_agent1_not_loose_text() -> None:
+    # Agent1 resolved 3 years; a stray "10 ans" in the haystack must NOT inflate
+    # the candidate's experience used for seniority scoring.
+    result = SearchResult(
+        id="1", type="candidate", title="", score=0.5, source_tool="searchCandidates",
+        data={"_normalized_experience_years": 3},
+    )
+    assert _candidate_min_years(result, "java 10 ans projet sur 10 ans") == 3
+
+
+def test_candidate_min_years_falls_back_to_text_when_agent1_empty() -> None:
+    # No Agent1 value (e.g. pre-ranking) → fall back to the loose text parse.
+    result = SearchResult(
+        id="2", type="candidate", title="", score=0.5, source_tool="searchCandidates",
+        data={},
+    )
+    assert _candidate_min_years(result, "8 ans d'expérience java") == 8
 from app.mcp.mock_client import MockMcpClient
 from app.models.graph_state import GraphState
 from app.models.intent import InterpretedIntent

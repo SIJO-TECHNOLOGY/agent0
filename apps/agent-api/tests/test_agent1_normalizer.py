@@ -69,9 +69,9 @@ class TestNormalizeExperience:
         assert out.data[NORM_EXPERIENCE_YEARS] == 12
         assert out.data[NORM_EXPERIENCE_SOURCE] == "cv"
 
-    def test_unclear_cv_number_keeps_structured_level(self):
-        # An age / incidental number in the CV is NOT a clear experience
-        # statement, so the structured level band is shown instead (no number).
+    def test_uses_experience_level_when_cv_unclear(self):
+        # An age / incidental number in the CV is NOT a clear experience figure,
+        # so the recruiter-set experience level ("10 à 15 ans" → 10) is used.
         result = _result(
             data={
                 "_experienceLabel": "10 à 15 ans",
@@ -82,8 +82,18 @@ class TestNormalizeExperience:
             }
         )
         out = normalize_candidate(result)
-        assert out.data[NORM_EXPERIENCE_YEARS] is None
-        assert out.data[NORM_EXPERIENCE_SOURCE] is None
+        assert out.data[NORM_EXPERIENCE_YEARS] == 10
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "experience_level"
+
+    def test_experience_level_parsed_from_label(self):
+        out = normalize_candidate(_result(data={"_experienceLabel": "3 ans"}))
+        assert out.data[NORM_EXPERIENCE_YEARS] == 3
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "experience_level"
+
+    def test_experience_level_pas_dexperience_is_zero(self):
+        out = normalize_candidate(_result(data={"_experienceLabel": "Pas d'expérience"}))
+        assert out.data[NORM_EXPERIENCE_YEARS] == 0
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "experience_level"
 
     def test_uses_cv_years_when_boond_missing(self):
         result = _result(
@@ -254,9 +264,10 @@ class TestGraduationEstimate:
         data = {"_enrichment_resume": {"hasContent": True, "extractedText": "no dates here"}}
         assert _estimate_years_from_graduation(data, current_year=2026) is None
 
-    def test_conflict_without_explicit_cv_uses_graduation(self):
-        # Structured says 4 years, but the CV shows an age (conflict) and a
-        # graduation year → Agent1 estimates from the diploma instead.
+    def test_curated_value_kept_but_conflict_flagged(self):
+        # Structured says 4 years; the CV shows an age and a graduation year.
+        # The curated value is KEPT (not overridden) and the conflict is flagged
+        # so the LLM reconciler can arbitrate.
         result = _result(
             data={
                 "experienceMinYears": 4,
@@ -267,9 +278,9 @@ class TestGraduationEstimate:
             }
         )
         out = normalize_candidate(result)
-        expected = date.today().year - 2010
-        assert out.data[NORM_EXPERIENCE_YEARS] == expected
-        assert out.data[NORM_EXPERIENCE_SOURCE] == "graduation"
+        assert out.data[NORM_EXPERIENCE_YEARS] == 4
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
+        assert out.data[NORM_CONFLICTS]  # non-empty (age and/or graduation gap)
 
     def test_explicit_cv_figure_blocks_graduation_estimate(self):
         # An explicit CV experience figure wins; graduation is not used.
@@ -300,9 +311,9 @@ class TestGraduationEstimate:
         assert out.data[NORM_EXPERIENCE_YEARS] == expected
         assert out.data[NORM_EXPERIENCE_SOURCE] == "graduation"
 
-    def test_structured_band_preferred_over_graduation(self):
-        # A curated experience-level band is shown rather than a graduation
-        # estimate when there is no conflict and no explicit figure.
+    def test_experience_level_preferred_over_graduation(self):
+        # The recruiter-set experience level is curated → used as-is, NOT
+        # overridden by a graduation estimate (the conflict is only flagged).
         result = _result(
             data={
                 "_experienceLabel": "10 à 15 ans",
@@ -312,14 +323,14 @@ class TestGraduationEstimate:
             }
         )
         out = normalize_candidate(result)
-        assert out.data[NORM_EXPERIENCE_YEARS] is None
-        assert out.data[NORM_EXPERIENCE_SOURCE] is None
+        assert out.data[NORM_EXPERIENCE_YEARS] == 10
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "experience_level"
 
-    def test_graduation_disagreement_corrects_non_cv_source(self):
-        # The diploma cross-checks another source: structured says 5 years but
-        # the (tech-doc/CV) graduation implies far more → the estimate wins.
+    def test_graduation_disagreement_flags_but_keeps_curated_source(self):
+        # Structured says 5 years; the diploma implies far more → the curated
+        # value is KEPT (not overridden) and the disagreement is flagged for the
+        # LLM reconciler to arbitrate using the full CV.
         grad_year = 2010
-        expected = date.today().year - grad_year
         result = _result(
             data={
                 "experienceMinYears": 5,
@@ -329,8 +340,9 @@ class TestGraduationEstimate:
             }
         )
         out = normalize_candidate(result)
-        assert out.data[NORM_EXPERIENCE_YEARS] == expected
-        assert out.data[NORM_EXPERIENCE_SOURCE] == "graduation"
+        assert out.data[NORM_EXPERIENCE_YEARS] == 5
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
+        assert "experience_vs_graduation_disagreement" in out.data[NORM_CONFLICTS]
 
     def test_sum_experience_durations_from_cv(self):
         cv = (

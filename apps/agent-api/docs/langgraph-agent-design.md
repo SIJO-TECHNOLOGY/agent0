@@ -170,10 +170,18 @@ Priority order:
    experience keyword in the CV ("16 ans d'expérience", "3+ years of hands-on
    technical experience"). Source `cv`.
 2. Structured BoondManager `experienceMinYears`. Source `boondmanager`.
-3. A structured experience *level* band (`_experienceLabel`, e.g. "10 à 15
-   ans"): no numeric guess, the card shows the band label.
+3. The recruiter-set **experience level**, parsed from its resolved label
+   (`_experienceLabel` → years, e.g. "3 ans" → 3, "> à 10 ans" → 10, "Pas
+   d'expérience" → 0). Source `experience_level`. Using it (not ignoring it)
+   keeps the card and the ranking score on the SAME value.
 4. Experience-qualified figures from the technical document, then the profile
    title/snippet. Sources `technical_document` / `profile_text`.
+
+Curated sources (`cv`, `boondmanager`, `experience_level`) are never
+auto-overridden by the graduation estimate; a disagreement only raises a
+conflict for the LLM to arbitrate. The graduation estimate replaces the value
+only when nothing else exists, or when the value came from a shaky text-mined
+source (`technical_document` / `profile_text`).
 
 Free-text mining only counts a number **explicitly tied to an experience
 keyword** in the same clause; the high-precision "keyword: number" form is
