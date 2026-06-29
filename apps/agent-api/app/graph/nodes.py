@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 from app.graph.intent_keywords import (
     detect_tools,
     extract_candidate_id,
+    extract_experience_bounds,
     extract_keywords,
     extract_min_years_experience,
     extract_seniority,
@@ -204,7 +205,9 @@ async def analyze_intent(state: GraphState, _: NodeContext) -> GraphState:
     seniority = extract_seniority(query)
     tool_hints = detect_tools(query)
     candidate_id = extract_candidate_id(query)
-    min_years_experience = extract_min_years_experience(query)
+    min_years_experience, max_years_experience = extract_experience_bounds(
+        query, seniority
+    )
 
     constraints: dict[str, str] = {}
     if seniority:
@@ -213,6 +216,8 @@ async def analyze_intent(state: GraphState, _: NodeContext) -> GraphState:
         constraints["candidate_id"] = str(candidate_id)
     if min_years_experience is not None:
         constraints["min_experience_years"] = str(min_years_experience)
+    if max_years_experience is not None:
+        constraints["max_experience_years"] = str(max_years_experience)
 
     if candidate_id is not None:
         objective = "get_candidate_detail"
@@ -2099,6 +2104,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     domains = _domain_terms(intent.constraints)
     role = intent.constraints.get("role") or None
     required_years = _int_or_none(intent.constraints.get("min_experience_years"))
+    required_max_years = _int_or_none(intent.constraints.get("max_experience_years"))
     requested_name = (intent.constraints.get("name") or "").strip()
     # The LLM may order the criteria by importance; the deterministic ranker
     # derives its weights from that ordering (off-vocabulary keys are dropped).
@@ -2139,6 +2145,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             role=role,
             candidate_min_years=_candidate_min_years(result, haystack),
             required_min_years=required_years,
+            required_max_years=required_max_years,
             domain_haystack=_domain_haystack(result),
             requested_name=requested_name or None,
             candidate_name=candidate_full_name(result) if requested_name else None,
@@ -2705,6 +2712,7 @@ def _prerank_search_results(
     anchors_domains: tuple[str, ...],
     anchors_role: str | None,
     required_years: int | None,
+    required_max_years: int | None = None,
     requested_name: str | None = None,
     priority: tuple[str, ...] | None = None,
 ) -> None:
@@ -2731,6 +2739,7 @@ def _prerank_search_results(
             role=anchors_role,
             candidate_min_years=_candidate_min_years(result, haystack),
             required_min_years=required_years,
+            required_max_years=required_max_years,
             domain_haystack=_domain_haystack(result),
             requested_name=requested_name or None,
             candidate_name=candidate_full_name(result) if requested_name else None,
@@ -2798,6 +2807,7 @@ async def _execute_search_ladder(
         return False
 
     required_years = _int_or_none(intent.constraints.get("min_experience_years"))
+    required_max_years = _int_or_none(intent.constraints.get("max_experience_years"))
 
     start_len = len(tool_calls)
     used_relaxed: bool | None = None
@@ -2857,6 +2867,7 @@ async def _execute_search_ladder(
             anchors_domains=anchors.domains,
             anchors_role=anchors.role,
             required_years=required_years,
+            required_max_years=required_max_years,
             requested_name=anchors.name,
             priority=_ranking_priority(intent.constraints),
         )

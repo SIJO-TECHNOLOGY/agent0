@@ -7,10 +7,31 @@ import pytest
 from app.graph.intent_keywords import (
     detect_tools,
     extract_candidate_id,
+    extract_experience_bounds,
     extract_keywords,
     extract_min_years_experience,
     _normalize_token,
 )
+
+
+@pytest.mark.parametrize(
+    "query, seniority, expected",
+    [
+        ("profil junior IA 0-2 ans d'exp", "junior", (0, 2)),
+        ("3 à 5 ans", None, (3, 5)),
+        ("moins de 3 ans", None, (None, 3)),
+        ("jusqu'à 2 ans", None, (None, 2)),
+        ("plus de 5 ans", None, (5, None)),
+        ("5+ ans python", None, (5, None)),
+        ("au moins 7 years", None, (7, None)),
+        ("10 years experience", None, (10, None)),  # bare single → minimum
+        ("profil junior", "junior", (None, 2)),      # seniority fallback
+        ("dev senior java", "senior", (5, None)),
+        ("data analyst", None, (None, None)),
+    ],
+)
+def test_extract_experience_bounds(query, seniority, expected) -> None:
+    assert extract_experience_bounds(query, seniority) == expected
 
 
 @pytest.mark.parametrize(

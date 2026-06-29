@@ -426,6 +426,72 @@ def extract_min_years_experience(query: str) -> int | None:
     return min(values) if values else None
 
 
+_UNIT_RE: Final[str] = r"(?:year|yr|an|année|annee)s?"
+# "0-2 ans", "3 à 5 years", "3 to 5 yrs"
+_RANGE_RE: Final[re.Pattern[str]] = re.compile(
+    rf"\b(\d{{1,2}})\s*(?:-|–|—|à|a|to)\s*(\d{{1,2}})\s*\+?\s*{_UNIT_RE}\b",
+    re.IGNORECASE,
+)
+# upper bound: "moins de 3 ans", "less than 3 years", "jusqu'à 2 ans", "max 3 ans"
+_MAX_RE: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?:moins\s+de|less\s+than|jusqu['’]?\s*[aà]|up\s+to|max(?:imum)?|au\s+plus)\s*"
+    rf"(\d{{1,2}})\s*\+?\s*{_UNIT_RE}\b",
+    re.IGNORECASE,
+)
+# lower bound: "plus de 5 ans", "more than 5 years", "au moins 5 ans", "5+ ans"
+_MIN_RE: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?:plus\s+de|more\s+than|au\s+moins|at\s+least|min(?:imum)?)\s*(\d{{1,2}})\s*{_UNIT_RE}\b"
+    rf"|\b(\d{{1,2}})\s*\+\s*{_UNIT_RE}\b",
+    re.IGNORECASE,
+)
+# Seniority labels → (min_years, max_years) band, used only when the query
+# gives no explicit number. Junior ≤2, Confirmed 3-5, Senior ≥5.
+_SENIORITY_BANDS: Final[dict[str, tuple[int | None, int | None]]] = {
+    "junior": (None, 2),
+    "intermediate": (3, 5),
+    "senior": (5, None),
+    "lead": (7, None),
+    "principal": (8, None),
+}
+
+
+def extract_experience_bounds(
+    query: str, seniority: str | None = None
+) -> tuple[int | None, int | None]:
+    """Return (min_years, max_years) requested by the query.
+
+    Explicit numbers win over the seniority-label fallback. Recognises ranges
+    ("0-2 ans"), upper bounds ("moins de 3 ans"), lower bounds ("5+ ans",
+    "plus de 5 ans"), and a bare "<N> years" (treated as a minimum, preserving
+    the previous behaviour). When the query carries no number, a seniority word
+    ("junior"/"senior") maps to a band.
+    """
+    lo: int | None = None
+    hi: int | None = None
+
+    range_match = _RANGE_RE.search(query)
+    if range_match:
+        a, b = int(range_match.group(1)), int(range_match.group(2))
+        lo, hi = min(a, b), max(a, b)
+    else:
+        max_match = _MAX_RE.search(query)
+        if max_match:
+            hi = int(max_match.group(1))
+        min_match = _MIN_RE.search(query)
+        if min_match:
+            lo = int(min_match.group(1) or min_match.group(2))
+        if lo is None and hi is None:
+            # A bare "<N> years" with no qualifier → minimum (legacy behaviour).
+            lo = extract_min_years_experience(query)
+
+    if lo is None and hi is None and seniority:
+        band = _SENIORITY_BANDS.get(seniority)
+        if band is not None:
+            lo, hi = band
+
+    return lo, hi
+
+
 def extract_candidate_id(query: str) -> int | None:
     """Return a candidate ID parsed from the query, or None.
 

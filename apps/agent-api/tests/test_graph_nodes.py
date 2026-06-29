@@ -93,6 +93,30 @@ async def test_analyze_intent_extracts_keywords_and_seniority() -> None:
 
 
 @pytest.mark.asyncio
+async def test_analyze_intent_sets_max_experience_for_junior_range() -> None:
+    state = GraphState(original_query="profil junior IA 0-2 ans d'expérience")
+    ctx = _ctx(MockMcpClient())
+
+    result = await analyze_intent(state, ctx)
+
+    constraints = result.interpreted_intent.constraints
+    assert constraints.get("seniority") == "junior"
+    assert constraints.get("max_experience_years") == "2"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_senior_keyword_sets_min_only() -> None:
+    state = GraphState(original_query="dev senior java")
+    ctx = _ctx(MockMcpClient())
+
+    result = await analyze_intent(state, ctx)
+
+    constraints = result.interpreted_intent.constraints
+    assert constraints.get("min_experience_years") == "5"
+    assert "max_experience_years" not in constraints
+
+
+@pytest.mark.asyncio
 async def test_analyze_intent_detects_candidate_detail_lookup() -> None:
     state = GraphState(
         original_query="Find the candidate information with candidate id 41924"

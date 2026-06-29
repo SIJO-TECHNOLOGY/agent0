@@ -237,6 +237,26 @@ and is imported by both `candidate_mapper.py` and Agent1. It is kept outside
 would trigger `app.services.__init__` → `search_service` → `graph.nodes` →
 Agent1, creating a circular import.
 
+## Experience range & seniority cap
+
+The ranking models experience as a **range**, not just a floor. `analyze_intent`
+(and the LLM planner) populate two constraints:
+
+- `min_experience_years` — a floor (`senior`, `5+ ans`, `au moins 5 ans`).
+- `max_experience_years` — a cap (`junior`, `moins de 3 ans`, `up to 2 years`).
+
+A bare seniority word maps to a band when no number is given: **junior ≤ 2,
+confirmed 3-5, senior ≥ 5** (`extract_experience_bounds`). A range like
+`0-2 ans` sets both bounds.
+
+In `evidence_score`, the seniority dimension is credited only when the
+candidate's known years sit **within the requested band**. A candidate whose
+*known* experience exceeds the cap (e.g. a 7-year profile for a "junior 0-2 ans"
+search) loses the seniority credit **and** the final score is multiplied by
+`_OVER_CAP_PENALTY` (0.4) — so it drops far down the ranking but stays visible
+rather than being excluded. Unknown experience is never hit by the cap
+multiplier (we only penalise a known over-cap value).
+
 ## Retry Strategy
 
 - Retry only transient MCP client errors, timeouts, or rate-limit-style failures when safe.

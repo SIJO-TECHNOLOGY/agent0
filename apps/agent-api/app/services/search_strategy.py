@@ -404,6 +404,11 @@ class EvidenceWeights:
 
 _WEIGHTS = EvidenceWeights()
 
+# Multiplier applied to the final score when a candidate's known experience
+# exceeds the requested maximum (e.g. a 7-year profile for a "junior 0-2 ans"
+# query). Strong but non-zero so the profile stays visible, just ranked low.
+_OVER_CAP_PENALTY: Final[float] = 0.4
+
 # Closed vocabulary of criterion keys the LLM may order in `ranking_priority`.
 RANKING_CRITERIA: Final[frozenset[str]] = frozenset(
     {"skill", "domain", "role", "seniority", "name"}
@@ -487,6 +492,7 @@ def evidence_score(
     role: str | None,
     candidate_min_years: int | None,
     required_min_years: int | None,
+    required_max_years: int | None = None,
     domain_haystack: str | None = None,
     requested_name: str | None = None,
     candidate_name: str | None = None,
@@ -548,20 +554,32 @@ def evidence_score(
             hits.add("role")
         dims.append(("role", weights.role, 1.0 if role_found else 0.0))
 
-    if required_min_years is not None:
+    over_cap = False
+    if required_min_years is not None or required_max_years is not None:
         effective_years = candidate_min_years
         # When explicit years data is absent, fall back to title-level inference
         # so a "Senior Lead" profile is not penalised against a "5+ years" query
         # merely because the structured experience field was not filled.
         if effective_years is None:
             effective_years = infer_years_from_title(hay)
-        meets = (
+        meets_min = required_min_years is None or (
             effective_years is not None and effective_years >= required_min_years
         )
+        # Unknown years can't disprove the cap, so only a KNOWN over-cap value
+        # breaks the band (we never penalise an unknown).
+        within_max = required_max_years is None or (
+            effective_years is None or effective_years <= required_max_years
+        )
+        over_cap = (
+            required_max_years is not None
+            and effective_years is not None
+            and effective_years > required_max_years
+        )
+        in_band = meets_min and within_max
         # Partial credit (0.5) when inferred from title only (less certain than
         # an explicit years figure), so a profile with explicit years still
         # outranks one where we guessed from the title.
-        if meets:
+        if in_band and effective_years is not None:
             hits.add("seniority")
             fraction = 1.0 if candidate_min_years is not None else 0.5
         else:
@@ -595,4 +613,9 @@ def evidence_score(
         weighted = [(weight, fraction) for _key, weight, fraction in dims]
     total_weight = sum(weight for weight, _ in weighted)
     score = sum(weight * fraction for weight, fraction in weighted) / total_weight
+    # A candidate whose known experience exceeds the requested maximum (e.g. a
+    # 7-year profile for a "junior 0-2 ans" search) is strongly penalised so it
+    # cannot top the ranking, while staying visible rather than excluded.
+    if over_cap:
+        score *= _OVER_CAP_PENALTY
     return score, hits

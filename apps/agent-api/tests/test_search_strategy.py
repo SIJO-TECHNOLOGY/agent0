@@ -146,6 +146,60 @@ def test_domain_dimension_is_scoped_to_high_signal_text() -> None:
     assert "domain" in hits2
 
 
+def test_over_cap_candidate_is_penalised() -> None:
+    # "junior 0-2 ans" → required_max_years=2. A 7-year profile must score far
+    # below an in-band 1-year profile with the same skill match.
+    over, hits = evidence_score(
+        "python",
+        skills=("python",),
+        domains=(),
+        role=None,
+        candidate_min_years=7,
+        required_min_years=None,
+        required_max_years=2,
+    )
+    in_band, _ = evidence_score(
+        "python",
+        skills=("python",),
+        domains=(),
+        role=None,
+        candidate_min_years=1,
+        required_min_years=None,
+        required_max_years=2,
+    )
+    assert "seniority" not in hits      # over-cap loses the seniority credit
+    assert over < in_band               # and is strongly penalised
+    assert over < 0.5                   # cannot be a near-perfect match
+
+
+def test_within_cap_candidate_keeps_credit() -> None:
+    score, hits = evidence_score(
+        "python",
+        skills=("python",),
+        domains=(),
+        role=None,
+        candidate_min_years=2,
+        required_min_years=None,
+        required_max_years=2,
+    )
+    assert "seniority" in hits
+
+
+def test_unknown_years_not_hit_by_over_cap_multiplier() -> None:
+    # Unknown experience is "unproven" (seniority credit 0, like a min query),
+    # but it must NOT take the over-cap multiplier — so it ranks above a KNOWN
+    # over-cap profile.
+    unknown, _ = evidence_score(
+        "python", skills=("python",), domains=(), role=None,
+        candidate_min_years=None, required_min_years=None, required_max_years=2,
+    )
+    over_cap, _ = evidence_score(
+        "python", skills=("python",), domains=(), role=None,
+        candidate_min_years=7, required_min_years=None, required_max_years=2,
+    )
+    assert unknown > over_cap
+
+
 def test_evidence_score_seniority_below_required_earns_nothing() -> None:
     below, hits = evidence_score(
         "java",
