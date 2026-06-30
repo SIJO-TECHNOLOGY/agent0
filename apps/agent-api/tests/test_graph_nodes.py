@@ -275,7 +275,7 @@ async def test_select_tools_picks_search_candidates_over_legacy_mock() -> None:
     assert step.inputs == {
         "keywords": "java cib",
         "page": 1,
-        "numberPerPage": 8,
+        "numberPerPage": 40,
     }
 
 

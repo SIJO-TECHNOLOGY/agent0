@@ -72,7 +72,7 @@ EXPERIENCE_FIELDS: Final[tuple[str, ...]] = (
 )
 PAGE_FIELD: Final[str] = "page"
 SIZE_FIELDS: Final[tuple[str, ...]] = ("maxResults", "numberPerPage")
-_DEFAULT_SIZE: Final[int] = 25
+_DEFAULT_SIZE: Final[int] = 40
 
 
 @dataclass(frozen=True)
@@ -277,6 +277,24 @@ def build_recall_passes(
         add(
             "name",
             _keyword_inputs(anchors.name, fields, keywords_type="resumeTd"),
+            relaxed=False,
+        )
+
+    # Pass 0b — COMBINED content anchors (skills + domains/company) as ONE
+    # keyword query. BoondManager unions the terms and ranks by relevance, so a
+    # candidate matching the most discriminating terms (e.g. a company + a skill,
+    # "amundi java") surfaces at the top — far better recall than searching the
+    # generic skill alone. Role/seniority words are deliberately EXCLUDED here:
+    # in a full-text union they are noisy ("tech lead" pulls unrelated infra
+    # profiles). The role still drives the title pass below and the ranking.
+    content_terms: list[str] = []
+    for term in (*anchors.domains, *anchors.skills):
+        if term and term not in content_terms:
+            content_terms.append(term)
+    if len(content_terms) >= 2:
+        add(
+            "combined",
+            _keyword_inputs(" ".join(content_terms), fields, keywords_type="resumeTd"),
             relaxed=False,
         )
 

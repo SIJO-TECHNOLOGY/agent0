@@ -553,7 +553,7 @@ async def _build_search_candidates_inputs(
     if "page" in property_names and "page" not in inputs:
         inputs["page"] = 1
     if "numberPerPage" in property_names and "numberPerPage" not in inputs:
-        inputs["numberPerPage"] = 8
+        inputs["numberPerPage"] = 40
 
     return inputs, warnings
 

@@ -315,6 +315,30 @@ search) loses the seniority credit **and** the final score is multiplied by
 rather than being excluded. Unknown experience is never hit by the cap
 multiplier (we only penalise a known over-cap value).
 
+## Recall ladder (search retrieval)
+
+`searchCandidates` is a recall tool whose keyword search **unions** terms and
+ranks by relevance. `build_recall_passes` (`app/services/search_strategy.py`)
+turns the interpreted anchors into a bounded, keyword-only ladder:
+
+1. **name** (if a person is named) — strongest anchor, searched first.
+2. **combined** — the discriminating *content* anchors (domains/company +
+   skills) joined into ONE keyword query (e.g. "amundi java"). Because the
+   engine unions and ranks by relevance, candidates matching the most terms
+   surface at the top — far better recall than searching a generic skill alone.
+   **Generic role/seniority words are deliberately excluded** from this union:
+   in full-text they are noisy ("tech lead" pulls unrelated infra profiles).
+   Built only when there are ≥2 content anchors.
+3. **primary / role (titleSkills, title) / domain / remaining skills** — the
+   single-term relaxation passes, used as fallback.
+
+The ladder stops at the first pass that returns candidates (then complements it
+with a `titleSkills` pass). Page size is `numberPerPage` (≈40) so the ranker has
+enough candidates to work with — too small a page silently drops matching
+profiles ranked just outside the top-N by the provider. Role/seniority and the
+other criteria are applied in **ranking** (`evidence_score`), not as hard
+retrieval filters (structured id filters can kill recall).
+
 ## Retry Strategy
 
 - Retry only transient MCP client errors, timeouts, or rate-limit-style failures when safe.
