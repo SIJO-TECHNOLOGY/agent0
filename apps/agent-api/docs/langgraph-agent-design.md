@@ -77,6 +77,13 @@ Key invariants:
   off by `allow_clarification=false`; at most one clarification per request
   (`_already_clarified`); the criteria/warnings summary
   (`_reflection_criteria_summary`) tells the LLM what was unresolved.
+- **In-session conversation memory.** For clarification (and follow-up refining)
+  to work, the `/api/chat` layer accumulates the conversation's effective search
+  query per `conversation_id` (`_combine_query`): a follow-up turn refines the
+  prior request instead of restarting it (a bare "oui" adds nothing; duplicates
+  are skipped). So answering a clarification keeps the original criteria. This
+  state is in-memory and reset on new/deleted conversation — not persisted
+  across process restarts.
 
 ## Deterministic Workflow (fallback)
 

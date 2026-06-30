@@ -23,6 +23,36 @@ router = APIRouter(tags=["chat"])
 
 _CONVERSATIONS: dict[str, ConversationDetail] = {}
 _CANDIDATES: dict[str, dict[str, object]] = {}
+# In-session memory: the accumulated effective search query per conversation,
+# so follow-up turns (e.g. answering a clarification) refine the prior request
+# instead of restarting from scratch. Reset when a conversation is created or
+# deleted; not persisted across process restarts.
+_CONVERSATION_QUERIES: dict[str, str] = {}
+
+# Bare confirmations that carry no new search criteria on their own.
+_AFFIRMATIONS: frozenset[str] = frozenset(
+    {"oui", "non", "yes", "no", "ok", "okay", "d'accord", "daccord", "ouais", "yep", "yup"}
+)
+
+
+def _combine_query(prior: str, new_message: str) -> str:
+    """Accumulate the conversation's search context with the new message.
+
+    Keeps prior criteria so a follow-up refines rather than replaces them.
+    A bare confirmation ("oui") adds nothing; a message already contained in the
+    prior context is not duplicated.
+    """
+    new_clean = new_message.strip()
+    prior_clean = prior.strip()
+    if not prior_clean:
+        return new_clean
+    if not new_clean:
+        return prior_clean
+    if new_clean.lower().strip(" .!?") in _AFFIRMATIONS:
+        return prior_clean
+    if new_clean.lower() in prior_clean.lower():
+        return prior_clean
+    return f"{prior_clean} {new_clean}".strip()
 
 
 class _CaptureEventEmitter:
@@ -104,34 +134,66 @@ def _upsert_conversation(conversation_id: str, title: str) -> None:
     )
 
 
+def _record_turn(
+    conversation_id: str, *, user_message: str, assistant_message: str
+) -> None:
+    """Append a user/assistant turn to the conversation's in-session history."""
+    now = _now()
+    existing = _CONVERSATIONS.get(conversation_id)
+    if existing is None:
+        existing = ConversationDetail(
+            id=conversation_id,
+            title=user_message[:80] or "Nouvelle conversation",
+            created_at=now,
+            updated_at=now,
+            messages=[],
+        )
+    turns = [
+        *existing.messages,
+        {"role": "user", "content": user_message, "at": now},
+        {"role": "assistant", "content": assistant_message, "at": now},
+    ]
+    _CONVERSATIONS[conversation_id] = existing.model_copy(
+        update={"messages": turns, "updated_at": now}
+    )
+
+
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
     debug: bool = Query(default=False),
     service: SearchService = Depends(get_search_service),
 ) -> ChatResponse:
-    query = _query_from_payload(payload)
+    message = _query_from_payload(payload)
     conversation_id = _conversation_id(payload.conversation_id)
+    # Accumulate the conversation's search context so a follow-up (e.g. a
+    # clarification answer) refines the prior request instead of resetting it.
+    effective_query = _combine_query(
+        _CONVERSATION_QUERIES.get(conversation_id, ""), message
+    )
+
     if debug:
         emitter = _CaptureEventEmitter()
         search = await service.search_with_events(
-            SearchRequest(query=query, filters={}),
+            SearchRequest(query=effective_query, filters={}),
             emitter,
             debug_mode=True,
         )
         debug_payload: dict[str, object] = {
             "planner_mode": "llm" if service.llm_planner is not None else "deterministic",
             "events": emitter.events,
+            "effective_query": effective_query,
         }
     else:
-        search = await service.search(SearchRequest(query=query, filters={}))
+        search = await service.search(SearchRequest(query=effective_query, filters={}))
         debug_payload = {}
     response = _chat_response_from_search(
         conversation_id=conversation_id,
         search=search,
         debug=debug_payload,
     )
-    _upsert_conversation(conversation_id, query[:80])
+    _CONVERSATION_QUERIES[conversation_id] = effective_query
+    _record_turn(conversation_id, user_message=message, assistant_message=search.message)
     return response
 
 
@@ -170,6 +232,7 @@ async def get_conversation(conversation_id: str) -> ConversationDetail:
 @router.delete("/api/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(conversation_id: str) -> None:
     _CONVERSATIONS.pop(conversation_id, None)
+    _CONVERSATION_QUERIES.pop(conversation_id, None)  # reset accumulated context
 
 
 @router.get("/api/candidates/{candidate_id}")

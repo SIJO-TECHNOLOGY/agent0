@@ -5,6 +5,28 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from app.api.chat import _combine_query
+
+
+def test_combine_query_starts_fresh() -> None:
+    assert _combine_query("", "dev C# chez cacib") == "dev C# chez cacib"
+
+
+def test_combine_query_accumulates_followup() -> None:
+    assert (
+        _combine_query("dev C# chez cacib", "10 ans d'expérience")
+        == "dev C# chez cacib 10 ans d'expérience"
+    )
+
+
+def test_combine_query_ignores_bare_affirmation() -> None:
+    # "oui" confirms a clarification but adds no new criteria.
+    assert _combine_query("dev C# chez cacib", "oui") == "dev C# chez cacib"
+
+
+def test_combine_query_skips_duplicate() -> None:
+    assert _combine_query("dev C# chez cacib", "dev C#") == "dev C# chez cacib"
+
 
 @pytest.mark.asyncio
 async def test_chat_returns_frontend_shape(client: AsyncClient) -> None:
@@ -44,6 +66,38 @@ async def test_chat_debug_returns_planner_events(client: AsyncClient) -> None:
     assert debug["planner_mode"] in {"llm", "deterministic"}
     assert isinstance(debug["events"], list)
     assert any(event["type"] == "search_started" for event in debug["events"])
+
+
+@pytest.mark.asyncio
+async def test_followup_accumulates_conversation_context(client: AsyncClient) -> None:
+    # First turn establishes context.
+    first = await client.post(
+        "/api/chat?debug=true", json={"message": "dev C# chez cacib"}
+    )
+    assert first.status_code == 200
+    conv_id = first.json()["conversation_id"]
+    assert first.json()["debug"]["effective_query"] == "dev C# chez cacib"
+
+    # A follow-up in the SAME conversation refines, not resets: the prior
+    # criteria (cacib) are retained.
+    second = await client.post(
+        "/api/chat?debug=true",
+        json={"message": "10 ans d'expérience", "conversation_id": conv_id},
+    )
+    assert second.status_code == 200
+    effective = second.json()["debug"]["effective_query"]
+    assert "cacib" in effective
+    assert "10 ans" in effective
+
+
+@pytest.mark.asyncio
+async def test_conversation_records_messages(client: AsyncClient) -> None:
+    resp = await client.post("/api/chat", json={"message": "Find Java consultants"})
+    conv_id = resp.json()["conversation_id"]
+    detail = await client.get(f"/api/conversations/{conv_id}")
+    messages = detail.json()["messages"]
+    assert any(m["role"] == "user" for m in messages)
+    assert any(m["role"] == "assistant" for m in messages)
 
 
 @pytest.mark.asyncio
