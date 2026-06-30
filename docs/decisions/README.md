@@ -16,3 +16,4 @@ Use this folder to record meaningful technical decisions as the project evolves.
 - [ADR-009 - Agent API Milestone 1 Boundary And Evidence Verification](./adr-009-agent-api-milestone-1-boundary.md)
 - [ADR-010 - LLM-Driven Bounded Replan](./adr-010-llm-driven-bounded-replan.md) - records the bounded ReAct/control-loop decision for LLM observe-then-replan.
 - [ADR-011 - Agent1: Candidate Data Normalization](./adr-011-agent1-candidate-data-normalization.md) - records the deterministic-first data-quality layer with optional, conflict-only LLM reconciliation.
+- [ADR-012 - Reflection Decides Clarify-or-Retry](./adr-012-clarify-or-retry.md) - the post-ranking reflection may ask the user to clarify (unresolved parameter) instead of accepting or retrying.

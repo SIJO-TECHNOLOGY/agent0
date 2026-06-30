@@ -435,13 +435,17 @@ def parse_plan_response(text: str) -> LlmToolPlan:
 
 
 class ReflectionVerdict(BaseModel):
-    """LLM judgement on whether the current results warrant another pass."""
+    """LLM judgement: accept the results, replan a search, or ask the user."""
 
     model_config = ConfigDict(extra="ignore")
 
     needs_replan: bool = Field(default=False)
     reason: str = Field(default="")
     guidance: str = Field(default="")
+    # Clarification path: ask the user instead of (or before) replanning.
+    needs_clarification: bool = Field(default=False)
+    clarification_question: str = Field(default="")
+    clarification_fields: list[str] = Field(default_factory=list)
 
 
 def build_reflection_prompt(
@@ -449,6 +453,7 @@ def build_reflection_prompt(
     role: str,
     query: str,
     results_summary: str,
+    criteria_summary: str = "",
 ) -> tuple[str, str]:
     """Build the (system, user) prompt for the post-ranking reflection.
 
@@ -460,24 +465,37 @@ def build_reflection_prompt(
     system = (
         f"{persona}"
         "You are reviewing the ranked candidates a search just produced and "
-        "deciding whether ONE more, better-targeted search pass is warranted. "
+        "choosing ONE of three outcomes: ACCEPT the results, RETRY one more "
+        "better-targeted search, or ASK THE USER to clarify. "
         "Return a JSON object and nothing else (no prose, no markdown fences) "
         "with exactly these keys:\n"
-        '{"needs_replan": true|false, "reason": "...", "guidance": "..."}\n\n'
+        '{"needs_replan": true|false, "guidance": "...", '
+        '"needs_clarification": true|false, "clarification_question": "...", '
+        '"clarification_fields": ["..."], "reason": "..."}\n\n'
         "RULES:\n"
-        "1. Set `needs_replan` true ONLY if another search would plausibly find "
-        "materially better candidates (e.g. the top results miss the core "
-        "requirement, or too few real matches were found). If the results are "
-        "already a reasonable answer, set it false.\n"
-        "2. When true, `guidance` MUST be a short, concrete instruction for the "
-        "next plan — what to change (keywords, ranking_priority, broaden or "
-        "drop a constraint). Do not restate the query verbatim.\n"
-        "3. Be conservative: a replan costs time. Prefer false when unsure.\n"
-        "4. Judge only from the evidence shown; never invent candidate facts."
+        "1. ACCEPT (all false) when the results are already a reasonable answer.\n"
+        "2. RETRY (`needs_replan` true) ONLY if another search would plausibly "
+        "find materially better candidates (top results miss the core "
+        "requirement, or too few real matches). `guidance` MUST be a short, "
+        "concrete instruction for the next plan (keywords, ranking_priority, "
+        "broaden/drop a constraint). Do not restate the query verbatim.\n"
+        "3. ASK (`needs_clarification` true) when a RETRY would NOT help without "
+        "more information — ESPECIALLY when a query PARAMETER could not be "
+        "resolved or is ambiguous (an unrecognised technology/skill, an unknown "
+        "location or company, contradictory criteria, or a query too vague to "
+        "target). `clarification_question` MUST be one short, friendly question "
+        "naming exactly what you need; `clarification_fields` lists 1-3 short "
+        "machine field names (e.g. [\"skill\", \"location\"]).\n"
+        "4. Pick AT MOST ONE of retry/ask. Prefer ASK over RETRY when the "
+        "problem is an unresolved/ambiguous parameter; prefer ACCEPT when "
+        "unsure (do not pester the user needlessly).\n"
+        "5. Judge only from the evidence shown; never invent candidate facts."
     )
+    criteria = f"\nInterpreted criteria & resolution notes:\n{criteria_summary}\n" if criteria_summary else ""
     user = (
-        f"User query: {query!r}\n\n"
-        f"Current ranked candidates (top results):\n{results_summary}\n\n"
+        f"User query: {query!r}\n"
+        f"{criteria}"
+        f"\nCurrent ranked candidates (top results):\n{results_summary}\n\n"
         "Return the JSON verdict now."
     )
     return system, user
@@ -610,15 +628,19 @@ class StructuredLlmPlanner(LlmPlanner):
         *,
         query: str,
         results_summary: str,
+        criteria_summary: str = "",
         emitter: EventEmitter | None = None,
     ) -> ReflectionVerdict:
-        """Ask the LLM whether the ranked results warrant one more pass.
+        """Ask the LLM to accept, replan, or ask the user to clarify.
 
-        Parsing is fail-safe: a malformed reflection yields
-        ``needs_replan=False`` so a bad response can never trigger a loop.
+        Parsing is fail-safe: a malformed reflection yields an all-false verdict
+        so a bad response can never trigger a loop or a spurious clarification.
         """
         system, user = build_reflection_prompt(
-            role=self._role, query=query, results_summary=results_summary
+            role=self._role,
+            query=query,
+            results_summary=results_summary,
+            criteria_summary=criteria_summary,
         )
         raw_text = await self._chat_fn(system, user)
         verdict = parse_reflection_response(raw_text)
@@ -626,6 +648,7 @@ class StructuredLlmPlanner(LlmPlanner):
             "llm_planner.reflection",
             extra={
                 "needs_replan": verdict.needs_replan,
+                "needs_clarification": verdict.needs_clarification,
                 "reason": verdict.reason[:200],
             },
         )

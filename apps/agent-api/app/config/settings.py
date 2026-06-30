@@ -110,6 +110,15 @@ class Settings(BaseSettings):
         default=6, ge=1, le=20,
         description="Hard upper bound on planned tool calls per query.",
     )
+    allow_clarification: bool = Field(
+        default=True,
+        description=(
+            "When true (and the LLM workflow runs), Agent0's post-ranking "
+            "reflection may ask the user to clarify — instead of replanning — "
+            "when a query parameter could not be resolved. At most one "
+            "clarification per request."
+        ),
+    )
     # --- Agent1 LLM reconciliation (data-coherence judge) --------------------
     agent1_llm_reconciliation: bool = Field(
         default=False,

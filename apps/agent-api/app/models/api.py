@@ -77,6 +77,31 @@ class CandidateCardsUI(BaseModel):
     candidates: list[CandidateCard] = Field(default_factory=list)
 
 
+class ClarificationQuestion(BaseModel):
+    """A single field the user is asked to fill to refine the search."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    label: str
+    required: bool = False
+
+
+class ClarificationUI(BaseModel):
+    """UI block asking the user to clarify their search before retrying.
+
+    Emitted when Agent0 judges that another search would not help without more
+    information (e.g. a query parameter could not be resolved). The frontend
+    renders a small form and resends the answers as an ``interaction``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["clarification"] = "clarification"
+    title: str = ""
+    questions: list[ClarificationQuestion] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     """Frontend-oriented search response envelope.
 
@@ -89,7 +114,7 @@ class SearchResponse(BaseModel):
 
     conversation_id: str
     message: str
-    ui: CandidateCardsUI
+    ui: CandidateCardsUI | ClarificationUI
 
 
 class ChatRequest(BaseModel):

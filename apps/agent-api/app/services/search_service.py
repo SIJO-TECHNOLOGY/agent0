@@ -12,6 +12,8 @@ from app.mcp.client import McpClient
 from app.models.api import (
     CandidateCard,
     CandidateCardsUI,
+    ClarificationQuestion,
+    ClarificationUI,
     SearchRequest,
     SearchResponse,
 )
@@ -47,6 +49,7 @@ class SearchService:
         semantic_scorer: SemanticScorer | None = None,
         semantic_boost_weight: float = 0.15,
         agent1_reconciler: Agent1Reconciler | None = None,
+        allow_clarification: bool = True,
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
@@ -60,6 +63,7 @@ class SearchService:
         self._semantic_scorer = semantic_scorer
         self._semantic_boost_weight = semantic_boost_weight
         self._agent1_reconciler = agent1_reconciler
+        self._allow_clarification = allow_clarification
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -81,6 +85,7 @@ class SearchService:
             semantic_scorer=self._semantic_scorer,
             semantic_boost_weight=self._semantic_boost_weight,
             agent1_reconciler=self._agent1_reconciler,
+            allow_clarification=self._allow_clarification,
         )
 
     async def search(
@@ -150,13 +155,60 @@ class SearchService:
             },
         )
 
-        response = SearchResponse(
-            conversation_id=conversation_id,
-            message=_build_message(candidates, final_state, language=ui_language),
-            ui=CandidateCardsUI(candidates=candidates),
-        )
+        # Agent0 may have decided to ask the user to clarify rather than return
+        # (poor) results — emit a clarification UI instead of candidate cards.
+        if final_state.clarification_question.strip():
+            response = _clarification_response(
+                conversation_id, final_state, language=ui_language
+            )
+        else:
+            response = SearchResponse(
+                conversation_id=conversation_id,
+                message=_build_message(candidates, final_state, language=ui_language),
+                ui=CandidateCardsUI(candidates=candidates),
+            )
         await emitter.emit("final_response", response.model_dump())
         return response
+
+
+_CLARIFICATION_FIELD_LABELS_FR: dict[str, str] = {
+    "skill": "Compétence / technologie",
+    "skills": "Compétences / technologies",
+    "role": "Rôle / poste",
+    "location": "Localisation",
+    "company": "Entreprise",
+    "domain": "Domaine / secteur",
+    "experience": "Années d'expérience",
+    "seniority": "Séniorité",
+    "details": "Précisions",
+}
+
+
+def _clarification_response(
+    conversation_id: str, final_state: GraphState, *, language: str | None = None
+) -> SearchResponse:
+    """Build a clarification UI response from the reflection's decision."""
+    lang = _normalize_language(language)
+    question = final_state.clarification_question.strip()
+    fields = final_state.clarification_fields or ["details"]
+    questions = [
+        ClarificationQuestion(
+            field=field,
+            label=_CLARIFICATION_FIELD_LABELS_FR.get(field, field.replace("_", " ").capitalize()),
+            required=(index == 0),
+        )
+        for index, field in enumerate(fields)
+    ]
+    title = (
+        "Quelques précisions pour affiner la recherche"
+        if lang == "fr"
+        else "A few details to refine the search"
+    )
+    return SearchResponse(
+        conversation_id=conversation_id,
+        message=question,
+        ui=ClarificationUI(title=title, questions=questions),
+    )
 
 
 # Warning codes that indicate the search ran with reduced criteria

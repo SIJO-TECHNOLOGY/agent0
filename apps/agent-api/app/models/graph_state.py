@@ -40,3 +40,15 @@ class GraphState(BaseModel):
             "cleared by plan_with_llm so the bounded loop cannot spin."
         ),
     )
+    clarification_question: str = Field(
+        default="",
+        description=(
+            "Non-empty when Agent0's reflection decided to ask the user for "
+            "clarification instead of replanning. Drives a clarification UI in "
+            "the final response; the run finalizes (no further search pass)."
+        ),
+    )
+    clarification_fields: list[str] = Field(
+        default_factory=list,
+        description="Field names the user is asked to provide in the clarification form.",
+    )

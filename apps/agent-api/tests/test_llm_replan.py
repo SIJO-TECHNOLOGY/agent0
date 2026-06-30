@@ -34,12 +34,13 @@ class _ReflectPlanner:
         self._verdict = verdict
         self.calls = 0
 
-    async def reflect(self, *, query, results_summary, emitter=None):
+    async def reflect(self, *, query, results_summary, criteria_summary="", emitter=None):
         self.calls += 1
         return self._verdict
 
 
-def _ctx(planner, *, emitter=None, max_replan=1, use_llm_replan=True, skip=0.8):
+def _ctx(planner, *, emitter=None, max_replan=1, use_llm_replan=True, skip=0.8,
+         allow_clarification=True):
     return NodeContext(
         mcp_client=MockMcpClient(),
         max_replan_attempts=max_replan,
@@ -47,6 +48,7 @@ def _ctx(planner, *, emitter=None, max_replan=1, use_llm_replan=True, skip=0.8):
         use_llm_replan=use_llm_replan,
         replan_skip_score=skip,
         event_emitter=emitter or _RecordingEmitter(),
+        allow_clarification=allow_clarification,
     )
 
 
@@ -74,6 +76,55 @@ def _weak_state() -> GraphState:
 # ---------------------------------------------------------------------------
 # reflect_on_results — the LLM-driven replan decision + its safety gates
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reflect_requests_clarification() -> None:
+    planner = _ReflectPlanner(
+        ReflectionVerdict(
+            needs_clarification=True,
+            clarification_question="Quelle technologie précisément ?",
+            clarification_fields=["skill"],
+        )
+    )
+    out = await reflect_on_results(_weak_state(), _ctx(planner))
+    assert out.clarification_question == "Quelle technologie précisément ?"
+    assert out.clarification_fields == ["skill"]
+    assert out.replan_feedback == ""  # clarify, not replan
+
+
+@pytest.mark.asyncio
+async def test_clarification_takes_precedence_over_replan() -> None:
+    planner = _ReflectPlanner(
+        ReflectionVerdict(
+            needs_replan=True,
+            guidance="broaden",
+            needs_clarification=True,
+            clarification_question="Quelle localisation ?",
+            clarification_fields=["location"],
+        )
+    )
+    out = await reflect_on_results(_weak_state(), _ctx(planner))
+    assert out.clarification_question == "Quelle localisation ?"
+    assert out.replan_feedback == ""
+    assert out.replan_count == 0
+
+
+@pytest.mark.asyncio
+async def test_clarification_ignored_when_disabled() -> None:
+    planner = _ReflectPlanner(
+        ReflectionVerdict(
+            needs_clarification=True,
+            clarification_question="?",
+            clarification_fields=["skill"],
+            needs_replan=True,
+            guidance="broaden",
+        )
+    )
+    out = await reflect_on_results(_weak_state(), _ctx(planner, allow_clarification=False))
+    # Clarification off → falls through to the replan path.
+    assert out.clarification_question == ""
+    assert out.replan_feedback == "broaden"
 
 
 @pytest.mark.asyncio
@@ -209,7 +260,7 @@ class _LoopPlanner:
             plan=[PlannedToolCall(tool_name="searchCandidates", inputs={"keywords": "java"})],
         )
 
-    async def reflect(self, *, query, results_summary, emitter=None):
+    async def reflect(self, *, query, results_summary, criteria_summary="", emitter=None):
         self.reflect_calls += 1
         return ReflectionVerdict(needs_replan=True, reason="weak", guidance="add seniority")
 

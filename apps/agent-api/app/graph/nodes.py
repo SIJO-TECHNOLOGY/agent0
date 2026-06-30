@@ -101,6 +101,7 @@ class NodeContext:
     semantic_scorer: SemanticScorer | None = None
     semantic_boost_weight: float = 0.15
     agent1_reconciler: Agent1Reconciler | None = None
+    allow_clarification: bool = True
 
 
 def _replace(state: GraphState, **changes: object) -> GraphState:
@@ -1100,6 +1101,32 @@ def _reflection_results_summary(state: GraphState, *, limit: int = 8) -> str:
     return "\n".join(lines) if lines else "(no candidates returned)"
 
 
+def _reflection_criteria_summary(state: GraphState) -> str:
+    """What the search interpreted + any unresolved-parameter signals.
+
+    Helps the reflection decide between retry and clarification: a parameter the
+    pipeline could not resolve (an unrecognised skill/filter) is the prime
+    reason to ask the user rather than blindly retry.
+    """
+    parts: list[str] = []
+    intent = state.interpreted_intent
+    if intent is not None:
+        if intent.entities:
+            parts.append(f"skills/entities: {', '.join(map(str, intent.entities))}")
+        if intent.constraints:
+            kv = ", ".join(f"{k}={v}" for k, v in intent.constraints.items() if v)
+            if kv:
+                parts.append(f"constraints: {kv}")
+    # Warning codes flag things the pipeline could not resolve/satisfy.
+    codes = [
+        getattr(w, "code", "") for w in state.warnings if getattr(w, "code", "")
+    ]
+    if codes:
+        parts.append(f"resolution warnings: {', '.join(codes)}")
+    parts.append(f"candidates found: {sum(1 for r in state.results if r.source_tool.startswith('search'))}")
+    return "\n".join(f"- {p}" for p in parts)
+
+
 async def reflect_on_results(state: GraphState, ctx: NodeContext) -> GraphState:
     """LLM-driven replan decision (bounded reflection).
 
@@ -1117,19 +1144,41 @@ async def reflect_on_results(state: GraphState, ctx: NodeContext) -> GraphState:
         return state
     if _results_already_strong(state, ctx.replan_skip_score):
         return state
+    replan_possible = True
+    # Clarification offered only when allowed and the user wasn't already asked.
+    clarification_ok = ctx.allow_clarification and not _already_clarified(state)
 
     try:
         verdict = await reflect(
             query=state.original_query,
             results_summary=_reflection_results_summary(state),
+            criteria_summary=_reflection_criteria_summary(state),
             emitter=ctx.event_emitter,
         )
     except Exception as exc:  # noqa: BLE001 — fail safe: never loop on error
         logger.warning("graph.reflect_failed", extra={"error": str(exc)})
         return state
 
+    # Clarification takes precedence over replan (ask before retrying blindly).
+    question = (getattr(verdict, "clarification_question", "") or "").strip()
+    if clarification_ok and getattr(verdict, "needs_clarification", False) and question:
+        fields = [
+            str(f).strip()
+            for f in (getattr(verdict, "clarification_fields", None) or [])
+            if str(f).strip()
+        ] or ["details"]
+        await ctx.event_emitter.emit(
+            "clarification_requested",
+            {"question": question[:300], "fields": fields, "decided_by": "llm"},
+        )
+        return _replace(
+            state,
+            clarification_question=question,
+            clarification_fields=fields,
+        )
+
     guidance = (getattr(verdict, "guidance", "") or "").strip()
-    if not getattr(verdict, "needs_replan", False) or not guidance:
+    if not replan_possible or not getattr(verdict, "needs_replan", False) or not guidance:
         return state
 
     await ctx.event_emitter.emit(
@@ -1146,6 +1195,11 @@ async def reflect_on_results(state: GraphState, ctx: NodeContext) -> GraphState:
         replan_count=state.replan_count + 1,
         replan_feedback=guidance,
     )
+
+
+def _already_clarified(state: GraphState) -> bool:
+    """True if this run already asked the user to clarify (avoid re-asking)."""
+    return bool(state.clarification_question.strip())
 
 
 def should_replan_llm(state: GraphState) -> str:

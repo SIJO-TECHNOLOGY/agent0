@@ -154,5 +154,6 @@ The MCP server must be running and configured with a valid
 - [ADR-009 - Agent API Milestone 1 Boundary And Evidence Verification](../../docs/decisions/adr-009-agent-api-milestone-1-boundary.md) explains what Agent API Milestone 1 covers and which precision work is deferred to a later milestone gated by MCP-side improvements.
 - [ADR-010 - LLM-Driven Bounded Replan](../../docs/decisions/adr-010-llm-driven-bounded-replan.md) explains the bounded observe-then-replan loop in the LLM workflow.
 - [ADR-011 - Agent1: Candidate Data Normalization](../../docs/decisions/adr-011-agent1-candidate-data-normalization.md) explains the deterministic-first candidate data-quality layer and its optional, conflict-only LLM reconciliation.
+- [ADR-012 - Reflection Decides Clarify-or-Retry](../../docs/decisions/adr-012-clarify-or-retry.md) explains how the post-ranking reflection may ask the user to clarify an unresolved parameter instead of accepting or retrying.
 - [Milestone 001 - Agent API MCP Fuzzy Search](../../docs/milestones/milestone-001-agent-api-mcp-fuzzy-search.md) records the orchestration milestone with reproducible verification evidence.
 - [Milestone 002 - Bounded ReAct Control Loop](../../docs/milestones/milestone-002-bounded-react-control-loop.md) defines the certification target for the bounded ReAct control-loop migration.

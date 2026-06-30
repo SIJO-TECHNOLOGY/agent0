@@ -66,6 +66,7 @@ def get_search_service(
         semantic_scorer=semantic_scorer,
         semantic_boost_weight=settings.semantic_boost_weight,
         agent1_reconciler=agent1_reconciler,
+        allow_clarification=settings.allow_clarification,
     )
 
 

@@ -32,7 +32,9 @@ flowchart TD
     E --> F["rank_candidates"]
     F --> G["reflect_on_results"]
     G -->|"LLM: needs_replan (budget left)"| B
-    G -->|"good enough / budget spent"| H["generate_final_response"]
+    G -->|"LLM: needs_clarification"| H["generate_final_response"]
+    G -->|"good enough / budget spent"| H
+    H -->|"clarification pending"| K["clarification UI"]
 ```
 
 Key invariants:
@@ -62,6 +64,19 @@ Key invariants:
     and cleared by `plan_with_llm` on consumption, so the loop cannot
     spin. Re-runs **accumulate** candidates (executor de-dupes by
     `(source_tool, id)`) — a replan adds better-targeted profiles.
+- **Reflect: accept / retry / clarify.** The same `reflect_on_results` call now
+  picks one of three outcomes (the LLM decides). Besides accept and retry it may
+  **ask the user to clarify** — used mainly when a query parameter could not be
+  resolved (an unrecognised skill, an unknown location/company, contradictory
+  or too-vague criteria). It returns `needs_clarification` + a
+  `clarification_question` + `clarification_fields`; the node sets
+  `GraphState.clarification_question` (clarification takes precedence over
+  replan), the run finalizes, and `search_service` emits a `clarification` UI
+  (rendered as a small form; the answers come back as an `interaction` and are
+  merged into the next query). Guards: gated by the same reflection budget;
+  off by `allow_clarification=false`; at most one clarification per request
+  (`_already_clarified`); the criteria/warnings summary
+  (`_reflection_criteria_summary`) tells the LLM what was unresolved.
 
 ## Deterministic Workflow (fallback)
 

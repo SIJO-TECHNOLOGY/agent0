@@ -74,10 +74,9 @@ def _chat_response_from_search(
     search: SearchResponse,
     debug: dict[str, object] | None = None,
 ) -> ChatResponse:
-    candidates = [
-        candidate.model_dump()
-        for candidate in search.ui.candidates
-    ]
+    # Non-candidate UIs (e.g. clarification) carry no candidates.
+    ui_candidates = getattr(search.ui, "candidates", None) or []
+    candidates = [candidate.model_dump() for candidate in ui_candidates]
     for candidate in candidates:
         _CANDIDATES[str(candidate["id"])] = candidate
 
