@@ -1,4 +1,4 @@
-import {
+﻿import {
   API_ENDPOINTS,
   API_URL,
   CHAT_TIMEOUT_MS,
@@ -131,7 +131,7 @@ async function devRequest(path, options = {}) {
 
     return {
       id,
-      title: "Conversation de développement",
+      title: "Conversation de dÃ©veloppement",
       messages: [],
     };
   }
@@ -152,10 +152,10 @@ async function devRequest(path, options = {}) {
     if (body.interaction?.type === "clarification") {
       return {
         conversation_id: body.conversation_id || `dev_${Date.now()}`,
-        message: "Merci, je relance la recherche avec ces précisions.",
+        message: "Merci, je relance la recherche avec ces prÃ©cisions.",
         ui: {
           type: "candidate_cards",
-          title: "3 profils pertinents trouvés",
+          title: "3 profils pertinents trouvÃ©s",
           subtitle: "2 profils disponibles rapidement",
           filters_summary: ["Java", "Senior", "Paris", "Finance"],
         },
@@ -166,14 +166,14 @@ async function devRequest(path, options = {}) {
     if (/technique|technical|analyse/i.test(message)) {
       return {
         conversation_id: body.conversation_id || `dev_${Date.now()}`,
-        message: "Voici l’analyse technique du profil.",
+        message: "Voici lâ€™analyse technique du profil.",
         ui: {
           type: "technical_summary",
-          title: "Analyse technique — Sarah Martin",
-          summary: "Profil très solide sur Java/Spring avec une expérience microservices.",
-          strengths: ["Java avancé", "Architecture microservices", "Kafka"],
-          weaknesses: ["Peu d’expérience frontend"],
-          languages: ["Français courant", "Anglais professionnel"],
+          title: "Analyse technique â€” Sarah Martin",
+          summary: "Profil trÃ¨s solide sur Java/Spring avec une expÃ©rience microservices.",
+          strengths: ["Java avancÃ©", "Architecture microservices", "Kafka"],
+          weaknesses: ["Peu dâ€™expÃ©rience frontend"],
+          languages: ["FranÃ§ais courant", "Anglais professionnel"],
           tools: [
             { name: "Java", level: 5 },
             { name: "Spring Boot", level: 4 },
@@ -182,17 +182,17 @@ async function devRequest(path, options = {}) {
       };
     }
 
-    if (/d[eé]tail|profil/i.test(message)) {
+    if (/d[eÃ©]tail|profil/i.test(message)) {
       return {
         conversation_id: body.conversation_id || `dev_${Date.now()}`,
-        message: "Voici le détail du candidat.",
+        message: "Voici le dÃ©tail du candidat.",
         ui: {
           type: "candidate_detail",
           candidate: {
             ...getDevCandidates()[1],
             contract_preferences: ["CDI", "Freelance"],
-            salary_expectation: "55k€",
-            tjm: "600€",
+            salary_expectation: "55kâ‚¬",
+            tjm: "600â‚¬",
           },
         },
       };
@@ -200,10 +200,10 @@ async function devRequest(path, options = {}) {
 
     return {
       conversation_id: body.conversation_id || `dev_${Date.now()}`,
-      message: "J’ai trouvé 3 candidats correspondant à votre recherche.",
+      message: "Jâ€™ai trouvÃ© 3 candidats correspondant Ã  votre recherche.",
       ui: {
         type: "candidate_cards",
-        title: "3 profils pertinents trouvés",
+        title: "3 profils pertinents trouvÃ©s",
         subtitle: "2 profils disponibles rapidement",
         filters_summary: ["Java", "Senior", "Paris", "Finance"],
         candidates: getDevCandidates(),
@@ -234,8 +234,8 @@ async function devStreamSearch(query, onEvent, { signal } = {}) {
       data: {
         conversation_id: conversationId,
         message: candidates.length
-          ? `J’ai trouvé ${candidates.length} candidat(s) (mode mock).`
-          : "Aucun candidat trouvé (mode mock).",
+          ? `Jâ€™ai trouvÃ© ${candidates.length} candidat(s) (mode mock).`
+          : "Aucun candidat trouvÃ© (mode mock).",
         ui: { type: "candidate_cards", candidates },
       },
     },
@@ -265,102 +265,102 @@ function getDevCandidates() {
     {
       id: "dev_candidate_1",
       full_name: "Jean Dupont",
-      title: "Développeur Java Fullstack",
+      title: "DÃ©veloppeur Java Fullstack",
       experience_years: 5,
       location: "Paris",
       availability: "Disponible sous 1 mois",
       skills: ["Java", "Spring Boot", "Angular", "PostgreSQL", "Docker", "Finance"],
       match_score: 0.92,
-      summary: "Profil fullstack Java/Spring avec une expérience significative dans le secteur bancaire.",
+      summary: "Profil fullstack Java/Spring avec une expÃ©rience significative dans le secteur bancaire.",
       contract_preferences: ["CDI", "Freelance"],
-      salary_expectation: "58k€",
-      tjm: "620€",
+      salary_expectation: "58kâ‚¬",
+      tjm: "620â‚¬",
       mobility: "Paris et hybride",
       highlights: ["Java", "Spring Boot", "Finance"],
       ai_evaluation: {
-        label: "Évaluation IA",
-        score_label: "Match idéal - 92%",
+        label: "Ã‰valuation IA",
+        score_label: "Match idÃ©al - 92%",
         reasons: [
-          "Expérience Java/Spring cohérente avec le besoin",
-          "Expérience récente dans le secteur bancaire",
+          "ExpÃ©rience Java/Spring cohÃ©rente avec le besoin",
+          "ExpÃ©rience rÃ©cente dans le secteur bancaire",
           "Disponible rapidement",
         ],
       },
       experiences: [
-        { title: "Développeur Java Fullstack", company: "Banque Populaire", period: "janv. 2022 - présent" },
-        { title: "Ingénieur logiciel Java", company: "Société Générale", period: "mars 2020 - déc. 2021" },
-        { title: "Développeur Angular / Spring", company: "Crédit Agricole", period: "sept. 2018 - févr. 2020" },
+        { title: "DÃ©veloppeur Java Fullstack", company: "Banque Populaire", period: "janv. 2022 - prÃ©sent" },
+        { title: "IngÃ©nieur logiciel Java", company: "SociÃ©tÃ© GÃ©nÃ©rale", period: "mars 2020 - dÃ©c. 2021" },
+        { title: "DÃ©veloppeur Angular / Spring", company: "CrÃ©dit Agricole", period: "sept. 2018 - fÃ©vr. 2020" },
       ],
-      strengths: ["Très bon alignement Java/Spring", "Expérience finance", "Autonomie sur applications internes"],
-      watch_points: ["Disponibilité sous un mois à confirmer"],
+      strengths: ["TrÃ¨s bon alignement Java/Spring", "ExpÃ©rience finance", "Autonomie sur applications internes"],
+      watch_points: ["DisponibilitÃ© sous un mois Ã  confirmer"],
       technical_summary: "Solide socle Java/Spring Boot avec pratique Angular et bases PostgreSQL.",
       boond_url: "https://ui.boondmanager.com/",
     },
     {
       id: "dev_candidate_2",
       full_name: "Sarah Martin",
-      title: "Ingénieure Backend Java",
+      title: "IngÃ©nieure Backend Java",
       experience_years: 7,
-      location: "Île-de-France",
-      availability: "Disponible immédiatement",
+      location: "ÃŽle-de-France",
+      availability: "Disponible immÃ©diatement",
       skills: ["Java", "Spring", "Microservices", "Kafka", "Cloud", "SQL"],
       match_score: 0.88,
-      summary: "Profil backend confirmé, orienté architecture microservices et environnements exigeants.",
+      summary: "Profil backend confirmÃ©, orientÃ© architecture microservices et environnements exigeants.",
       contract_preferences: ["CDI"],
-      salary_expectation: "62k€",
-      tjm: "650€",
-      mobility: "Île-de-France",
+      salary_expectation: "62kâ‚¬",
+      tjm: "650â‚¬",
+      mobility: "ÃŽle-de-France",
       highlights: ["Java", "Kafka", "Microservices"],
       ai_evaluation: {
-        label: "Évaluation IA",
-        score_label: "Très bon match - 88%",
+        label: "Ã‰valuation IA",
+        score_label: "TrÃ¨s bon match - 88%",
         reasons: [
-          "Expérience backend confirmée",
+          "ExpÃ©rience backend confirmÃ©e",
           "Forte exposition microservices et Kafka",
-          "Disponible immédiatement",
+          "Disponible immÃ©diatement",
         ],
       },
       experiences: [
-        { title: "Ingénieure Backend Java", company: "Euronext", period: "mai 2023 - présent" },
+        { title: "IngÃ©nieure Backend Java", company: "Euronext", period: "mai 2023 - prÃ©sent" },
         { title: "Tech Lead Java", company: "AXA", period: "janv. 2021 - avr. 2023" },
-        { title: "Développeuse Java", company: "Orange Business", period: "sept. 2018 - déc. 2020" },
+        { title: "DÃ©veloppeuse Java", company: "Orange Business", period: "sept. 2018 - dÃ©c. 2020" },
       ],
-      strengths: ["Microservices", "Kafka", "Disponibilité immédiate"],
-      watch_points: ["Peu d'expérience frontend indiquée"],
-      technical_summary: "Profil backend senior avec bonne profondeur sur Java, Spring et architectures distribuées.",
+      strengths: ["Microservices", "Kafka", "DisponibilitÃ© immÃ©diate"],
+      watch_points: ["Peu d'expÃ©rience frontend indiquÃ©e"],
+      technical_summary: "Profil backend senior avec bonne profondeur sur Java, Spring et architectures distribuÃ©es.",
       boond_url: "https://ui.boondmanager.com/",
     },
     {
       id: "dev_candidate_3",
       full_name: "Karim Benali",
-      title: "Développeur Fullstack",
+      title: "DÃ©veloppeur Fullstack",
       experience_years: 4,
       location: "Lyon / Remote",
-      availability: "Préavis 2 mois",
+      availability: "PrÃ©avis 2 mois",
       skills: ["Java", "React", "Node.js", "Docker", "CI/CD"],
       match_score: 0.72,
-      summary: "Profil polyvalent fullstack avec bonne autonomie et expérience sur applications web internes.",
+      summary: "Profil polyvalent fullstack avec bonne autonomie et expÃ©rience sur applications web internes.",
       contract_preferences: ["Freelance"],
       salary_expectation: null,
-      tjm: "520€",
+      tjm: "520â‚¬",
       mobility: "Remote majoritaire",
       highlights: ["Java", "React", "Docker"],
       ai_evaluation: {
-        label: "Évaluation IA",
-        score_label: "Match intéressant - 72%",
+        label: "Ã‰valuation IA",
+        score_label: "Match intÃ©ressant - 72%",
         reasons: [
           "Profil fullstack polyvalent",
-          "Compétences Java et React utiles",
-          "Disponibilité moins immédiate",
+          "CompÃ©tences Java et React utiles",
+          "DisponibilitÃ© moins immÃ©diate",
         ],
       },
       experiences: [
-        { title: "Développeur Fullstack", company: "Cegid", period: "févr. 2022 - présent" },
-        { title: "Développeur Java / React", company: "Sopra Steria", period: "sept. 2020 - janv. 2022" },
+        { title: "DÃ©veloppeur Fullstack", company: "Cegid", period: "fÃ©vr. 2022 - prÃ©sent" },
+        { title: "DÃ©veloppeur Java / React", company: "Sopra Steria", period: "sept. 2020 - janv. 2022" },
       ],
-      strengths: ["Polyvalence fullstack", "Bonne autonomie", "Expérience Docker"],
-      watch_points: ["Préavis de deux mois", "Moins spécialisé finance"],
-      technical_summary: "Profil équilibré Java/React avec culture produit interne et pratiques DevOps de base.",
+      strengths: ["Polyvalence fullstack", "Bonne autonomie", "ExpÃ©rience Docker"],
+      watch_points: ["PrÃ©avis de deux mois", "Moins spÃ©cialisÃ© finance"],
+      technical_summary: "Profil Ã©quilibrÃ© Java/React avec culture produit interne et pratiques DevOps de base.",
       boond_url: "https://ui.boondmanager.com/",
     },
   ];
@@ -464,7 +464,7 @@ function normalizeCandidate(ui) {
 function logDevChatDebug(response) {
   if (!DEV_MODE) return;
 
-  console.log("[DEV] Réponse normalisée", response);
+  console.log("[DEV] RÃ©ponse normalisÃ©e", response);
 
   if (response.debug) {
     console.log("[DEV] debug.intent", response.debug.intent);
@@ -486,6 +486,7 @@ export async function sendMessage(message, conversationId = null) {
     body: JSON.stringify({
       message,
       conversation_id: conversationId,
+      sessionId: conversationId,
     }),
   });
 
@@ -555,7 +556,7 @@ function emitSseEvent(parsed, onEvent) {
   onEvent({ type, data });
 }
 
-export async function streamSearch(query, onEvent, { signal } = {}) {
+export async function streamSearch(query, onEvent, { signal, conversationId } = {}) {
   if (DEV_MODE && DEV_API_MOCKS) {
     return devStreamSearch(query, onEvent, { signal });
   }
@@ -571,7 +572,11 @@ export async function streamSearch(query, onEvent, { signal } = {}) {
     response = await fetch(`${API_URL}${buildEndpoint("search_stream")}`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ query, filters: {} }),
+      body: JSON.stringify({
+        query,
+        filters: {},
+        ...(conversationId ? { conversation_id: conversationId, sessionId: conversationId } : {}),
+      }),
       signal,
     });
   } catch (error) {
@@ -660,8 +665,18 @@ export async function deleteConversation(conversationId) {
   });
 }
 
+export async function resetChatSession(sessionId) {
+  if (!sessionId) return null;
+  return request(buildEndpoint("chat_session_reset"), {
+    method: "POST",
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
 export async function getCandidate(candidateId) {
   return request(buildEndpoint("candidates_detail", { id: candidateId }), {
     method: "GET",
   });
 }
+
+

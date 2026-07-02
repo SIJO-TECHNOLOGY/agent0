@@ -1,4 +1,4 @@
-"""LangGraph nodes for the Plan-and-Execute search workflow.
+﻿"""LangGraph nodes for the Plan-and-Execute search workflow.
 
 Each node is a small async function operating on the typed
 `GraphState` model. Nodes return a new state instance (immutable
@@ -81,6 +81,8 @@ from app.agents.agent1.reconciler import Agent1Reconciler, ReconcileInput
 
 
 DEFAULT_ENRICHMENT_LIMIT: Final[int] = 5
+# Hard cap on candidates enriched per search in LLM mode (one UI page's worth).
+LLM_ENRICHMENT_CAP: Final[int] = 12
 DEFAULT_LLM_PLAN_STEPS: Final[int] = 6
 
 
@@ -111,8 +113,8 @@ def _replace(state: GraphState, **changes: object) -> GraphState:
 def _serialize_tool_entry(tool: McpTool) -> dict[str, object]:
     """Sanitized view of a discovered MCP tool for the tools_discovered event.
 
-    Surfaces only the tool name and the *keys* of its input schema —
-    never the full schema body — so we don't leak provider-specific
+    Surfaces only the tool name and the *keys* of its input schema â€”
+    never the full schema body â€” so we don't leak provider-specific
     descriptions or vendor metadata to the frontend.
     """
     properties: object = {}
@@ -235,6 +237,11 @@ async def analyze_intent(state: GraphState, _: NodeContext) -> GraphState:
     if not keywords and candidate_id is None:
         ambiguity.append("Query did not contain explicit search keywords.")
 
+    # Session-driven provider page for "show me other profiles" follow-ups.
+    raw_page = state.filters.get("search_page")
+    if _int_or_none(raw_page):
+        constraints["search_page"] = str(raw_page)
+
     intent = InterpretedIntent(
         objective=objective,
         entities=keywords,
@@ -350,7 +357,7 @@ async def build_plan(state: GraphState, ctx: NodeContext) -> GraphState:
 
 # Maps the planner's internal hint (mock-era name) to a preferred real
 # MCP tool with the legacy mock as a fallback. Project/opportunity hints
-# stay unchanged for now — they have no documented real-tool equivalent.
+# stay unchanged for now â€” they have no documented real-tool equivalent.
 _TOOL_HINT_PREFERENCES: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
     "search_consultants": (
         SEARCH_CANDIDATES_TOOL,
@@ -805,7 +812,7 @@ def _record_to_result(record: dict[str, object], source_tool: str) -> SearchResu
     raw_score = record.get("score")
     if raw_score is None:
         # Search-style tools return candidates whose relevance is UNKNOWN
-        # until evidence is checked in ranking — they must earn their score
+        # until evidence is checked in ranking â€” they must earn their score
         # there, not be presented as full-confidence matches. Detail-style
         # by-id lookups (e.g. getCandidateDetail) are authoritative, so they
         # stay full-confidence.
@@ -1076,7 +1083,7 @@ def _results_already_strong(state: GraphState, skip_score: float) -> bool:
     """True when the ranked results are good enough to skip reflection.
 
     A full match anywhere, or a top score at/above ``skip_score``, means another
-    search is unlikely to help — so we don't spend a reflection LLM call.
+    search is unlikely to help â€” so we don't spend a reflection LLM call.
     """
     if not state.results:
         return False
@@ -1095,7 +1102,7 @@ def _reflection_results_summary(state: GraphState, *, limit: int = 8) -> str:
         title = result.title or ""
         unmet = ", ".join(result.unmet_criteria) if result.unmet_criteria else "none"
         lines.append(
-            f"- {name} — {title} | score={round(result.score, 3)} "
+            f"- {name} â€” {title} | score={round(result.score, 3)} "
             f"| full_match={bool(result.is_full_match)} | unmet=[{unmet}]"
         )
     return "\n".join(lines) if lines else "(no candidates returned)"
@@ -1132,7 +1139,7 @@ async def reflect_on_results(state: GraphState, ctx: NodeContext) -> GraphState:
 
     The LLM judges the ranked candidates and decides whether one more, guided
     search pass is warranted. Deterministic gates run first so the reflection
-    LLM call is skipped when it cannot or should not help — and the loop can
+    LLM call is skipped when it cannot or should not help â€” and the loop can
     never exceed ``max_replan_attempts`` regardless of what the LLM says.
     """
     if not ctx.use_llm_replan:
@@ -1155,7 +1162,7 @@ async def reflect_on_results(state: GraphState, ctx: NodeContext) -> GraphState:
             criteria_summary=_reflection_criteria_summary(state),
             emitter=ctx.event_emitter,
         )
-    except Exception as exc:  # noqa: BLE001 — fail safe: never loop on error
+    except Exception as exc:  # noqa: BLE001 â€” fail safe: never loop on error
         logger.warning("graph.reflect_failed", extra={"error": str(exc)})
         return state
 
@@ -1277,7 +1284,7 @@ def _raw_contract_type(data: dict[str, object]) -> object | None:
         raw = _contract_value_from_source(data.get(ENRICHMENT_ADMINISTRATIVE_KEY))
         if raw is not None:
             return raw
-        # Administrative was fetched but contractType is null/absent — stop here.
+        # Administrative was fetched but contractType is null/absent â€” stop here.
         # Do not fall back to /information typeOf which is a resource-type ID,
         # not the desired contract type.
         return None
@@ -1491,7 +1498,7 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
 
     tools_by_name = {tool.name: tool for tool in state.available_tools}
     detail_tool = tools_by_name.get(CANDIDATE_DETAIL_TOOL)
-    # detail_tool may be None in mock mode — CV/admin enrichment still runs.
+    # detail_tool may be None in mock mode â€” CV/admin enrichment still runs.
 
     eligible = [
         result
@@ -1526,7 +1533,7 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     # Fetch dictionary once for label resolution (availability, experience,
     # contract, mobility, etc.). On the LLM path the dictionary may have
     # already been called for filter resolution, but its content wasn't stored
-    # in state — we fetch it again here only if the tool is available.
+    # in state â€” we fetch it again here only if the tool is available.
     dict_raw: list[dict[str, object]] = []
     if DICTIONARY_TOOL in tools_by_name:
         fetched = await _fetch_dictionary(ctx, tools_by_name)
@@ -1562,7 +1569,17 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     tool_calls = list(state.tool_calls)
     enriched_results = [r for r in state.results if r.id not in excluded_ids]
 
-    enrichment_limit = len(eligible) if ctx.llm_planner is not None else ctx.max_enrichments
+    # LLM mode enriches more than the deterministic default, but MUST stay
+    # bounded: each enriched candidate costs up to 4 sequential MCP calls
+    # (detail, tech doc, CV, administrative). With the recall page size at ~40,
+    # an unbounded fan-out means minutes per search. The evidence pre-ranking
+    # already put the best summaries first, so enriching one UI page's worth
+    # (12) keeps quality while capping latency.
+    enrichment_limit = (
+        min(len(eligible), LLM_ENRICHMENT_CAP)
+        if ctx.llm_planner is not None
+        else ctx.max_enrichments
+    )
 
     for result in eligible[:enrichment_limit]:
         # Find the result's slot in enriched_results by identity so we
@@ -1701,7 +1718,7 @@ def _apply_judgement(result: SearchResult, judgement) -> SearchResult:
         data[NORM_EXPERIENCE_YEARS] = judgement.experience_years
         data[NORM_EXPERIENCE_SOURCE] = "llm"
     elif judgement.experience_label:
-        # LLM judged that only a band is honest → drop the numeric guess so the
+        # LLM judged that only a band is honest â†’ drop the numeric guess so the
         # card falls back to the experience label.
         data[NORM_EXPERIENCE_YEARS] = None
         data[NORM_EXPERIENCE_SOURCE] = "llm"
@@ -1715,7 +1732,7 @@ def _apply_judgement(result: SearchResult, judgement) -> SearchResult:
 
 
 async def normalize_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
-    """Agent1 — normalise candidate data quality before matching.
+    """Agent1 â€” normalise candidate data quality before matching.
 
     Two passes:
       1. Deterministic heuristics reconcile BoondManager fields, CV text, and
@@ -2035,9 +2052,9 @@ def _criteria_status(
     """Classify each requested criterion across candidates.
 
     Returns ``(missing, visible_unverified)`` human-readable label lists:
-    - **verified** — evidenced in some candidate's technical document (omitted),
-    - **visible** — evidenced only in a summary/title (e.g. CIB in a job title),
-    - **missing** — evidenced nowhere.
+    - **verified** â€” evidenced in some candidate's technical document (omitted),
+    - **visible** â€” evidenced only in a summary/title (e.g. CIB in a job title),
+    - **missing** â€” evidenced nowhere.
     Labels preserve the user's original term (acronym intact).
     """
     verified: set[str] = set()
@@ -2117,7 +2134,7 @@ def _evaluate_match(
     Full match iff EVERY requested criterion is evidenced for the candidate
     (unknown counts as not evidenced). Returns ``(is_full_match, unmet)`` with
     human labels (original casing / verbatim domain term) for the criteria
-    not evidenced — same labels as the aggregate status.
+    not evidenced â€” same labels as the aggregate status.
     """
     unmet: list[str] = []
     if requested_name and "name" not in hits:
@@ -2137,11 +2154,11 @@ def _evaluate_match(
 async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     """Rank search-tool results by weighted, multi-criteria evidence.
 
-    Distinct criteria are scored separately — skill/role anchors, the
+    Distinct criteria are scored separately â€” skill/role anchors, the
     domain/business-context signal (e.g. CIB / banking found in the
     title or technical document), and seniority (the candidate's known
     experience meeting the requested minimum). A profile that matches more
-    criteria — especially seniority and domain — outranks a bare skill
+    criteria â€” especially seniority and domain â€” outranks a bare skill
     match, so a 3-year Java profile never ties a 10+-year Java+CIB one.
 
     Criteria never evidenced on any candidate are recorded as
@@ -2205,7 +2222,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             candidate_name=candidate_full_name(result) if requested_name else None,
             priority=priority,
         )
-        # Semantic similarity boost — additive, capped at 1.0. Applied before
+        # Semantic similarity boost â€” additive, capped at 1.0. Applied before
         # the enrichment tie-break so the semantic signal is part of the base
         # score rather than a separate post-processing step.
         if score > 0.0 and result.id in semantic_boosts:
@@ -2394,9 +2411,16 @@ async def plan_with_llm(state: GraphState, ctx: NodeContext) -> GraphState:
     feedback = state.replan_feedback.strip()
     if feedback:
         state = _replace(state, replan_feedback="")
+    planner_filters = dict(state.filters)
+    if state.session_context or state.conversation_history or state.current_candidates:
+        planner_filters["session_context"] = dict(state.session_context)
+        planner_filters["conversation_history"] = list(state.conversation_history[-8:])
+        planner_filters["current_candidates"] = list(state.current_candidates[:8])
+        planner_filters["is_follow_up"] = state.is_follow_up
+        planner_filters["should_reset_search"] = state.should_reset_search
     plan_kwargs: dict[str, object] = dict(
         query=state.original_query,
-        filters=dict(state.filters),
+        filters=planner_filters,
         tools=list(state.available_tools),
         constraints=constraints,
         emitter=ctx.event_emitter,
@@ -2437,14 +2461,19 @@ async def plan_with_llm(state: GraphState, ctx: NodeContext) -> GraphState:
     )
 
     intent_dict = dict(plan.interpreted_intent)
+    llm_constraints = {
+        str(k): str(v)
+        for k, v in (intent_dict.get("constraints") or {}).items()
+        if isinstance(v, (str, int, float)) and not isinstance(v, bool)
+    }
+    # Session-driven provider page for "show me other profiles" follow-ups —
+    # carried by request filters, not something the LLM can know about.
+    if _int_or_none(state.filters.get("search_page")):
+        llm_constraints["search_page"] = str(state.filters["search_page"])
     intent = InterpretedIntent(
         objective=str(intent_dict.get("objective") or "llm_plan"),
         entities=_string_list(intent_dict.get("entities")),
-        constraints={
-            str(k): str(v)
-            for k, v in (intent_dict.get("constraints") or {}).items()
-            if isinstance(v, (str, int, float)) and not isinstance(v, bool)
-        },
+        constraints=llm_constraints,
         ambiguity_notes=_string_list(intent_dict.get("ambiguity_notes"))
         or list(plan.assumptions),
     )
@@ -2507,7 +2536,7 @@ def _candidate_id_call_inputs(
 #      so a bad plan can never crash the MCP call (plan-validate checks
 #      field names, not values).
 #   2. `_resolve_search_filters` lets the Agent API resolve experience /
-#      tool dictionary ids deterministically from the interpreted intent —
+#      tool dictionary ids deterministically from the interpreted intent â€”
 #      restoring the documented ownership boundary.
 
 _PLACEHOLDER_RE: Final[re.Pattern[str]] = re.compile(r"^\s*<.*>\s*$")
@@ -2696,7 +2725,7 @@ async def _resolve_search_filters(
         (f for f in _SEARCH_EXPERIENCE_FIELDS if f in property_names), None
     )
     # Only the experience-level filter is injected here. The structured
-    # `tools` id filter is intentionally NOT applied — it is unreliable and
+    # `tools` id filter is intentionally NOT applied â€” it is unreliable and
     # can kill recall; skill matching is handled by keywords + ranking.
     needs_experience = bool(min_years_raw) and exp_field is not None and (
         exp_field not in inputs
@@ -2750,13 +2779,13 @@ def _int_or_none(value: object) -> int | None:
 def _candidate_min_years(result: SearchResult, haystack: str) -> int | None:
     """Best-known minimum years for a candidate, for seniority scoring.
 
-    Trusts Agent1's normalised experience (``_record_experience_min_years``) —
+    Trusts Agent1's normalised experience (``_record_experience_min_years``) â€”
     which carefully distinguishes real experience from ages, durations, and
-    stray numbers — and uses it as-is. The loose ``parse_years`` of the whole
+    stray numbers â€” and uses it as-is. The loose ``parse_years`` of the whole
     haystack is only a LAST-RESORT fallback (e.g. during pre-ranking, before
     Agent1 has run): on its own it grabs any "X ans" in the text (a project
     length, a "Java 10 ans" skill line), which would satisfy a "10 years"
-    requirement for a candidate who has far less — exactly the inflation we
+    requirement for a candidate who has far less â€” exactly the inflation we
     must avoid.
     """
     resolved = _record_experience_min_years(result)
@@ -2780,7 +2809,7 @@ def _prerank_search_results(
 
     Enrichment is bounded, so it must spend its budget on the candidates
     whose SUMMARY already shows the most evidence (skill/role/domain/
-    seniority/name) — not the first N in BoondManager order. Seniority comes
+    seniority/name) â€” not the first N in BoondManager order. Seniority comes
     from the MCP-resolved ``experienceMinYears`` on each summary. Mutates
     ``results`` in place so the downstream fan-out picks the best candidates.
     Uses the same name/primary signals as final ranking so a named person is
@@ -2826,7 +2855,7 @@ async def _execute_search_ladder(
 
     ``searchCandidates`` is a recall tool, so instead of one strict call we
     build a bounded ladder of progressively broader passes from the
-    interpreted intent (generic anchors — no hardcoded skill) and stop at
+    interpreted intent (generic anchors â€” no hardcoded skill) and stop at
     the first pass that returns candidates. Returns ``True`` when the ladder
     handled the search; ``False`` when no usable anchors exist (the caller
     then falls back to the planned search inputs).
@@ -2860,8 +2889,14 @@ async def _execute_search_ladder(
     # Keyword-only recall ladder: the structured `tools` filter is unreliable
     # (it kills recall), so precision comes from evidence pre-ranking and
     # ranking, not from hard id filters on the search.
+    # `search_page` (a session-driven constraint) fetches the provider's next
+    # result page for "show me other profiles" follow-ups.
+    search_page = _int_or_none(intent.constraints.get("search_page")) or 1
     passes = build_recall_passes(
-        anchors, schema_fields=property_names, max_passes=_MAX_SEARCH_PASSES
+        anchors,
+        schema_fields=property_names,
+        max_passes=_MAX_SEARCH_PASSES,
+        page=max(1, search_page),
     )
     if not passes:
         return False
@@ -2915,11 +2950,11 @@ async def _execute_search_ladder(
 
     # A named-person query that was NOT satisfied by the dedicated name pass
     # means we couldn't find that person and fell through to the criteria
-    # ladder — surface that honestly instead of silently returning look-alikes.
+    # ladder â€” surface that honestly instead of silently returning look-alikes.
     name_missed = bool(anchors.name) and matched_label != "name"
 
     if used_relaxed is not None:
-        # Found candidates — pre-rank summaries so the best (by visible
+        # Found candidates â€” pre-rank summaries so the best (by visible
         # evidence), not the first N, are the ones enriched downstream.
         _prerank_search_results(
             results,
@@ -3022,7 +3057,7 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
         # Fan-out semantics: a step fans out over candidate ids ONLY
         # when it both depends on a previous step AND requests the
         # `candidate_ids` selector. A bare `depends_on` (without a
-        # selector) is an ordering hint — the executor already runs
+        # selector) is an ordering hint â€” the executor already runs
         # steps in plan order, so we treat it as a direct call.
         is_fanout = (
             step.depends_on is not None
@@ -3187,7 +3222,7 @@ def _absorb_direct_outcome(
     """Absorb a direct tool call's outcome into the workflow state.
 
     Records from non-candidate-producing tools (e.g. ``getDictionary``)
-    do NOT become SearchResults — they ran for ordering / context only
+    do NOT become SearchResults â€” they ran for ordering / context only
     and would otherwise inflate the candidate count and contaminate
     ranking.
     """
@@ -3233,7 +3268,7 @@ def _merge_fanout_outcome(
 ) -> None:
     """Merge fan-out call results into the matching base SearchResult.
 
-    Never appends a new SearchResult — fan-out is enrichment of an
+    Never appends a new SearchResult â€” fan-out is enrichment of an
     existing candidate, not a separate candidate.
     """
     if call.status is ToolCallStatus.FAILED:
@@ -3280,3 +3315,4 @@ def _merge_fanout_outcome(
         else:
             _merge_detail_into_result_data(merged_data, record)
     results[target_idx] = target.model_copy(update={"data": merged_data})
+

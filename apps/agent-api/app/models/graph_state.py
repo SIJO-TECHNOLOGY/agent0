@@ -1,4 +1,4 @@
-"""LangGraph state schema."""
+﻿"""LangGraph state schema."""
 
 from __future__ import annotations
 
@@ -18,6 +18,14 @@ class GraphState(BaseModel):
 
     original_query: str
     filters: dict[str, object] = Field(default_factory=dict)
+
+    session_id: str | None = None
+    conversation_history: list[dict[str, object]] = Field(default_factory=list)
+    session_context: dict[str, object] = Field(default_factory=dict)
+    current_search: dict[str, object] = Field(default_factory=dict)
+    is_follow_up: bool = False
+    should_reset_search: bool = False
+    current_candidates: list[dict[str, object]] = Field(default_factory=list)
 
     interpreted_intent: InterpretedIntent | None = None
     execution_plan: list[PlanStep] = Field(default_factory=list)
@@ -52,3 +60,4 @@ class GraphState(BaseModel):
         default_factory=list,
         description="Field names the user is asked to provide in the clarification form.",
     )
+

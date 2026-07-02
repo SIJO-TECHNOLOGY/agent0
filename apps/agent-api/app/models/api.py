@@ -1,4 +1,4 @@
-"""Pydantic schemas for the public HTTP API."""
+﻿"""Pydantic schemas for the public HTTP API."""
 
 from __future__ import annotations
 
@@ -17,6 +17,18 @@ class SearchRequest(BaseModel):
 
     query: str = Field(description="Natural-language search request.")
     filters: dict[str, object] = Field(default_factory=dict)
+    conversation_id: str | None = Field(
+        default=None,
+        description=(
+            "Conversation this turn belongs to. When present, the search "
+            "reuses the conversation's in-session context (accumulated query, "
+            "result pagination)."
+        ),
+    )
+    sessionId: str | None = Field(
+        default=None,
+        description="Camel-case session identifier accepted from the web UI.",
+    )
 
     @field_validator("query")
     @classmethod
@@ -115,6 +127,11 @@ class SearchResponse(BaseModel):
     conversation_id: str
     message: str
     ui: CandidateCardsUI | ClarificationUI
+    answer: str = ""
+    sessionId: str = ""
+    candidates: list[dict[str, object]] = Field(default_factory=list)
+    context: dict[str, object] = Field(default_factory=dict)
+    debug: dict[str, object] = Field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):
@@ -124,6 +141,8 @@ class ChatRequest(BaseModel):
 
     message: str | None = None
     conversation_id: str | None = None
+    sessionId: str | None = None
+    debug: bool = False
     interaction: dict[str, object] | None = None
 
     @field_validator("message")
@@ -144,9 +163,30 @@ class ChatResponse(BaseModel):
 
     conversation_id: str
     message: str
+    answer: str = ""
+    sessionId: str = ""
     ui: dict[str, object]
     candidates: list[dict[str, object]] = Field(default_factory=list)
+    context: dict[str, object] = Field(default_factory=dict)
     debug: dict[str, object] = Field(default_factory=dict)
+
+
+class SessionResetRequest(BaseModel):
+    """Reset one in-memory chat session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str | None = None
+    conversation_id: str | None = None
+
+
+class SessionResetResponse(BaseModel):
+    """Reset acknowledgement."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool = True
+    sessionId: str
 
 
 class ConversationCreateRequest(BaseModel):
@@ -235,3 +275,4 @@ class McpToolsResponse(BaseModel):
 
     tools: list[McpTool] = Field(default_factory=list)
     count: int = Field(ge=0, default=0)
+

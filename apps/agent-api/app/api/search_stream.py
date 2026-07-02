@@ -1,4 +1,4 @@
-"""POST /api/search/stream — Server-Sent Events progress channel.
+﻿"""POST /api/search/stream â€” Server-Sent Events progress channel.
 
 This is the *external* transport between the frontend UI and the Agent
 API. It is unrelated to the Streamable HTTP transport the Agent API
@@ -29,6 +29,8 @@ from fastapi.responses import StreamingResponse
 from app.api.dependencies import McpClientUnavailableError
 from app.config import Settings, get_settings
 from app.models.api import SearchRequest
+from app.services import conversation_memory as memory
+from app.session import memory as session_memory
 from app.services.event_emitter import QueueEventEmitter
 from app.services.search_service import SearchService
 
@@ -78,7 +80,7 @@ async def _drive_workflow(
                 }
             },
         )
-    except Exception:  # noqa: BLE001 — never leak provider stack traces
+    except Exception:  # noqa: BLE001 â€” never leak provider stack traces
         logger.exception("search_stream.unexpected_error")
         await emitter.emit(
             "search_failed",
@@ -97,12 +99,66 @@ async def _drive_workflow(
         emitter.close()
 
 
+def _inject_conversation_context(
+    event_type: str,
+    data: dict[str, object],
+    conversation_id: str,
+    *,
+    search_page: int = 1,
+    exclude_ids: set[str] | None = None,
+) -> dict[str, object]:
+    """Pin a stable conversation_id and bind results to the session memory.
+
+    All candidates are displayed at once (no in-chat pagination). On a "more"
+    turn (``search_page > 1``), candidates already shown in this conversation
+    (``exclude_ids``) are dropped so only genuinely new profiles surface, and
+    the session records the provider page + every id seen so far.
+    """
+    if event_type == "search_started":
+        data["conversation_id"] = conversation_id
+        return data
+    if event_type != "final_response":
+        return data
+
+    data["conversation_id"] = conversation_id
+    data["sessionId"] = conversation_id
+    data["answer"] = data.get("answer") or data.get("message") or ""
+    ui = data.get("ui")
+    if isinstance(ui, dict) and ui.get("type") == "candidate_cards":
+        shown = list(ui.get("candidates") or [])
+        if exclude_ids:
+            shown = [c for c in shown if str(c.get("id")) not in exclude_ids]
+            ui["candidates"] = shown
+            data["message"] = (
+                f"{len(shown)} nouveaux candidats trouvés."
+                if shown
+                else "Aucun nouveau candidat trouvé pour cette recherche."
+            )
+            data["answer"] = data["message"]
+        memory.store_results(conversation_id, shown)
+        memory.mark_all_shown(conversation_id)
+        # Track the provider page and every candidate id shown so far, so the
+        # next "d'autres" fetches the following page and skips repeats.
+        session = session_memory.get_or_create(conversation_id)
+        prior_seen = {str(i) for i in (exclude_ids or set())}
+        new_seen = prior_seen | {str(c.get("id")) for c in shown if c.get("id")}
+        session.current_search["page"] = search_page
+        session.current_search["seenIds"] = sorted(new_seen)
+        session.touch()
+    data["context"] = session_memory.context_payload(conversation_id)
+    session_memory.append_message(conversation_id, role="assistant", content=str(data.get("message") or ""))
+    return data
+
+
 async def _stream(
     service: SearchService,
     request: SearchRequest,
     http_request: Request,
     *,
+    conversation_id: str,
     debug_mode: bool = False,
+    search_page: int = 1,
+    exclude_ids: set[str] | None = None,
 ) -> AsyncIterator[str]:
     emitter = QueueEventEmitter()
     task = asyncio.create_task(
@@ -120,10 +176,13 @@ async def _stream(
             # don't keep doing work for a dropped connection.
             if await http_request.is_disconnected():
                 break
-            yield _format_sse(
-                str(event["type"]),
-                event["data"] if isinstance(event["data"], dict) else {},
+            event_type = str(event["type"])
+            data = event["data"] if isinstance(event["data"], dict) else {}
+            data = _inject_conversation_context(
+                event_type, data, conversation_id,
+                search_page=search_page, exclude_ids=exclude_ids,
             )
+            yield _format_sse(event_type, data)
     finally:
         if not task.done():
             task.cancel()
@@ -133,13 +192,64 @@ async def _stream(
                 pass
 
 
+async def _memory_operation_stream(
+    conversation_id: str,
+    operation: session_memory.SessionOperation,
+) -> AsyncIterator[str]:
+    """Serve filter/sort follow-ups from session candidates without MCP."""
+    yield _format_sse(
+        "search_started",
+        {
+            "conversation_id": conversation_id,
+            "sessionId": conversation_id,
+            "query": operation.effective_query,
+            "planner_mode": "memory",
+        },
+    )
+    candidates = operation.candidates or []
+    session_memory.save_search_results(
+        conversation_id,
+        query=operation.session.last_user_query,
+        effective_query=operation.effective_query,
+        candidates=candidates,
+        filters=operation.filters,
+    )
+    memory.store_results(conversation_id, candidates)
+    memory.mark_all_shown(conversation_id)
+    message = operation.message or (
+        f"{len(candidates)} candidats correspondent à ta recherche."
+        if candidates else "Aucun candidat ne correspond à ces critères."
+    )
+    session_memory.append_message(conversation_id, role="assistant", content=message)
+    yield _format_sse(
+        "final_response",
+        {
+            "conversation_id": conversation_id,
+            "sessionId": conversation_id,
+            "message": message,
+            "answer": message,
+            "ui": {"type": "candidate_cards", "candidates": candidates},
+            "candidates": candidates,
+            "context": session_memory.context_payload(conversation_id),
+            "debug": {
+                "sessionId": conversation_id,
+                "isFollowUp": operation.is_follow_up,
+                "shouldResetSearch": operation.should_reset_search,
+                "currentSearch": dict(operation.session.current_search),
+                "lastFilters": dict(operation.session.last_filters),
+                "memoryCandidateCount": len(operation.session.current_candidates),
+                "conversationHistorySize": len(operation.session.messages),
+            },
+        },
+    )
+
 def _build_service(
     request: Request, settings: Settings
 ) -> SearchService | None:
     """Build a SearchService from app.state without going through the
     Depends chain that would 503 on a missing MCP client.
 
-    Returns ``None`` if the MCP client isn't bound — the route then
+    Returns ``None`` if the MCP client isn't bound â€” the route then
     emits a ``search_failed`` SSE event instead of returning a JSON 503,
     which is what the stream contract requires.
     """
@@ -202,21 +312,69 @@ async def search_stream(
     request: Request,
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
-    service = _build_service(request, settings)
     headers = {
         "Cache-Control": "no-cache",
         # Disable proxy buffering (nginx etc.) so events ship promptly.
         "X-Accel-Buffering": "no",
     }
+    conversation_id = payload.sessionId or payload.conversation_id or memory.new_conversation_id()
+
+    operation = session_memory.resolve_turn(conversation_id, payload.query)
+    session_memory.append_message(conversation_id, role="user", content=payload.query)
+
+    if operation.action in {"filter", "sort"} and operation.candidates is not None:
+        return StreamingResponse(
+            _memory_operation_stream(conversation_id, operation),
+            media_type="text/event-stream",
+            headers=headers,
+        )
+
+    service = _build_service(request, settings)
     if service is None:
         return StreamingResponse(
             _emit_mcp_unavailable(request, payload),
             media_type="text/event-stream",
             headers=headers,
         )
+
+    session = operation.session
+    exclude_ids: set[str] = set()
+    search_page = 1
+    if operation.action == "more" and session.current_search:
+        # "d'autres profils" → SAME search, provider's NEXT page, and drop the
+        # candidates already shown so only genuinely new profiles come back.
+        search_page = int(session.current_search.get("page") or 1) + 1
+        seen = session.current_search.get("seenIds")
+        exclude_ids = {
+            str(i) for i in (seen if isinstance(seen, list) else [])
+        } or {str(c.get("id")) for c in session.current_candidates if c.get("id")}
+
+    effective_query = operation.effective_query
+    memory._queries[conversation_id] = effective_query
+    extra_filters: dict[str, object] = {**payload.filters, **operation.filters}
+    if search_page > 1:
+        extra_filters["search_page"] = search_page
+    payload = payload.model_copy(
+        update={
+            "query": effective_query,
+            "filters": extra_filters,
+            "conversation_id": conversation_id,
+            "sessionId": conversation_id,
+        }
+    )
+
     debug_mode = _debug_mode_from_headers(request)
     return StreamingResponse(
-        _stream(service, payload, request, debug_mode=debug_mode),
+        _stream(
+            service, payload, request,
+            conversation_id=conversation_id, debug_mode=debug_mode,
+            search_page=search_page, exclude_ids=exclude_ids,
+        ),
         media_type="text/event-stream",
         headers=headers,
     )
+
+
+
+
+

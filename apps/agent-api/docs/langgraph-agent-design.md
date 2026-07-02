@@ -77,13 +77,24 @@ Key invariants:
   off by `allow_clarification=false`; at most one clarification per request
   (`_already_clarified`); the criteria/warnings summary
   (`_reflection_criteria_summary`) tells the LLM what was unresolved.
-- **In-session conversation memory.** For clarification (and follow-up refining)
-  to work, the `/api/chat` layer accumulates the conversation's effective search
-  query per `conversation_id` (`_combine_query`): a follow-up turn refines the
-  prior request instead of restarting it (a bare "oui" adds nothing; duplicates
-  are skipped). So answering a clarification keeps the original criteria. This
-  state is in-memory and reset on new/deleted conversation — not persisted
-  across process restarts.
+- **In-session conversation memory.** `app/services/conversation_memory.py`
+  accumulates the conversation's effective search query per `conversation_id`
+  (`combine_query`): a follow-up turn refines the prior request instead of
+  restarting it (a bare "oui" adds nothing; duplicates are skipped), so
+  answering a clarification keeps the original criteria. It is shared by BOTH
+  the streaming route (`/api/search/stream`, used by the frontend) and
+  `/api/chat`, so they bind to the same state. The streaming route pins a stable
+  `conversation_id` (the workflow's per-call id is overridden in the
+  `search_started`/`final_response` events) and the frontend echoes it on the
+  next turn. In-memory; reset on new/deleted conversation; not persisted across
+  restarts.
+- **Result display & "d'autres".** All ranked candidates are displayed at once
+  (no in-chat pagination — the full set ships in one `candidate_cards` UI, and
+  the frontend's own sort/filter chips operate on it). The set is still stored
+  in session memory so follow-ups (filter / sort) work on it. A "d'autres" /
+  "more" turn (`is_more_request`) never re-searches or clarifies: since
+  everything is already displayed, it answers that no further candidates are
+  available for this search.
 
 ## Deterministic Workflow (fallback)
 
