@@ -16,7 +16,13 @@ param(
     [string]$Location = "francecentral",
     [string]$BaseName = "agent0",
     [string]$GitHubRepo = "SIJO-TECHNOLOGY/agent0",
-    [string]$EntraAppName = "github-agent0-deploy"
+    [string]$EntraAppName = "github-agent0-deploy",
+    # Use when the operator lacks roleAssignments/write (i.e. is not Owner of
+    # the resource group): ACR auth falls back to the admin password and the
+    # GitHub Actions OIDC setup is skipped. Deploys stay manual
+    # (deploy-app.ps1) until an admin grants rights and this script is re-run
+    # without the switch.
+    [switch]$SkipAdminSteps
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +37,7 @@ Step "Checking prerequisites"
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     Fail "Azure CLI not found. Install it: https://aka.ms/installazurecli then run 'az login'."
 }
+$useRegistryPassword = if ($SkipAdminSteps) { "true" } else { "false" }
 $account = $null
 try {
     $accountJson = az account show --output json 2>$null
@@ -51,7 +58,7 @@ $phaseA = az deployment group create `
     --resource-group $ResourceGroup `
     --name "agent0-infra" `
     --template-file $bicepFile `
-    --parameters baseName=$BaseName deployApps=false `
+    --parameters baseName=$BaseName deployApps=false useRegistryPassword=$useRegistryPassword `
     --query "properties.outputs" --output json | ConvertFrom-Json
 if (-not $phaseA) { Fail "Base infrastructure deployment failed." }
 $acrName = $phaseA.acrName.value
@@ -72,12 +79,20 @@ $phaseB = az deployment group create `
     --resource-group $ResourceGroup `
     --name "agent0-apps" `
     --template-file $bicepFile `
-    --parameters baseName=$BaseName deployApps=true imageTag=init `
+    --parameters baseName=$BaseName deployApps=true imageTag=init useRegistryPassword=$useRegistryPassword `
     --query "properties.outputs" --output json | ConvertFrom-Json
 if (-not $phaseB) { Fail "Container apps deployment failed." }
 $webUrl = $phaseB.webUrl.value
 
 # --- 5. Entra app + OIDC federated credential for GitHub Actions ----------------
+if ($SkipAdminSteps) {
+    Step "Skipping GitHub Actions OIDC setup (-SkipAdminSteps)"
+    Write-Host "CI/CD is NOT active. Deploy manually with infra\azure\deploy-app.ps1." -ForegroundColor Yellow
+    Write-Host "Once an admin grants you Owner on $ResourceGroup, re-run this script WITHOUT -SkipAdminSteps."
+    Step "Done"
+    Write-Host "Web UI URL: $webUrl" -ForegroundColor Green
+    exit 0
+}
 Step "Configuring GitHub Actions OIDC access"
 $appId = az ad app list --display-name $EntraAppName --query "[0].appId" --output tsv
 if (-not $appId) {

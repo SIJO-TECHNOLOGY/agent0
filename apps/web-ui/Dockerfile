@@ -3,10 +3,12 @@ FROM node:22-alpine AS builder
 
 WORKDIR /build
 
-COPY package.json package-lock.json ./
-RUN npm ci
-
 COPY . .
+
+# The upload context may carry a Windows node_modules/dist (az acr build does
+# not always honor .dockerignore); replace with a clean Linux install so the
+# vite binary keeps its executable bit.
+RUN rm -rf node_modules dist && npm ci
 
 # Same-origin deployment: the UI calls /api/* on its own host and nginx
 # proxies to agent-api, so the API base URL is empty in production builds.

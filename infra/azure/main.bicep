@@ -19,6 +19,9 @@ param deployApps bool = true
 @description('Image tag to deploy (CI uses the commit SHA).')
 param imageTag string = 'init'
 
+@description('true = apps authenticate to ACR with the admin password instead of a managed identity. Fallback for operators without roleAssignments/write; switch back to false once rights are granted.')
+param useRegistryPassword bool = false
+
 // --- BoondManager (MCP server) ---------------------------------------------
 @description('BoondManager API base URL. Placeholder is fine while USE_MOCK_MCP=true.')
 param boondBaseUrl string = 'https://change-me.example.com'
@@ -61,7 +64,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
   location: location
   sku: { name: 'Basic' }
   properties: {
-    adminUserEnabled: false
+    adminUserEnabled: useRegistryPassword
   }
 }
 
@@ -76,7 +79,7 @@ var acrPullRoleId = subscriptionResourceId(
   '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 )
 
-resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!useRegistryPassword) {
   name: guid(acr.id, uai.id, acrPullRoleId)
   scope: acr
   properties: {
@@ -100,12 +103,29 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-var registryConfig = [
-  {
-    server: acr.properties.loginServer
-    identity: uai.id
-  }
-]
+var registryConfig = useRegistryPassword
+  ? [
+      {
+        server: acr.properties.loginServer
+        username: acr.name
+        passwordSecretRef: 'acr-password'
+      }
+    ]
+  : [
+      {
+        server: acr.properties.loginServer
+        identity: uai.id
+      }
+    ]
+
+var acrPasswordSecrets = useRegistryPassword
+  ? [
+      {
+        name: 'acr-password'
+        value: acr.listCredentials().passwords[0].value
+      }
+    ]
+  : []
 
 // --- MCP BoondManager (internal only) ----------------------------------------
 
@@ -126,9 +146,12 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         allowInsecure: true
       }
       registries: registryConfig
-      secrets: [
-        { name: 'boond-jwt-client', value: boondJwtClient }
-      ]
+      secrets: concat(
+        [
+          { name: 'boond-jwt-client', value: boondJwtClient }
+        ],
+        acrPasswordSecrets
+      )
     }
     template: {
       containers: [
@@ -166,9 +189,12 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         allowInsecure: true
       }
       registries: registryConfig
-      secrets: [
-        { name: 'llm-api-key', value: llmApiKey }
-      ]
+      secrets: concat(
+        [
+          { name: 'llm-api-key', value: llmApiKey }
+        ],
+        acrPasswordSecrets
+      )
     }
     template: {
       containers: [
@@ -213,6 +239,7 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         targetPort: 80
       }
       registries: registryConfig
+      secrets: acrPasswordSecrets
     }
     template: {
       containers: [
