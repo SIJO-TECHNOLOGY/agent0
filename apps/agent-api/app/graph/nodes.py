@@ -2694,15 +2694,21 @@ def _int_or_none(value: object) -> int | None:
 
 
 def _candidate_min_years(result: SearchResult, haystack: str) -> int | None:
-    """Best-known minimum years for a candidate.
+    """Best-known minimum years for a candidate, for seniority scoring.
 
-    Prefers the MCP-resolved ``experienceMinYears``; falls back to a years
-    figure parsed from the candidate's CV free-text.
+    Trusts Agent1's normalised experience (``_record_experience_min_years``) —
+    which carefully distinguishes real experience from ages, durations, and
+    stray numbers — and uses it as-is. The loose ``parse_years`` of the whole
+    haystack is only a LAST-RESORT fallback (e.g. during pre-ranking, before
+    Agent1 has run): on its own it grabs any "X ans" in the text (a project
+    length, a "Java 10 ans" skill line), which would satisfy a "10 years"
+    requirement for a candidate who has far less — exactly the inflation we
+    must avoid.
     """
     resolved = _record_experience_min_years(result)
-    parsed = parse_years(haystack)
-    known = [y for y in (resolved, parsed) if y is not None]
-    return max(known) if known else None
+    if resolved is not None:
+        return resolved
+    return parse_years(haystack)
 
 
 def _prerank_search_results(

@@ -156,7 +156,7 @@ Keys written into `result.data`:
 | Key | Meaning |
 | --- | --- |
 | `_normalized_experience_years` | Best years-of-experience estimate. |
-| `_normalized_experience_source` | Which source won: `boondmanager`, `technical_document`, `cv`, `profile_text`, or `llm`. |
+| `_normalized_experience_source` | Which source won: `cv`, `boondmanager`, `technical_document`, `profile_text`, `graduation`, or `llm`. |
 | `_normalized_skills` | Deduplicated union of skills (structured + free-text). |
 | `_normalized_languages` | Deduplicated union of languages (structured + CV). |
 | `_normalized_title` | Best job-title estimate. |
@@ -164,15 +164,55 @@ Keys written into `result.data`:
 
 ### Experience resolution
 
-1. **Structured BoondManager `experienceMinYears` is authoritative** — when
-   present it is used directly (curated data).
-2. Otherwise, fall back to experience-qualified figures mined from free text, in
-   order of reliability: technical document → CV → profile title/snippet.
-3. Free-text mining only counts a number when it is **explicitly tied to an
-   experience keyword** in the same clause (e.g. "6 years of Experience",
-   "3+ years of hands-on technical experience", "16 ans d'expérience"). Stray
-   numbers — an age ("40 ans"), a duration ("4 years of data"), company history
-   ("société fondée il y a 40 ans") — are ignored. Values are capped at 50 years.
+Priority order:
+
+1. **A clearly-stated CV figure wins** — a number explicitly tied to an
+   experience keyword in the CV ("16 ans d'expérience", "3+ years of hands-on
+   technical experience"). Source `cv`.
+2. Structured BoondManager `experienceMinYears`. Source `boondmanager`.
+3. The recruiter-set **experience level**, parsed from its resolved label
+   (`_experienceLabel` → years, e.g. "3 ans" → 3, "> à 10 ans" → 10, "Pas
+   d'expérience" → 0). Source `experience_level`. Using it (not ignoring it)
+   keeps the card and the ranking score on the SAME value.
+4. Experience-qualified figures from the technical document, then the profile
+   title/snippet. Sources `technical_document` / `profile_text`.
+
+Curated sources (`cv`, `boondmanager`, `experience_level`) are never
+auto-overridden by the graduation estimate; a disagreement only raises a
+conflict for the LLM to arbitrate. The graduation estimate replaces the value
+only when nothing else exists, or when the value came from a shaky text-mined
+source (`technical_document` / `profile_text`).
+
+Free-text mining only counts a number **explicitly tied to an experience
+keyword** in the same clause; the high-precision "keyword: number" form is
+tried first and the gap is digit-free, so an age ("40 ans"), a duration
+("4 years of data"), company history, or an age line sitting next to an
+experience line are never mis-read. Values are capped at 50 years.
+
+**Graduation fallback.** Agent1 estimates years from the **graduation year**
+(`current_year − latest graduation end year`, taken from technical-document
+diplomas/training or the CV's education section; a "2017-2020" range uses the
+end year) in two cases:
+
+1. the data is *conflicting* (`_normalized_conflicts` non-empty) **and** no
+   figure was explicitly stated in the CV — an objective anchor instead of a
+   misread number; or
+2. **no experience figure exists anywhere** **and** there is no structured
+   experience-level band to display — so the card shows an estimate rather than
+   nothing.
+
+Source `graduation`. A curated experience-level band (case 2's exclusion) is
+always preferred over an estimate, and if no graduation year is found the prior
+deterministic value is kept.
+
+**Cross-checks (comparison only).** The graduation estimate and the sum of the
+CV's per-role durations (`_sum_experience_durations`, e.g. "(4 ans 10 mois)" +
+"(2 ans 2 mois)" …) are computed for every candidate and compared against the
+resolved experience. A divergence ≥ 3 years raises a conflict
+(`experience_vs_graduation_disagreement` / `experience_vs_duration_disagreement`)
+so the discrepancy surfaces (and feeds LLM reconciliation when enabled). The
+duration sum is a *signal only* — it never becomes the displayed value — since
+simultaneous roles can be double-counted.
 
 ### Skills & languages
 
@@ -194,7 +234,10 @@ How it works:
 
 1. The deterministic pass records conflict reasons in `_normalized_conflicts`,
    e.g. `age_present_with_experience`, `experience_multiple_figures`,
-   `experience_vs_structured_disagreement`, `title_seniority_mismatch`.
+   `experience_vs_structured_disagreement`, `title_seniority_mismatch`,
+   `experience_vs_graduation_disagreement` (the resolved years disagree with the
+   graduation-year estimate), `experience_vs_duration_disagreement` (they
+   disagree with the sum of the CV's per-role durations).
 2. In the `normalize_candidates` node, **only the conflicting candidates** are
    sent to the reconciler — coherent candidates skip the LLM entirely (zero
    cost in the common case). All conflicting candidates go in **one batched

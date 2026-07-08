@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date
 from typing import Final
 
 from app.models.results import SearchResult
@@ -136,6 +137,188 @@ def _years_from_boond(data: dict[str, object]) -> int | None:
     return None
 
 
+# Experience-level label fields (resolved by nodes.py from the BoondManager
+# dictionary, e.g. "3 ans", "> à 10 ans", "Pas d'expérience").
+_EXP_LABEL_FIELDS: Final[tuple[str, ...]] = (
+    "_experienceLabel", "experienceLabel", "experience_label",
+)
+
+
+def _years_from_experience_label(data: dict[str, object]) -> int | None:
+    """Years parsed from the resolved BoondManager experience-level label.
+
+    This BoondManager dictionary encodes experience as near-1:1 year levels
+    ("1 an", "2 ans", … "10 ans", "> à 10 ans", "Pas d'expérience"), so the
+    label is a curated, structured experience figure — not just a coarse band.
+    """
+    label: str | None = None
+    for field in _EXP_LABEL_FIELDS:
+        value = data.get(field)
+        if isinstance(value, str) and value.strip():
+            label = value.strip()
+            break
+    if label is None:
+        return None
+    low = label.lower()
+    if "pas d" in low and "exp" in low:  # "Pas d'expérience"
+        return 0
+    match = re.search(r"\d{1,2}", label)
+    if match:
+        value = int(match.group(0))
+        if 0 <= value <= 50:
+            return value
+    return None
+
+
+# --- graduation-based experience estimate ---------------------------------
+
+# A 4-digit graduation year (1970–2049); excludes implausible values.
+_YEAR_RE: Final[re.Pattern[str]] = re.compile(r"\b(19[7-9]\d|20[0-4]\d)\b")
+# Diploma keywords; a year near one is treated as a graduation year. Used for
+# CV free text only (the structured diplomas field needs no keyword filter).
+# NOTE: words that double as JOB TITLES ("ingénieur", "engineering") are
+# deliberately excluded — in LinkedIn-style CVs they tag work experiences
+# ("Ingénieur JAVA/JEE 2019"), and would capture employment dates as graduation
+# years. Genuine engineering degrees are still caught via "diplôme"/"école".
+_DIPLOMA_KW_RE: Final[re.Pattern[str]] = re.compile(
+    r"(master|ma[îi]trise|licence|bachelor|meng|m\.?sc|b\.?sc|phd|doctorat|"
+    r"mba|dess|dea|deug|dut|bts|magist[èe]re|baccalaur[ée]at|bac\s*\+?\s*\d|"
+    r"dipl[ôo]m|universit[ée]|university|facult[ée]|"
+    r"institut\s+pr[ée]paratoire|classe\s+pr[ée]paratoire|[ée]cole|school)",
+    re.IGNORECASE,
+)
+# Maximum plausible experience an estimate may yield.
+_MAX_PLAUSIBLE_YEARS: Final[int] = 50
+# Year gap above which the resolved experience and the graduation-year estimate
+# are considered to disagree (a conflict worth flagging / reconciling).
+_GRAD_DISAGREE_MARGIN: Final[int] = 3
+# Experience sources weak enough that the graduation estimate may override them
+# on conflict. Curated sources (cv, boondmanager, experience_level) are not here.
+_GRAD_OVERRIDABLE_SOURCES: Final[frozenset[str]] = frozenset(
+    {"technical_document", "profile_text"}
+)
+
+
+def _education_years(text: str) -> set[int]:
+    """Years that appear right next to a diploma keyword.
+
+    Proximity-only (no section-header window): a wide window would bleed into the
+    work-experience section that usually follows the education block, picking up
+    a recent *job* start year instead of the graduation year. We therefore only
+    trust a year sitting close to a diploma keyword (degree name / school), which
+    also captures the end year of a date range like "2010 à juin 2013".
+    """
+    years: set[int] = set()
+    if not text:
+        return years
+    for kw in _DIPLOMA_KW_RE.finditer(text):
+        segment = text[max(0, kw.start() - 45): kw.end() + 45]
+        years.update(int(y) for y in _YEAR_RE.findall(segment))
+    return years
+
+
+def _estimate_years_from_graduation(
+    data: dict[str, object], *, current_year: int | None = None
+) -> int | None:
+    """Estimate years of experience as ``current_year - latest_graduation_year``.
+
+    The graduation year is the most recent end year found in an education
+    context. Two sources, treated differently:
+      - the technical-document ``diplomas``/``training`` fields ARE diplomas, so
+        every year in them counts directly (no keyword needed);
+      - the CV free text mixes education with job dates, so only years sitting
+        next to a diploma keyword are trusted (``_education_years``).
+
+    Returns None when no plausible graduation year is found or the resulting
+    estimate is out of range.
+    """
+    year_now = current_year if current_year is not None else date.today().year
+
+    years: set[int] = set()
+    techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
+    if isinstance(techdoc, dict):
+        for field in ("diplomas", "training"):
+            value = techdoc.get(field)
+            items: list[str] = []
+            if isinstance(value, str):
+                items = [value]
+            elif isinstance(value, list):
+                items = [str(item) for item in value if item]
+            for item in items:
+                years.update(int(y) for y in _YEAR_RE.findall(item))
+
+    resume = data.get(_ENRICHMENT_RESUME_KEY)
+    if isinstance(resume, dict):
+        cv_text = resume.get("extractedText") or resume.get("text") or ""
+        if isinstance(cv_text, str):
+            years |= _education_years(cv_text)
+
+    plausible = [y for y in years if y <= year_now]
+    if not plausible:
+        return None
+
+    estimate = year_now - max(plausible)
+    if 0 <= estimate <= _MAX_PLAUSIBLE_YEARS:
+        return estimate
+    return None
+
+
+# --- summed-experience estimate (from work-experience durations) ----------
+
+# A parenthesised LinkedIn-style duration, e.g. "(4 ans 10 mois)", "(2 ans)",
+# "(5 mois)", "(4 yrs 10 mos)". Years and months are both optional.
+_PAREN_RE: Final[re.Pattern[str]] = re.compile(r"\(([^)]*)\)")
+_DUR_YEARS_RE: Final[re.Pattern[str]] = re.compile(
+    r"(\d{1,2})\s*(?:ans?|années?|years?|yrs?|yr)\b", re.IGNORECASE
+)
+_DUR_MONTHS_RE: Final[re.Pattern[str]] = re.compile(
+    r"(\d{1,2})\s*(?:mois|months?|mos?|mo)\b", re.IGNORECASE
+)
+_LESS_THAN_YEAR_RE: Final[re.Pattern[str]] = re.compile(
+    r"moins\s+d['’]un\s+an|less\s+than\s+a\s+year", re.IGNORECASE
+)
+
+
+def _sum_experience_durations(data: dict[str, object]) -> int | None:
+    """Total years of experience summed from per-role durations in the CV.
+
+    Reads the explicit LinkedIn-style durations the CV states in parentheses
+    ("(4 ans 10 mois)", "(2 ans)", "(5 mois)", "moins d'un an") and sums them.
+    Reflects time actually worked (handles gaps) rather than assuming continuous
+    work since graduation. Returns None when no such duration is present.
+
+    Note: simultaneous roles can be double-counted — this is a comparison
+    signal, not an authoritative figure.
+    """
+    resume = data.get(_ENRICHMENT_RESUME_KEY)
+    if not isinstance(resume, dict):
+        return None
+    text = resume.get("extractedText") or resume.get("text") or ""
+    if not isinstance(text, str) or not text:
+        return None
+
+    total_months = 0
+    found = False
+    for paren in _PAREN_RE.finditer(text):
+        inner = paren.group(1)
+        y_match = _DUR_YEARS_RE.search(inner)
+        m_match = _DUR_MONTHS_RE.search(inner)
+        if y_match or m_match:
+            total_months += (int(y_match.group(1)) * 12 if y_match else 0)
+            total_months += (int(m_match.group(1)) if m_match else 0)
+            found = True
+        elif _LESS_THAN_YEAR_RE.search(inner):
+            total_months += 6  # "moins d'un an" → count half a year
+            found = True
+
+    if not found:
+        return None
+    years = round(total_months / 12)
+    if 0 < years <= _MAX_PLAUSIBLE_YEARS:
+        return years
+    return None
+
+
 # Top-level text fields in result.data that may contain experience mentions.
 _TOP_LEVEL_TEXT_FIELDS: Final[tuple[str, ...]] = (
     "title", "headline", "snippet", "description", "summary",
@@ -157,9 +340,10 @@ def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | No
          clear statement wins over the structured field, which is often a
          coarse band or stale.
       2. Else trust BoondManager's structured ``experienceMinYears``.
-      3. Else, if a structured experience *level* is present
-         (``_experienceLabel``, e.g. "10 à 15 ans") but no exact figure, show
-         that band label instead of guessing a number (numeric years stay None).
+      3. Else use the BoondManager experience *level* (``_experienceLabel`` →
+         years, e.g. "3 ans" → 3): a curated, near-1:1 figure the recruiter set.
+         Using it (rather than ignoring it) keeps the card and the ranking score
+         on the SAME value.
       4. Else fall back to experience-qualified figures from the technical
          document, then the profile title/snippet.
 
@@ -182,10 +366,10 @@ def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | No
     if boond_years is not None:
         return boond_years, "boondmanager"
 
-    # 3. Structured experience level (band) — show the label, don't guess a number.
-    exp_label = data.get("_experienceLabel")
-    if isinstance(exp_label, str) and exp_label.strip():
-        return None, None
+    # 3. BoondManager experience level (recruiter-set), parsed to a number.
+    level_years = _years_from_experience_label(data)
+    if level_years is not None:
+        return level_years, "experience_level"
 
     # 4. Technical document, then profile title/snippet.
     techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
@@ -533,12 +717,19 @@ def detect_conflicts(
     *,
     exp_years: int | None,
     exp_source: str | None,
+    grad_estimate: int | None = None,
+    duration_sum: int | None = None,
 ) -> list[str]:
     """Return a list of data-coherence conflict reasons (empty = coherent).
 
     A non-empty result marks the candidate as ambiguous — a good target for
     LLM reconciliation. Heuristic and conservative: it flags *suspicion*, the
     LLM does the actual judging.
+
+    ``grad_estimate`` (years from the graduation year) and ``duration_sum``
+    (years summed from the CV's per-role durations) are independent
+    cross-checks: a marked disagreement with the resolved experience is a
+    conflict.
     """
     reasons: list[str] = []
     text = _experience_text(data)
@@ -561,6 +752,26 @@ def detect_conflicts(
         and abs(exp_years - boond_years) >= 3
     ):
         reasons.append("experience_vs_structured_disagreement")
+
+    # 3b. The resolved experience disagrees with the graduation-year estimate.
+    # Lets the diploma (often only in the technical document) cross-check a
+    # figure that came from another source.
+    if (
+        exp_years is not None
+        and grad_estimate is not None
+        and exp_source != "graduation"
+        and abs(exp_years - grad_estimate) >= _GRAD_DISAGREE_MARGIN
+    ):
+        reasons.append("experience_vs_graduation_disagreement")
+
+    # 3c. The resolved experience disagrees with the sum of the CV's per-role
+    # durations (actual time worked, gaps excluded).
+    if (
+        exp_years is not None
+        and duration_sum is not None
+        and abs(exp_years - duration_sum) >= _GRAD_DISAGREE_MARGIN
+    ):
+        reasons.append("experience_vs_duration_disagreement")
 
     # 4. Title seniority keyword inconsistent with the resolved years.
     title = data.get(NORM_TITLE) or data.get("title")
@@ -605,7 +816,54 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     data[NORM_LANGUAGES] = languages
     data[NORM_TITLE] = title
 
-    conflicts = detect_conflicts(data, exp_years=exp_years, exp_source=exp_source)
+    # Compute the graduation-year estimate up front: it is both a cross-check
+    # signal for conflict detection and the value used by the fallback below.
+    grad_years = _estimate_years_from_graduation(data)
+    # Sum of the CV's per-role durations — a cross-check only (never the value).
+    duration_sum = _sum_experience_durations(data)
+
+    conflicts = detect_conflicts(
+        data,
+        exp_years=exp_years,
+        exp_source=exp_source,
+        grad_estimate=grad_years,
+        duration_sum=duration_sum,
+    )
+
+    # Graduation-based estimate. It only REPLACES the value in two cases:
+    #   1. no experience figure exists anywhere → graduation fills the gap;
+    #   2. the value came from a SHAKY text-mined source (technical document /
+    #      profile text) AND the data is conflicting → graduation corrects it.
+    # Curated sources (cv, experienceMinYears, the recruiter-set experience
+    # level) are NEVER auto-overridden — a conflict is only flagged, and the LLM
+    # reconciler (when enabled) decides using the full CV. This keeps the card
+    # and the ranking score on the same value and respects recruiter data.
+    needs_estimate = exp_years is None or (
+        bool(conflicts) and exp_source in _GRAD_OVERRIDABLE_SOURCES
+    )
+    if needs_estimate and grad_years is not None:
+        exp_years = grad_years
+        exp_source = "graduation"
+        data[NORM_EXPERIENCE_YEARS] = exp_years
+        data[NORM_EXPERIENCE_SOURCE] = exp_source
+
+    # Re-evaluate conflicts on the FINAL experience value so that an age now
+    # coexisting with the estimate, or a graduation/duration disagreement, is
+    # flagged. A graduation estimate is itself uncertain, so always flag it —
+    # this routes such candidates to the LLM reconciler (when enabled), which
+    # reads the whole CV and is far more reliable than regex on messy exports.
+    conflicts = detect_conflicts(
+        data,
+        exp_years=exp_years,
+        exp_source=exp_source,
+        grad_estimate=grad_years,
+        duration_sum=duration_sum,
+    )
+    if exp_source == "graduation":
+        conflicts = [*conflicts, "experience_estimated_from_graduation"]
+    # Deduplicate, preserve order.
+    conflicts = list(dict.fromkeys(conflicts))
+
     data[NORM_CONFLICTS] = conflicts
 
     logger.debug(
