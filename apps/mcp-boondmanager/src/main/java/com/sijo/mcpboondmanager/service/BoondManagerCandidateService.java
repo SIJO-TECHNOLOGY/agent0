@@ -1,6 +1,12 @@
 package com.sijo.mcpboondmanager.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.time.Duration;
 import com.sijo.mcpboondmanager.client.BoondManagerClient;
+import com.sijo.mcpboondmanager.dto.boond.BoondCandidateAdministrativeAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateDetailAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondCandidateSummaryAttributes;
 import com.sijo.mcpboondmanager.dto.boond.BoondData;
@@ -10,7 +16,9 @@ import com.sijo.mcpboondmanager.dto.boond.BoondListEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondMeta;
 import com.sijo.mcpboondmanager.dto.boond.BoondSingleEnvelope;
 import com.sijo.mcpboondmanager.dto.boond.BoondTechnicalDocumentAttributes;
+import com.sijo.mcpboondmanager.dto.candidate.CandidateAdministrativeDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateDetailDto;
+import com.sijo.mcpboondmanager.dto.candidate.CandidateCvDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchRequestDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSearchResponseDto;
 import com.sijo.mcpboondmanager.dto.candidate.CandidateSummaryDto;
@@ -22,12 +30,18 @@ import com.sijo.mcpboondmanager.exception.BoondApiException;
 import com.sijo.mcpboondmanager.exception.CandidateNotFoundException;
 import com.sijo.mcpboondmanager.exception.DictionaryResolutionException;
 import com.sijo.mcpboondmanager.exception.ExternalServiceException;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriBuilder;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 
 @Service
@@ -46,33 +60,24 @@ public class BoondManagerCandidateService {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<BoondListEnvelope<BoondTechnicalDocumentAttributes>> TD_LIST_TYPE =
             new ParameterizedTypeReference<>() {};
+    private static final Logger log = LoggerFactory.getLogger(BoondManagerCandidateService.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    // Cap document downloads to avoid blocking enrichment when BoondManager is slow.
+    private static final Duration DOCUMENT_DOWNLOAD_TIMEOUT = Duration.ofSeconds(15);
 
     private final BoondManagerClient client;
-    private final ExperienceDictionaryResolver experienceResolver;
-    private final AvailabilityDictionaryResolver availabilityResolver;
 
-    public BoondManagerCandidateService(BoondManagerClient client,
-                                        ExperienceDictionaryResolver experienceResolver,
-                                        AvailabilityDictionaryResolver availabilityResolver) {
+    public BoondManagerCandidateService(BoondManagerClient client) {
         this.client = client;
-        this.experienceResolver = experienceResolver;
-        this.availabilityResolver = availabilityResolver;
     }
 
     public DictionaryResponseDto getDictionary() {
         return getDictionary(null);
     }
 
-    /**
-     * @param language optional BoondManager locale to request localized labels (e.g. {@code "en"},
-     *                 {@code "fr"}); when {@code null}/blank the account default language is used
-     */
     public DictionaryResponseDto getDictionary(String language) {
         try {
-            BoondDictionaryEnvelope envelope = client.get(
-                    DICTIONARY_PATH,
-                    builder -> addScalar(builder, "language", emptyToNull(language)),
-                    DICTIONARY_TYPE);
+            BoondDictionaryEnvelope envelope = client.get(DICTIONARY_PATH, DICTIONARY_TYPE);
             return toDictionaryResponse(envelope);
         } catch (BoondApiException ex) {
             throw new DictionaryResolutionException(
@@ -129,14 +134,51 @@ public class BoondManagerCandidateService {
         }
     }
 
+    public CandidateAdministrativeDto getCandidateAdministrative(Integer candidateId) {
+        String path = CANDIDATES_PATH + "/" + candidateId + "/administrative";
+        try {
+            BoondSingleEnvelope<BoondCandidateAdministrativeAttributes> envelope =
+                    client.get(path, new org.springframework.core.ParameterizedTypeReference<>() {});
+            BoondCandidateAdministrativeAttributes attrs =
+                    envelope != null && envelope.data() != null ? envelope.data().attributes() : null;
+            if (attrs == null) {
+                return new CandidateAdministrativeDto(candidateId, null, null, null, null, null, null, null, null);
+            }
+            return new CandidateAdministrativeDto(
+                    candidateId,
+                    nullIfZero(attrs.currentSalary()),
+                    nullIfZero(attrs.minSalary()),
+                    nullIfZero(attrs.maxSalary()),
+                    nullIfZero(attrs.currentDailyRate()),
+                    nullIfZero(attrs.minDailyRate()),
+                    nullIfZero(attrs.maxDailyRate()),
+                    attrs.currency(),
+                    nullIfNegative(attrs.desiredContract())
+            );
+        } catch (BoondApiException ex) {
+            if (org.springframework.http.HttpStatus.NOT_FOUND.value() == ex.status().value()) {
+                throw new CandidateNotFoundException(candidateId, path, ex);
+            }
+            throw ex;
+        }
+    }
+
+    private static Double nullIfZero(Double value) {
+        return (value == null || value == 0.0) ? null : value;
+    }
+
+    private static Integer nullIfNegative(Integer value) {
+        return (value == null || value < 0) ? null : value;
+    }
+
     public TechnicalDocumentDto getCandidateTechnicalDocument(Integer candidateId) {
         String path = CANDIDATES_PATH + "/" + candidateId + "/technical-data";
         String fallbackPath = CANDIDATES_PATH + "/" + candidateId + "/technical-datas";
         try {
-            return getCandidateTechnicalDocumentAtPath(path);
+            return getCandidateTechnicalDocumentAtPath(path, candidateId);
         } catch (BoondApiException | ExternalServiceException ex) {
             try {
-                return getCandidateTechnicalDocumentAtPath(fallbackPath);
+                return getCandidateTechnicalDocumentAtPath(fallbackPath, candidateId);
             } catch (BoondApiException | ExternalServiceException fallbackEx) {
                 if (isNotFound(fallbackEx)) {
                     if (!isNotFound(ex)) {
@@ -149,20 +191,201 @@ public class BoondManagerCandidateService {
         }
     }
 
+    public CandidateCvDto getCandidateCV(Integer candidateId) {
+        String informationPath = CANDIDATES_PATH + "/" + candidateId + "/information";
+        JsonNode candidateInformation = readJson(client.getBytes(informationPath), informationPath);
+        DocumentCandidate document = selectResumeDocument(candidateInformation);
+
+        if (document == null) {
+            return new CandidateCvDto(candidateId, null, null, null, 0, false, "");
+        }
+
+        String documentPath = "/documents/" + document.id();
+        byte[] bytes;
+        try {
+            // Use Accept: */* so BoondManager serves the binary file rather than JSON.
+            bytes = client.getBytes(documentPath, DOCUMENT_DOWNLOAD_TIMEOUT, "*/*");
+        } catch (ExternalServiceException | BoondApiException ex) {
+            // Download failed, timed out, or returned an HTTP error — return metadata only.
+            log.warn("CV document download failed for candidate {} (doc={}, fileName={}): {}",
+                    candidateId, document.id(), document.fileName(), ex.getMessage());
+            return new CandidateCvDto(candidateId, document.id(), document.fileName(),
+                    document.contentType(), 0, false, "");
+        }
+
+        if (log.isDebugEnabled() && bytes != null && bytes.length >= 4) {
+            log.debug("CV doc for candidate {} (doc={}, fileName={}, size={}) starts with bytes: {:02X} {:02X} {:02X} {:02X}",
+                    candidateId, document.id(), document.fileName(), bytes.length,
+                    bytes[0] & 0xFF, bytes[1] & 0xFF, bytes[2] & 0xFF, bytes[3] & 0xFF);
+        }
+
+        String normalizedText = "";
+        if (isPdfContent(document.contentType(), bytes)) {
+            try {
+                String text = extractPdfText(bytes);
+                normalizedText = text == null ? "" : text.trim();
+                log.info("CV PDF extracted for candidate {} (doc={}, chars={})",
+                        candidateId, document.id(), normalizedText.length());
+            } catch (ExternalServiceException ex) {
+                // PDF could not be parsed (encrypted, corrupted, or scanned image).
+                log.warn("CV PDF text extraction failed for candidate {} (doc={}, contentType={}): {}",
+                        candidateId, document.id(), document.contentType(), ex.getMessage());
+            }
+        } else {
+            log.warn("CV document for candidate {} is not a parseable PDF (doc={}, fileName={}, contentType={}, size={}) — first bytes may reveal format",
+                    candidateId, document.id(), document.fileName(),
+                    document.contentType(), bytes == null ? 0 : bytes.length);
+        }
+
+        return new CandidateCvDto(
+                candidateId,
+                document.id(),
+                document.fileName(),
+                document.contentType(),
+                bytes == null ? 0 : bytes.length,
+                !normalizedText.isBlank(),
+                normalizedText
+        );
+    }
+
+    private static JsonNode readJson(byte[] bytes, String path) {
+        if (bytes == null || bytes.length == 0) {
+            throw new ExternalServiceException("BoondManager returned an empty JSON payload", path, null);
+        }
+        try {
+            return OBJECT_MAPPER.readTree(bytes);
+        } catch (IOException ex) {
+            throw new ExternalServiceException("Unable to parse BoondManager JSON payload", path, ex);
+        }
+    }
+
     private static boolean isNotFound(RuntimeException ex) {
         return ex instanceof BoondApiException boondEx
                 && HttpStatus.NOT_FOUND.value() == boondEx.status().value();
     }
 
-    private TechnicalDocumentDto getCandidateTechnicalDocumentAtPath(String path) {
+    /**
+     * Returns true when the file is a PDF — either by declared content-type or
+     * by the magic bytes {@code %PDF} at the start of the payload.
+     */
+    private static boolean isPdfContent(String contentType, byte[] bytes) {
+        if (contentType != null && contentType.toLowerCase(Locale.ROOT).contains("pdf")) {
+            return true;
+        }
+        // Fallback: check PDF magic bytes when content-type is absent or wrong.
+        return bytes != null && bytes.length >= 4
+                && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F';
+    }
+
+    private static String extractPdfText(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return "";
+        }
+        try (PDDocument document = Loader.loadPDF(bytes)) {
+            return new PDFTextStripper().getText(document);
+        } catch (IOException ex) {
+            // Propagate as typed exception so getCandidateCV can log and recover.
+            throw new ExternalServiceException("Unable to extract text from candidate CV PDF",
+                    "/documents", ex);
+        }
+    }
+
+    private static DocumentCandidate selectResumeDocument(JsonNode root) {
+        List<DocumentCandidate> documents = new ArrayList<>();
+        collectDocumentCandidates(root, documents);
+        return documents.stream()
+                .filter(DocumentCandidate::looksLikeResume)
+                .findFirst()
+                .or(() -> documents.stream().filter(DocumentCandidate::looksLikePdf).findFirst())
+                .orElse(null);
+    }
+
+    private static void collectDocumentCandidates(JsonNode node, List<DocumentCandidate> sink) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node.isObject()) {
+            DocumentCandidate candidate = documentCandidateFrom(node);
+            if (candidate != null) {
+                sink.add(candidate);
+            }
+            node.fields().forEachRemaining(entry -> collectDocumentCandidates(entry.getValue(), sink));
+        } else if (node.isArray()) {
+            node.forEach(child -> collectDocumentCandidates(child, sink));
+        }
+    }
+
+    private static DocumentCandidate documentCandidateFrom(JsonNode node) {
+        String id = textValue(node, "id");
+        JsonNode attrs = node.get("attributes");
+        String fileName = firstTextValue(node, attrs, "fileName", "filename", "name", "title", "label");
+        String contentType = firstTextValue(node, attrs, "contentType", "mimeType", "mime", "type");
+
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+
+        String lowerHaystack = (id + " " + nullToBlank(fileName) + " " + nullToBlank(contentType))
+                .toLowerCase(Locale.ROOT);
+        boolean documentLike = lowerHaystack.contains("resume")
+                || lowerHaystack.contains("cv")
+                || lowerHaystack.contains("pdf")
+                || lowerHaystack.contains("document");
+
+        return documentLike ? new DocumentCandidate(id, fileName, contentType) : null;
+    }
+
+    private static String firstTextValue(JsonNode primary, JsonNode secondary, String... fields) {
+        for (String field : fields) {
+            String value = textValue(primary, field);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+            value = textValue(secondary, field);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String textValue(JsonNode node, String field) {
+        if (node == null || field == null) {
+            return null;
+        }
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull() || !value.isValueNode()) {
+            return null;
+        }
+        return value.asText();
+    }
+
+    private static String nullToBlank(String value) {
+        return value == null ? "" : value;
+    }
+
+    private record DocumentCandidate(String id, String fileName, String contentType) {
+        boolean looksLikeResume() {
+            String haystack = (id + " " + nullToBlank(fileName)).toLowerCase(Locale.ROOT);
+            return haystack.contains("resume") || haystack.contains("cv");
+        }
+
+        boolean looksLikePdf() {
+            String haystack = (id + " " + nullToBlank(fileName) + " " + nullToBlank(contentType))
+                    .toLowerCase(Locale.ROOT);
+            return haystack.contains("pdf");
+        }
+    }
+
+    private TechnicalDocumentDto getCandidateTechnicalDocumentAtPath(String path, Integer candidateId) {
         try {
             BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope =
                     client.get(path, TD_TYPE);
-            return toTechnicalDocument(envelope);
+            return toTechnicalDocument(envelope, candidateId);
         } catch (ExternalServiceException ex) {
             BoondListEnvelope<BoondTechnicalDocumentAttributes> envelope =
                     client.get(path, TD_LIST_TYPE);
-            return toTechnicalDocument(envelope);
+            return toTechnicalDocument(envelope, candidateId);
         }
     }
 
@@ -173,13 +396,6 @@ public class BoondManagerCandidateService {
         if (value != null) {
             builder.queryParam(name, value);
         }
-    }
-
-    /**
-     * Returns {@code null} for a {@code null}/blank string, so it is skipped by {@link #addScalar}.
-     */
-    private static String emptyToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
     }
 
     /**
@@ -201,7 +417,7 @@ public class BoondManagerCandidateService {
         BoondDictionarySetting setting = envelope.data().setting();
         return new DictionaryResponseDto(new DictionarySettingDto(
                 new DictionarySettingDto.State(setting.state().candidate()),
-                new DictionarySettingDto.TypeOf(setting.typeOf().contract()),
+                new DictionarySettingDto.TypeOf(setting.typeOf().contract(), setting.typeOf().resource()),
                 setting.availability(),
                 setting.mobilityArea(),
                 setting.experience(),
@@ -216,34 +432,33 @@ public class BoondManagerCandidateService {
         ));
     }
 
-    private CandidateSearchResponseDto toSearchResponse(
+    private static CandidateSearchResponseDto toSearchResponse(
             BoondListEnvelope<BoondCandidateSummaryAttributes> envelope) {
         List<CandidateSummaryDto> candidates = envelope.data().stream()
-                .map(this::toCandidateSummary)
+                .map(BoondManagerCandidateService::toCandidateSummary)
                 .toList();
         return new CandidateSearchResponseDto(candidates, toPaginationMeta(envelope.meta()));
     }
 
-    private CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data) {
+    private static CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data) {
         BoondCandidateSummaryAttributes attrs = data.attributes();
-        ResolvedExperience experience = experienceResolver.resolve(attrs.experience());
         return new CandidateSummaryDto(
                 parseId(data.id()),
                 attrs.firstName(),
                 attrs.lastName(),
                 attrs.email1(),
                 attrs.state(),
-                availabilityResolver.resolve(attrs.availability()),
+                attrs.availability(),
                 attrs.typeOf(),
                 attrs.mobilityAreas(),
                 attrs.town(),
                 attrs.country(),
                 attrs.title(),
                 attrs.experience(),
-                experience.minYears(),
-                experience.openEnded(),
-                experience.specified(),
-                experience.rawLabel(),
+                null,   // experienceMinYears — resolved by agent-api via dictionary
+                false,  // experienceOpenEnded
+                false,  // experienceSpecified
+                null,   // experienceLabelRaw
                 attrs.skills(),
                 attrs.diplomas(),
                 attrs.expertiseAreas(),
@@ -294,26 +509,28 @@ public class BoondManagerCandidateService {
         );
     }
 
-    private TechnicalDocumentDto toTechnicalDocument(
-            BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope) {
-        return toTechnicalDocument(envelope.data());
+    private static TechnicalDocumentDto toTechnicalDocument(
+            BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope,
+            Integer candidateId) {
+        return toTechnicalDocument(envelope.data(), candidateId);
     }
 
-    private TechnicalDocumentDto toTechnicalDocument(
-            BoondListEnvelope<BoondTechnicalDocumentAttributes> envelope) {
+    private static TechnicalDocumentDto toTechnicalDocument(
+            BoondListEnvelope<BoondTechnicalDocumentAttributes> envelope,
+            Integer candidateId) {
         if (envelope.data() == null || envelope.data().isEmpty()) {
             throw new ExternalServiceException(
                     "BoondManager returned no technical document records",
                     CANDIDATES_PATH,
                     null);
         }
-        return toTechnicalDocument(envelope.data().getFirst());
+        return toTechnicalDocument(envelope.data().getFirst(), candidateId);
     }
 
-    private TechnicalDocumentDto toTechnicalDocument(
-            BoondData<BoondTechnicalDocumentAttributes> data) {
+    private static TechnicalDocumentDto toTechnicalDocument(
+            BoondData<BoondTechnicalDocumentAttributes> data,
+            Integer candidateId) {
         BoondTechnicalDocumentAttributes a = data.attributes();
-        ResolvedExperience experience = experienceResolver.resolve(a.experience());
         return new TechnicalDocumentDto(
                 parseId(data.id()),
                 a.tdId(),
@@ -321,17 +538,18 @@ public class BoondManagerCandidateService {
                 a.description(),
                 a.summary(),
                 a.experience(),
-                experience.minYears(),
-                experience.openEnded(),
-                experience.specified(),
-                experience.rawLabel(),
+                null,   // experienceMinYears — resolved by agent-api via dictionary
+                false,  // experienceOpenEnded
+                false,  // experienceSpecified
+                null,   // experienceLabelRaw
                 a.training(),
                 a.diplomas(),
                 a.skills(),
                 a.expertiseAreas(),
                 a.activityAreas(),
                 toToolProficiencies(a.tools()),
-                toLanguageProficiencies(a.languages())
+                toLanguageProficiencies(a.languages()),
+                candidateId
         );
     }
 

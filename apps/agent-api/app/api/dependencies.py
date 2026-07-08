@@ -45,6 +45,14 @@ def get_search_service(
     if isinstance(override, SearchService):
         return override
     llm_planner = getattr(request.app.state, "llm_planner", None)
+    semantic_scorer = None
+    if settings.enable_semantic_scoring and settings.openai_api_key:
+        from app.services.semantic_scorer import get_semantic_scorer
+        semantic_scorer = get_semantic_scorer(
+            api_key=settings.openai_api_key,
+            model=settings.semantic_model,
+        )
+    agent1_reconciler = _build_agent1_reconciler(settings)
     return SearchService(
         mcp_client=mcp_client,
         max_replan_attempts=settings.max_replan_attempts,
@@ -55,4 +63,40 @@ def get_search_service(
         replan_skip_score=settings.replan_skip_score,
         agent_trace=settings.agent_trace != "off",
         agent_trace_verbose=settings.agent_trace == "verbose",
+        semantic_scorer=semantic_scorer,
+        semantic_boost_weight=settings.semantic_boost_weight,
+        agent1_reconciler=agent1_reconciler,
     )
+
+
+def _build_agent1_reconciler(settings: Settings):
+    """Build the Agent1 LLM reconciler when enabled and credentials exist.
+
+    Returns None (Agent1 stays purely deterministic) when the flag is off or
+    no LLM API key is configured — never raises at request time.
+    """
+    if not settings.agent1_llm_reconciliation:
+        return None
+    try:
+        from app.agents.agent1.reconciler import Agent1Reconciler
+        from app.services.llm_backends import build_chat_fn
+
+        chat_fn = build_chat_fn(
+            provider=settings.llm_provider,
+            model=settings.llm_model,
+            api_key=settings.llm_api_key,
+            temperature=settings.llm_temperature,
+            timeout_seconds=settings.llm_timeout_seconds,
+        )
+        return Agent1Reconciler(
+            chat_fn,
+            confidence_threshold=settings.agent1_confidence_threshold,
+            max_candidates=settings.agent1_max_reconcile_candidates,
+        )
+    except Exception:  # noqa: BLE001 — missing key/provider must not break search
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "agent1.reconciler.init_skipped", exc_info=True
+        )
+        return None

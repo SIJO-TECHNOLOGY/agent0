@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from app.graph.nodes import (
+    CONTRACT_LABEL_KEY,
+    ENRICHMENT_ADMINISTRATIVE_KEY,
+    ENRICHMENT_DETAIL_KEY,
     NodeContext,
+    _inject_resolved_labels,
     _record_to_result,
     analyze_intent,
     build_plan,
@@ -31,6 +35,48 @@ def _ctx(client: MockMcpClient, *, max_replan: int = 1, retries: int = 2) -> Nod
     )
 
 
+def test_inject_resolved_labels_uses_administrative_contract_type() -> None:
+    data = {ENRICHMENT_ADMINISTRATIVE_KEY: {"typeOf": 2}}
+
+    _inject_resolved_labels(
+        data,
+        avail_entries=[],
+        exp_entries=[],
+        contract_entries=[{"id": 2, "label": "CDI"}],
+    )
+
+    assert data[CONTRACT_LABEL_KEY] == "CDI"
+
+
+def test_inject_resolved_labels_prefers_detail_contract_over_search_summary() -> None:
+    data = {"contractType": -1, ENRICHMENT_DETAIL_KEY: {"contractType": 2}}
+
+    _inject_resolved_labels(
+        data,
+        avail_entries=[],
+        exp_entries=[],
+        contract_entries=[
+            {"id": -1, "label": "Non renseigne"},
+            {"id": 2, "label": "CDI"},
+        ],
+    )
+
+    assert data[CONTRACT_LABEL_KEY] == "CDI"
+
+
+def test_inject_resolved_labels_does_not_fallback_to_search_contract_when_detail_has_none() -> None:
+    data = {"contractType": 2, ENRICHMENT_DETAIL_KEY: {}}
+
+    _inject_resolved_labels(
+        data,
+        avail_entries=[],
+        exp_entries=[],
+        contract_entries=[{"id": 2, "label": "CDI"}],
+    )
+
+    assert CONTRACT_LABEL_KEY not in data
+
+
 @pytest.mark.asyncio
 async def test_analyze_intent_extracts_keywords_and_seniority() -> None:
     state = GraphState(original_query="Find senior Python developers")
@@ -40,8 +86,34 @@ async def test_analyze_intent_extracts_keywords_and_seniority() -> None:
 
     assert result.interpreted_intent is not None
     assert result.interpreted_intent.objective == "find_consultants"
-    assert "python" in result.interpreted_intent.entities
+    # The full query is sent as a single entity so BoondManager receives the phrase intact.
+    assert len(result.interpreted_intent.entities) == 1
+    assert "python" in result.interpreted_intent.entities[0].lower()
     assert result.interpreted_intent.constraints.get("seniority") == "senior"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_sets_max_experience_for_junior_range() -> None:
+    state = GraphState(original_query="profil junior IA 0-2 ans d'expérience")
+    ctx = _ctx(MockMcpClient())
+
+    result = await analyze_intent(state, ctx)
+
+    constraints = result.interpreted_intent.constraints
+    assert constraints.get("seniority") == "junior"
+    assert constraints.get("max_experience_years") == "2"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_senior_keyword_sets_min_only() -> None:
+    state = GraphState(original_query="dev senior java")
+    ctx = _ctx(MockMcpClient())
+
+    result = await analyze_intent(state, ctx)
+
+    constraints = result.interpreted_intent.constraints
+    assert constraints.get("min_experience_years") == "5"
+    assert "max_experience_years" not in constraints
 
 
 @pytest.mark.asyncio
@@ -203,7 +275,7 @@ async def test_select_tools_picks_search_candidates_over_legacy_mock() -> None:
     assert step.inputs == {
         "keywords": "java cib",
         "page": 1,
-        "numberPerPage": 10,
+        "numberPerPage": 8,
     }
 
 

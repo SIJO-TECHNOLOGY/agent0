@@ -3,9 +3,13 @@
 ## Current Frontend Structure
 
 ```txt
-frontend/
+apps/web-ui/
 ├── assets/
-│   └── logo.png
+│   ├── logo.png
+│   └── sijo.jpg          ← brand logo (favicon + header)
+├── locales/
+│   ├── fr.js             ← French UI strings (default/fallback)
+│   └── en.js             ← English UI strings
 ├── docs/
 │   ├── api-contract.md
 │   ├── api-contract-detailed.md
@@ -13,6 +17,7 @@ frontend/
 │   ├── design.md
 │   ├── project-structure.md
 │   └── skills.md
+├── i18n.js               ← i18n engine (t, tCount, formatDate, setLanguage)
 ├── index.html
 ├── style.css
 ├── app.js
@@ -69,6 +74,25 @@ It contains:
 - Technical summary
 - Mobile responsive rules
 
+### `i18n.js`
+
+Lightweight internationalisation engine.
+
+- `t(key, params?)` — resolve a UI string from the active locale.
+- `tCount(key, count, params?)` — pluralised string resolution.
+- `formatDate(iso?)` — locale-aware date formatting.
+- `setLanguage(lang)` / `getLanguage()` — switch and read the active locale.
+- `initLanguage()` — detect language from `localStorage`, then browser, then
+  default (`fr`).
+- `applyStaticTranslations()` — translate DOM nodes carrying `data-i18n`,
+  `data-i18n-placeholder`, or `data-i18n-aria` attributes.
+- `onLanguageChange(cb)` — register a callback fired when the language changes.
+
+### `locales/fr.js` and `locales/en.js`
+
+Static dictionaries for UI chrome strings. Backend-generated text (candidate
+names, summaries, BoondManager data) is never stored here.
+
 ### `config.js`
 
 Central configuration:
@@ -77,8 +101,9 @@ Central configuration:
 - `DEV_MODE`
 - `API_ENDPOINTS`
 - `FEATURES`
-- `UI_CONFIG`
 - `CANDIDATE_CONFIG`
+
+User-facing strings live in `locales/`; do not add them here.
 
 Prefer changing configuration here before editing rendering or API logic.
 

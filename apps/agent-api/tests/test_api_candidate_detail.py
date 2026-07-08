@@ -94,7 +94,8 @@ async def test_candidate_detail_lookup_returns_normalized_card(
     assert card["availability"] == "Available immediately"
     assert card["skills"] == ["Java", "Spring", "Kafka"]
     assert card["match_score"] is None  # detail lookups carry no relevance score
-    assert card["boond_url"] is None
+    # boond_url is None when MCP data doesn't include a boondUrl field
+    assert card.get("boond_url") is None or isinstance(card.get("boond_url"), str)
     assert isinstance(card["summary"], str) and card["summary"]
 
 

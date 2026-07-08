@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.services.dictionary_resolver import (
+    dictionary_contract_entries,
     dictionary_section_entries,
     resolve_experience_id,
     resolve_tool_ids,
@@ -112,3 +113,17 @@ def test_handles_json_api_style_entries_with_attributes() -> None:
 def test_skips_non_dict_entries_safely() -> None:
     entries = ["nope", 7, None, {"id": "ok", "label": "10+ years"}]
     assert resolve_experience_id(entries, min_years=10) == "ok"
+
+
+def test_dictionary_contract_entries_extracts_setting_variants() -> None:
+    raw = [
+        {"setting": {"typeOf": [{"id": -1, "label": "Non renseigné"}]}},
+        {"setting": {"contract": [{"id": 2, "label": "CDI"}]}},
+        {"setting": {"typeOf": {"contracts": [{"id": 3, "label": "Freelance"}]}}},
+    ]
+
+    assert dictionary_contract_entries(raw) == [
+        {"id": -1, "label": "Non renseigné"},
+        {"id": 2, "label": "CDI"},
+        {"id": 3, "label": "Freelance"},
+    ]

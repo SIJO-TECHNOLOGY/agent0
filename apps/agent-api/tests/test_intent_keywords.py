@@ -7,9 +7,31 @@ import pytest
 from app.graph.intent_keywords import (
     detect_tools,
     extract_candidate_id,
+    extract_experience_bounds,
     extract_keywords,
     extract_min_years_experience,
+    _normalize_token,
 )
+
+
+@pytest.mark.parametrize(
+    "query, seniority, expected",
+    [
+        ("profil junior IA 0-2 ans d'exp", "junior", (0, 2)),
+        ("3 à 5 ans", None, (3, 5)),
+        ("moins de 3 ans", None, (None, 3)),
+        ("jusqu'à 2 ans", None, (None, 2)),
+        ("plus de 5 ans", None, (5, None)),
+        ("5+ ans python", None, (5, None)),
+        ("au moins 7 years", None, (7, None)),
+        ("10 years experience", None, (10, None)),  # bare single → minimum
+        ("profil junior", "junior", (None, 2)),      # seniority fallback
+        ("dev senior java", "senior", (5, None)),
+        ("data analyst", None, (None, None)),
+    ],
+)
+def test_extract_experience_bounds(query, seniority, expected) -> None:
+    assert extract_experience_bounds(query, seniority) == expected
 
 
 @pytest.mark.parametrize(
@@ -110,3 +132,57 @@ def test_detect_tools_accepts_accented_french_consultant_hint() -> None:
 
 def test_detect_tools_picks_consultant_hint_for_dev() -> None:
     assert "search_consultants" in detect_tools("search a dev with java")
+
+
+# ---------------------------------------------------------------------------
+# Alias / language normalisation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "token,expected",
+    [
+        ("js", "javascript"),
+        ("ts", "typescript"),
+        ("k8s", "kubernetes"),
+        ("nodejs", "node.js"),
+        ("ml", "machine learning"),
+        ("ia", "artificial intelligence"),
+        ("golang", "go"),
+        # lang normalisation (French → English)
+        ("developpeur", "developer"),
+        ("ingenieur", "engineer"),
+        ("securite", "security"),
+        # unknown token passes through unchanged
+        ("java", "java"),
+        ("python", "python"),
+    ],
+)
+def test_normalize_token(token: str, expected: str) -> None:
+    assert _normalize_token(token) == expected
+
+
+def test_extract_keywords_expands_alias() -> None:
+    # "JS" should be normalised to "javascript" before deduplication
+    keywords = extract_keywords("cherche un développeur JS senior")
+    assert "javascript" in keywords
+    assert "js" not in keywords
+
+
+def test_extract_keywords_french_tech_term() -> None:
+    # Single-token FR terms are normalised; multi-word phrases are token-split
+    # so each token is normalised independently.
+    keywords = extract_keywords("expert en intelligence artificielle")
+    # "ia" → "artificial intelligence", but "intelligence" and "artificielle"
+    # are separate tokens that pass through (no single-token alias for them).
+    # The single-token alias "ia" IS resolved:
+    keywords_ia = extract_keywords("expert ia python")
+    assert "artificial intelligence" in keywords_ia
+
+
+def test_extract_keywords_lang_normalisation() -> None:
+    # "ingenieur" is a type-hint (filtered like "developer") so it won't appear.
+    # Other French tech nouns that are NOT type-hints ARE normalised.
+    keywords = extract_keywords("expert securite reseaux")
+    assert "security" in keywords
+    assert "network" in keywords

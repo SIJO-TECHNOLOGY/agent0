@@ -15,6 +15,7 @@ from app.services.search_strategy import (
     classify_anchors,
     domain_match_tokens,
     evidence_score,
+    infer_years_from_title,
     name_match_score,
     safe_keywords,
 )
@@ -145,6 +146,60 @@ def test_domain_dimension_is_scoped_to_high_signal_text() -> None:
     assert "domain" in hits2
 
 
+def test_over_cap_candidate_is_penalised() -> None:
+    # "junior 0-2 ans" → required_max_years=2. A 7-year profile must score far
+    # below an in-band 1-year profile with the same skill match.
+    over, hits = evidence_score(
+        "python",
+        skills=("python",),
+        domains=(),
+        role=None,
+        candidate_min_years=7,
+        required_min_years=None,
+        required_max_years=2,
+    )
+    in_band, _ = evidence_score(
+        "python",
+        skills=("python",),
+        domains=(),
+        role=None,
+        candidate_min_years=1,
+        required_min_years=None,
+        required_max_years=2,
+    )
+    assert "seniority" not in hits      # over-cap loses the seniority credit
+    assert over < in_band               # and is strongly penalised
+    assert over < 0.5                   # cannot be a near-perfect match
+
+
+def test_within_cap_candidate_keeps_credit() -> None:
+    score, hits = evidence_score(
+        "python",
+        skills=("python",),
+        domains=(),
+        role=None,
+        candidate_min_years=2,
+        required_min_years=None,
+        required_max_years=2,
+    )
+    assert "seniority" in hits
+
+
+def test_unknown_years_not_hit_by_over_cap_multiplier() -> None:
+    # Unknown experience is "unproven" (seniority credit 0, like a min query),
+    # but it must NOT take the over-cap multiplier — so it ranks above a KNOWN
+    # over-cap profile.
+    unknown, _ = evidence_score(
+        "python", skills=("python",), domains=(), role=None,
+        candidate_min_years=None, required_min_years=None, required_max_years=2,
+    )
+    over_cap, _ = evidence_score(
+        "python", skills=("python",), domains=(), role=None,
+        candidate_min_years=7, required_min_years=None, required_max_years=2,
+    )
+    assert unknown > over_cap
+
+
 def test_evidence_score_seniority_below_required_earns_nothing() -> None:
     below, hits = evidence_score(
         "java",
@@ -216,6 +271,116 @@ def test_name_match_zero_when_no_overlap_or_empty() -> None:
     assert name_match_score("Taher ben abdallah", "Jean Dupont") == 0.0
     assert name_match_score("", "Anyone") == 0.0
     assert name_match_score("Taher", None) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# infer_years_from_title — seniority cross-check (item 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("Senior Java Developer", 5),
+        ("Lead Architect", 8),   # architect (8) > lead (7) — highest wins
+        ("Principal Engineer", 9),
+        ("junior developer", 1),
+        ("Staff Software Engineer", 7),
+        ("CTO", 12),
+    ],
+)
+def test_infer_years_from_title(title: str, expected: int) -> None:
+    assert infer_years_from_title(title) == expected
+
+
+def test_infer_years_from_title_unknown_returns_none() -> None:
+    assert infer_years_from_title("Software Developer") is None
+    assert infer_years_from_title("") is None
+
+
+# ---------------------------------------------------------------------------
+# evidence_score seniority — title inference fallback
+# ---------------------------------------------------------------------------
+
+
+def test_seniority_inferred_from_title_when_no_years() -> None:
+    # Candidate has no explicit years but title says "Senior" (≥5 years implied).
+    # Query requires 5 years. Should still get partial seniority credit.
+    score, hits = evidence_score(
+        "senior java developer banking experience",
+        skills=("java",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,   # no explicit years data
+        required_min_years=5,
+    )
+    assert "seniority" in hits
+    # Partial credit (0.5 × seniority weight), not full credit
+    assert score > 0.0
+
+
+def test_seniority_title_inference_gives_lower_score_than_explicit_years() -> None:
+    # Same profile: explicit 7 years should outscore title-only inference
+    score_explicit, _ = evidence_score(
+        "senior java developer",
+        skills=("java",),
+        domains=(),
+        role=None,
+        candidate_min_years=7,
+        required_min_years=5,
+    )
+    score_inferred, _ = evidence_score(
+        "senior java developer",
+        skills=("java",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=5,
+    )
+    assert score_explicit > score_inferred
+
+
+# ---------------------------------------------------------------------------
+# _term_present alias awareness (item 1)
+# ---------------------------------------------------------------------------
+
+
+def test_alias_k8s_matches_kubernetes_in_haystack() -> None:
+    # Query uses "k8s", profile says "kubernetes"
+    score, hits = evidence_score(
+        "experienced with kubernetes and docker",
+        skills=("k8s",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:k8s" in hits
+
+
+def test_alias_kubernetes_matches_k8s_in_haystack() -> None:
+    # Query uses canonical "kubernetes", profile says "k8s"
+    score, hits = evidence_score(
+        "k8s cluster management expert",
+        skills=("kubernetes",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:kubernetes" in hits
+
+
+def test_alias_js_matches_javascript_in_haystack() -> None:
+    score, hits = evidence_score(
+        "javascript react developer",
+        skills=("js",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:js" in hits
 
 
 # ---------------------------------------------------------------------------

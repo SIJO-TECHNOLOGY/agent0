@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from typing import Final
 
+from app.graph.intent_keywords import SKILL_ALIASES, LANG_NORMALIZATIONS
+
 # Boolean operators / grouping that BoondManager keyword search does NOT
 # support — stripped so a planner-suggested term can't silently match
 # nothing.
@@ -326,6 +328,40 @@ _YEARS_RE: Final[re.Pattern[str]] = re.compile(
     r"(\d{1,2})\s*\+?\s*(?:years?|yrs?|ans?)", re.IGNORECASE
 )
 
+# Maps title-level seniority keywords to their approximate minimum years
+# equivalent.  Used when explicit years data is absent — a "Lead" title
+# implies ≥ 7 years of experience without any number in the profile.
+_TITLE_SENIORITY_YEARS: Final[dict[str, int]] = {
+    "junior": 1,
+    "stagiaire": 1,
+    "intern": 1,
+    "mid": 3,
+    "intermediate": 3,
+    "confirmed": 3,
+    "confirmé": 3,
+    "confirme": 3,
+    "senior": 5,
+    "experienced": 5,
+    "expérimenté": 5,
+    "experimente": 5,
+    "lead": 7,
+    "staff": 7,
+    "principal": 9,
+    "architect": 8,
+    "architecte": 8,
+    "expert": 8,
+    "director": 10,
+    "directeur": 10,
+    "vp": 12,
+    "cto": 12,
+    "cio": 12,
+}
+
+_TITLE_SENIORITY_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _TITLE_SENIORITY_YEARS) + r")\b",
+    re.IGNORECASE,
+)
+
 
 def parse_years(text: str) -> int | None:
     """Largest explicit years-of-experience figure mentioned in free text."""
@@ -337,6 +373,21 @@ def parse_years(text: str) -> int | None:
             continue
         if best is None or value > best:
             best = value
+    return best
+
+
+def infer_years_from_title(title_haystack: str) -> int | None:
+    """Estimate minimum years of experience from seniority keywords in a title.
+
+    Returns the HIGHEST implied minimum found so a ``"Senior Lead Architect"``
+    yields 8 (architect) rather than 5 (senior).  Returns ``None`` when no
+    seniority keyword is found, so callers can distinguish "unknown" from 0.
+    """
+    best: int | None = None
+    for match in _TITLE_SENIORITY_RE.finditer(title_haystack.lower()):
+        years = _TITLE_SENIORITY_YEARS.get(match.group(1).lower())
+        if years is not None and (best is None or years > best):
+            best = years
     return best
 
 
@@ -352,6 +403,11 @@ class EvidenceWeights:
 
 
 _WEIGHTS = EvidenceWeights()
+
+# Multiplier applied to the final score when a candidate's known experience
+# exceeds the requested maximum (e.g. a 7-year profile for a "junior 0-2 ans"
+# query). Strong but non-zero so the profile stays visible, just ranked low.
+_OVER_CAP_PENALTY: Final[float] = 0.4
 
 # Closed vocabulary of criterion keys the LLM may order in `ranking_priority`.
 RANKING_CRITERIA: Final[frozenset[str]] = frozenset(
@@ -392,23 +448,40 @@ def domain_match_tokens(domains: tuple[str, ...] | list[str]) -> set[str]:
     return tokens
 
 
+def _canonical_term(term: str) -> str:
+    """Resolve language normalisation + skill aliases for a term."""
+    t = term.strip().lower()
+    step1 = LANG_NORMALIZATIONS.get(t, t)
+    return SKILL_ALIASES.get(step1, step1)
+
+
 def _term_present(term: str, haystack: str) -> bool:
-    """True if ``term`` is a substring, or (multi-word) all its tokens appear.
+    """True if ``term`` (or any of its aliases) appears in the haystack.
 
     Single-word skills match as substrings (``"java"`` in ``"javafx"`` etc.);
-    multi-word terms (e.g. ``"machine learning"`` or a domain phrase that
-    leaked into the skill set) match only when EVERY token is present, which
-    is tolerant to ``&``/``and`` and word order.
+    multi-word terms match when EVERY token is present (word-order tolerant).
+    The canonical form and the original alias are both tried so "k8s" matches
+    a profile that only mentions "kubernetes" and vice-versa.
     """
     term = term.strip().lower()
     if not term:
         return False
-    if term in haystack:
-        return True
-    tokens = [t for t in _TOKEN_SPLIT_RE.split(term) if t]
-    if len(tokens) <= 1:
-        return False
-    return all(token in haystack for token in tokens)
+
+    candidates = {term, _canonical_term(term)}
+    # Also try reverse lookup: if the query uses the canonical form, match aliases.
+    for alias, canonical in SKILL_ALIASES.items():
+        if canonical == term:
+            candidates.add(alias)
+
+    for t in candidates:
+        if not t:
+            continue
+        if t in haystack:
+            return True
+        tokens = [tok for tok in _TOKEN_SPLIT_RE.split(t) if tok]
+        if len(tokens) > 1 and all(tok in haystack for tok in tokens):
+            return True
+    return False
 
 
 def evidence_score(
@@ -419,6 +492,7 @@ def evidence_score(
     role: str | None,
     candidate_min_years: int | None,
     required_min_years: int | None,
+    required_max_years: int | None = None,
     domain_haystack: str | None = None,
     requested_name: str | None = None,
     candidate_name: str | None = None,
@@ -480,14 +554,37 @@ def evidence_score(
             hits.add("role")
         dims.append(("role", weights.role, 1.0 if role_found else 0.0))
 
-    if required_min_years is not None:
-        meets = (
-            candidate_min_years is not None
-            and candidate_min_years >= required_min_years
+    over_cap = False
+    if required_min_years is not None or required_max_years is not None:
+        effective_years = candidate_min_years
+        # When explicit years data is absent, fall back to title-level inference
+        # so a "Senior Lead" profile is not penalised against a "5+ years" query
+        # merely because the structured experience field was not filled.
+        if effective_years is None:
+            effective_years = infer_years_from_title(hay)
+        meets_min = required_min_years is None or (
+            effective_years is not None and effective_years >= required_min_years
         )
-        if meets:
+        # Unknown years can't disprove the cap, so only a KNOWN over-cap value
+        # breaks the band (we never penalise an unknown).
+        within_max = required_max_years is None or (
+            effective_years is None or effective_years <= required_max_years
+        )
+        over_cap = (
+            required_max_years is not None
+            and effective_years is not None
+            and effective_years > required_max_years
+        )
+        in_band = meets_min and within_max
+        # Partial credit (0.5) when inferred from title only (less certain than
+        # an explicit years figure), so a profile with explicit years still
+        # outranks one where we guessed from the title.
+        if in_band and effective_years is not None:
             hits.add("seniority")
-        dims.append(("seniority", weights.seniority, 1.0 if meets else 0.0))
+            fraction = 1.0 if candidate_min_years is not None else 0.5
+        else:
+            fraction = 0.0
+        dims.append(("seniority", weights.seniority, fraction))
 
     if requested_name and requested_name.strip():
         name_frac = name_match_score(requested_name, candidate_name)
@@ -516,4 +613,9 @@ def evidence_score(
         weighted = [(weight, fraction) for _key, weight, fraction in dims]
     total_weight = sum(weight for weight, _ in weighted)
     score = sum(weight * fraction for weight, fraction in weighted) / total_weight
+    # A candidate whose known experience exceeds the requested maximum (e.g. a
+    # 7-year profile for a "junior 0-2 ans" search) is strongly penalised so it
+    # cannot top the ranking, while staying visible rather than excluded.
+    if over_cap:
+        score *= _OVER_CAP_PENALTY
     return score, hits

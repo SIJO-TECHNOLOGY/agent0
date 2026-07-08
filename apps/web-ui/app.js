@@ -609,7 +609,8 @@ function renderMessage(role, text) {
   message.append(buildMessageHead(role), body);
   elements.messages.appendChild(message);
   setUiState(role === "error" ? "error" : "active");
-  scrollToBottom();
+  // Auto-scroll only when the user sends a message, not for assistant responses.
+  if (role === "user") scrollToBottom();
 
   return message;
 }
@@ -686,7 +687,7 @@ function renderCandidateDetail(candidate) {
   const meta = document.createElement("div");
   meta.className = "candidate-meta";
   meta.append(
-    createMetaItem(t("candidate.meta.experience"), formatExperience(candidate.experience_years)),
+    createMetaItem(t("candidate.meta.experience"), experienceDisplay(candidate)),
     createMetaItem(t("candidate.meta.location"), candidate.location || t("candidate.fallback_location")),
     createMetaItem(t("candidate.meta.availability"), candidate.availability || t("candidate.fallback_availability")),
     createMetaItem(t("candidate.meta.contract"), formatList(candidate.contract_preferences)),
@@ -710,7 +711,6 @@ function renderCandidateDetail(candidate) {
   );
   elements.messages.appendChild(detail);
   setUiState("active");
-  scrollToBottom();
 }
 
 function renderTechnicalSummary(ui) {
@@ -762,7 +762,6 @@ function renderTechnicalSummary(ui) {
 
   elements.messages.appendChild(card);
   setUiState("active");
-  scrollToBottom();
 }
 
 function renderClarificationForm(response) {
@@ -804,7 +803,6 @@ function renderClarificationForm(response) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
-  scrollToBottom();
 }
 
 async function submitClarification(form, sourceResponse) {
@@ -863,7 +861,6 @@ function renderCandidateCards(candidates, ui = {}) {
 
   elements.messages.appendChild(wrapper);
   setUiState("active");
-  scrollToBottom();
 
   return wrapper;
 }
@@ -944,7 +941,7 @@ function renderCandidateCard(candidate) {
   const meta = document.createElement("div");
   meta.className = "candidate-meta";
   meta.append(
-    createMetaItem(t("candidate.meta.experience"), formatExperience(candidate.experience_years)),
+    createMetaItem(t("candidate.meta.experience"), experienceDisplay(candidate)),
     createMetaItem(t("candidate.meta.location"), candidate.location || t("candidate.fallback_location")),
     createMetaItem(t("candidate.meta.contract"), formatList(candidate.contract_preferences)),
     createMetaItem(t("candidate.meta.availability"), candidate.availability || t("candidate.fallback_availability")),
@@ -1005,7 +1002,7 @@ function openCandidateDrawer(candidate) {
   elements.drawerName.textContent = candidate.full_name || t("candidate.no_name");
   elements.drawerTitle.textContent = candidate.title || t("candidate.fallback_title");
   elements.drawerSummary.textContent = candidate.summary || t("candidate.no_summary");
-  elements.drawerExperience.textContent = formatExperience(candidate.experience_years);
+  elements.drawerExperience.textContent = experienceDisplay(candidate);
   elements.drawerLocation.textContent = candidate.location || t("candidate.fallback_location");
   elements.drawerAvailability.textContent = candidate.availability || t("candidate.fallback_availability");
   elements.drawerMatch.textContent = formatMatchScore(candidate.match_score);
@@ -1116,7 +1113,6 @@ function renderLoading() {
   message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
-  scrollToBottom();
 
   return message;
 }
@@ -1138,7 +1134,6 @@ function renderThinking() {
   message.append(buildMessageHead("assistant"), body);
   elements.messages.appendChild(message);
   setUiState("loading");
-  scrollToBottom();
 
   let currentStep = null;
 
@@ -1177,7 +1172,6 @@ function renderThinking() {
       }
       steps.appendChild(li);
       currentStep = { li, icon };
-      scrollToBottom();
     },
     finish() {
       completeStep(currentStep);
@@ -1715,6 +1709,21 @@ function formatExperience(years) {
   if (Number.isNaN(value)) return String(years);
 
   return tCount("candidate.years", value, { count: value });
+}
+
+// Experience display value: prefer the numeric years, otherwise fall back to
+// the BoondManager experience-level band label (e.g. "10 à 15 ans"), which is
+// often the only experience signal a profile carries.
+function experienceDisplay(candidate) {
+  const years = candidate.experience_years;
+  if (years !== null && years !== undefined && years !== "") {
+    return formatExperience(years);
+  }
+  const label = candidate.experience_label;
+  if (typeof label === "string" && label.trim()) {
+    return label.trim();
+  }
+  return t("candidate.not_specified_f");
 }
 
 function formatMatchScore(score) {

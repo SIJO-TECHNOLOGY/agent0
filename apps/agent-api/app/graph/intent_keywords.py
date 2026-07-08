@@ -14,6 +14,118 @@ from typing import Final
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.\-]{1,}")
 
+# ---------------------------------------------------------------------------
+# Skill aliases — maps common abbreviations / alternate spellings to their
+# canonical lowercase form used in BoondManager skill labels and scoring.
+# Keys are the raw token (post-accent-strip, lowercase); values are canonical.
+# ---------------------------------------------------------------------------
+SKILL_ALIASES: Final[dict[str, str]] = {
+    # JavaScript ecosystem
+    "js": "javascript",
+    "ts": "typescript",
+    "nodejs": "node.js",
+    "node": "node.js",
+    "reactjs": "react",
+    "vuejs": "vue",
+    "react.js": "react",
+    "vue.js": "vue",
+    "nextjs": "next.js",
+    "nuxtjs": "nuxt.js",
+    # Cloud / infra
+    "k8s": "kubernetes",
+    "kube": "kubernetes",
+    "tf": "terraform",
+    "gcp": "google cloud",
+    "aws": "amazon web services",
+    # Databases
+    "pg": "postgresql",
+    "psql": "postgresql",
+    "mongo": "mongodb",
+    "es": "elasticsearch",
+    # ML / data
+    "ml": "machine learning",
+    "dl": "deep learning",
+    "nlp": "natural language processing",
+    "cv": "computer vision",
+    "sklearn": "scikit-learn",
+    "tf2": "tensorflow",
+    # CI/CD
+    "gh": "github",
+    "gh-actions": "github actions",
+    "gitlab-ci": "gitlab",
+    "jenkins-x": "jenkins",
+    # Languages
+    "py": "python",
+    "rb": "ruby",
+    "cs": "c#",
+    "cpp": "c++",
+    "golang": "go",
+    # French → English tech terms (multilinguisme item 7)
+    "apprentissage automatique": "machine learning",
+    "traitement du langage": "natural language processing",
+    "vision artificielle": "computer vision",
+    "nuage": "cloud",
+    "conteneur": "docker",
+    "conteneurs": "docker",
+    "orchestration": "kubernetes",
+    "base de donnees": "database",
+    "bases de donnees": "database",
+    "developpement web": "web development",
+    "developpement mobile": "mobile development",
+    "intelligence artificielle": "artificial intelligence",
+    "ia": "artificial intelligence",
+}
+
+# ---------------------------------------------------------------------------
+# Language normalisation — French technical role/domain terms mapped to their
+# English equivalents so FR queries score consistently against EN profiles.
+# Applied at tokenisation time in extract_keywords().
+# ---------------------------------------------------------------------------
+LANG_NORMALIZATIONS: Final[dict[str, str]] = {
+    # Roles
+    "developpeur": "developer",
+    "ingenieur": "engineer",
+    "architecte": "architect",
+    "analyste": "analyst",
+    "concepteur": "designer",
+    "testeur": "tester",
+    "auditeur": "auditor",
+    "administrateur": "administrator",
+    "responsable": "manager",
+    "directeur": "director",
+    "chef": "lead",
+    # Domains / sectors
+    "banque": "banking",
+    "assurance": "insurance",
+    "finance": "finance",
+    "paiement": "payment",
+    "paiements": "payments",
+    "sante": "healthcare",
+    "immobilier": "real estate",
+    "energie": "energy",
+    "telecom": "telecom",
+    "telecoms": "telecom",
+    "transport": "transport",
+    "logistique": "logistics",
+    "commerce": "retail",
+    "distribution": "retail",
+    # Generic tech words
+    "securite": "security",
+    "reseau": "network",
+    "reseaux": "network",
+    "systeme": "system",
+    "systemes": "system",
+    "donnees": "data",
+    "performance": "performance",
+    "integration": "integration",
+    "migration": "migration",
+    "transformation": "transformation",
+    "numerique": "digital",
+    "agile": "agile",
+    "scrum": "scrum",
+    "devops": "devops",
+}
+
 # Matches phrases like "candidate id 41924", "candidateId=41924", "candidate#41924",
 # and the common typo "cadidate id 41924". Requires an "id"-style anchor so we
 # don't over-trigger on stray numbers.
@@ -244,7 +356,7 @@ _STOPWORDS: Final[frozenset[str]] = frozenset(
 
 
 _YEARS_EXPERIENCE_RE: Final[re.Pattern[str]] = re.compile(
-    r"\b(\d{1,2})\s*\+?\s*(?:year|yr)s?\b",
+    r"\b(\d{1,2})\s*\+?\s*(?:year|yr|an)s?\b",
     re.IGNORECASE,
 )
 
@@ -254,6 +366,20 @@ def tokenize(query: str) -> list[str]:
     normalized = unicodedata.normalize("NFKD", query)
     without_accents = "".join(char for char in normalized if not unicodedata.combining(char))
     return [match.group(0).lower() for match in WORD_RE.finditer(without_accents)]
+
+
+def _normalize_token(token: str) -> str:
+    """Apply language normalisation then skill alias resolution to a single token.
+
+    Lang normalisation maps French technical words to their English equivalents
+    (e.g. "developpeur" → "developer") so queries in French score consistently
+    against English-labelled profiles.  Alias resolution then maps common
+    abbreviations to their canonical form (e.g. "k8s" → "kubernetes").
+    Both tables are applied in order so a French abbreviation (e.g. "ia" →
+    "artificial intelligence") is handled correctly.
+    """
+    step1 = LANG_NORMALIZATIONS.get(token, token)
+    return SKILL_ALIASES.get(step1, step1)
 
 
 def extract_keywords(query: str) -> list[str]:
@@ -266,10 +392,11 @@ def extract_keywords(query: str) -> list[str]:
             continue
         if token in _TYPE_HINTS:
             continue
-        if token in seen:
+        normalized = _normalize_token(token)
+        if normalized in seen:
             continue
-        seen.add(token)
-        keywords.append(token)
+        seen.add(normalized)
+        keywords.append(normalized)
     return keywords
 
 
@@ -297,6 +424,72 @@ def extract_min_years_experience(query: str) -> int | None:
     except (TypeError, ValueError):
         return None
     return min(values) if values else None
+
+
+_UNIT_RE: Final[str] = r"(?:year|yr|an|année|annee)s?"
+# "0-2 ans", "3 à 5 years", "3 to 5 yrs"
+_RANGE_RE: Final[re.Pattern[str]] = re.compile(
+    rf"\b(\d{{1,2}})\s*(?:-|–|—|à|a|to)\s*(\d{{1,2}})\s*\+?\s*{_UNIT_RE}\b",
+    re.IGNORECASE,
+)
+# upper bound: "moins de 3 ans", "less than 3 years", "jusqu'à 2 ans", "max 3 ans"
+_MAX_RE: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?:moins\s+de|less\s+than|jusqu['’]?\s*[aà]|up\s+to|max(?:imum)?|au\s+plus)\s*"
+    rf"(\d{{1,2}})\s*\+?\s*{_UNIT_RE}\b",
+    re.IGNORECASE,
+)
+# lower bound: "plus de 5 ans", "more than 5 years", "au moins 5 ans", "5+ ans"
+_MIN_RE: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?:plus\s+de|more\s+than|au\s+moins|at\s+least|min(?:imum)?)\s*(\d{{1,2}})\s*{_UNIT_RE}\b"
+    rf"|\b(\d{{1,2}})\s*\+\s*{_UNIT_RE}\b",
+    re.IGNORECASE,
+)
+# Seniority labels → (min_years, max_years) band, used only when the query
+# gives no explicit number. Junior ≤2, Confirmed 3-5, Senior ≥5.
+_SENIORITY_BANDS: Final[dict[str, tuple[int | None, int | None]]] = {
+    "junior": (None, 2),
+    "intermediate": (3, 5),
+    "senior": (5, None),
+    "lead": (7, None),
+    "principal": (8, None),
+}
+
+
+def extract_experience_bounds(
+    query: str, seniority: str | None = None
+) -> tuple[int | None, int | None]:
+    """Return (min_years, max_years) requested by the query.
+
+    Explicit numbers win over the seniority-label fallback. Recognises ranges
+    ("0-2 ans"), upper bounds ("moins de 3 ans"), lower bounds ("5+ ans",
+    "plus de 5 ans"), and a bare "<N> years" (treated as a minimum, preserving
+    the previous behaviour). When the query carries no number, a seniority word
+    ("junior"/"senior") maps to a band.
+    """
+    lo: int | None = None
+    hi: int | None = None
+
+    range_match = _RANGE_RE.search(query)
+    if range_match:
+        a, b = int(range_match.group(1)), int(range_match.group(2))
+        lo, hi = min(a, b), max(a, b)
+    else:
+        max_match = _MAX_RE.search(query)
+        if max_match:
+            hi = int(max_match.group(1))
+        min_match = _MIN_RE.search(query)
+        if min_match:
+            lo = int(min_match.group(1) or min_match.group(2))
+        if lo is None and hi is None:
+            # A bare "<N> years" with no qualifier → minimum (legacy behaviour).
+            lo = extract_min_years_experience(query)
+
+    if lo is None and hi is None and seniority:
+        band = _SENIORITY_BANDS.get(seniority)
+        if band is not None:
+            lo, hi = band
+
+    return lo, hi
 
 
 def extract_candidate_id(query: str) -> int | None:

@@ -27,7 +27,8 @@ flowchart TD
     A["discover_mcp_tools"] --> B["plan_with_llm"]
     B --> C["execute_llm_plan"]
     C --> D["enrich_candidates"]
-    D --> E["evaluate_results"]
+    D --> N["normalize_candidates (Agent1)"]
+    N --> E["evaluate_results"]
     E --> F["rank_candidates"]
     F --> G["reflect_on_results"]
     G -->|"LLM: needs_replan (budget left)"| B
@@ -73,7 +74,8 @@ flowchart TD
     E --> F["replan_if_needed"]
     F -->|replan| B
     F -->|continue| G["enrich_candidates"]
-    G --> H["rank_candidates"]
+    G --> N["normalize_candidates (Agent1)"]
+    N --> H["rank_candidates"]
     H --> I["generate_final_response"]
 ```
 
@@ -85,6 +87,8 @@ flowchart TD
 | `build_plan` | Produce a bounded execution plan with clear steps and expected tool needs. |
 | `select_tools` | Match plan steps to available MCP tools, preferring dynamically discovered tool metadata. |
 | `execute_mcp_tools` | Execute selected MCP tools asynchronously, collect outputs, and normalize failures. |
+| `enrich_candidates` | Fan-out enrichment: per candidate, fetch detail, technical document, CV, and administrative data via MCP and merge them into the candidate's `data` under `_enrichment_*` keys. |
+| `normalize_candidates` | **Agent1 — data-quality pass.** Pure-Python heuristics (no LLM, no I/O) that reconcile the same information across BoondManager structured fields, the technical document, and the CV, then write a normalised view into `result.data` under `_normalized_*` keys (experience years, skills, languages, title). See [Agent1](#agent1--candidate-data-normalisation). |
 | `evaluate_results` | Assess result quality, coverage, duplicates, confidence, and missing information. |
 | `replan_if_needed` | Deterministic fallback only: decide whether to re-enter planning with bounded retries or proceed to final response. |
 | `reflect_on_results` | LLM workflow only: ask the LLM whether the ranked results warrant one more guided, bounded replan; set `replan_feedback` under budget. |
@@ -119,7 +123,139 @@ The graph state should be represented with typed Pydantic models or typed dictio
 - `select_tools` moves to `execute_mcp_tools`; missing tool matches become warnings or errors.
 - `execute_mcp_tools` moves to `evaluate_results` with successful, partial, or failed tool outcomes.
 - `evaluate_results` records quality signals and confidence.
-- `replan_if_needed` either loops back to `build_plan` or proceeds to `generate_final_response`.
+- `replan_if_needed` either loops back to `build_plan` or proceeds to `enrich_candidates`.
+- `enrich_candidates` always moves to `normalize_candidates` (Agent1) before ranking, so the ranker and the card mapper read reconciled data rather than raw, incomplete BoondManager fields.
+
+## Agent1 — Candidate Data Normalisation
+
+`normalize_candidates` (module `app/agents/agent1/normalizer.py`) is a dedicated
+**data-quality layer** that runs between enrichment and matching. Its single
+responsibility is reconciling the same fact across the three available sources —
+BoondManager structured fields, the technical document, and the CV text — and
+writing a normalised view back into each `result.data`.
+
+Agent1 has two passes:
+
+1. A **deterministic pass** (always on) — pure-Python heuristics that produce
+   the `_normalized_*` values and *detect conflicts* (`_normalized_conflicts`).
+2. An optional **LLM reconciliation pass** (`app/agents/agent1/reconciler.py`,
+   off by default) — only the candidates the deterministic pass flagged as
+   incoherent are sent to an LLM that judges coherence across experience,
+   skills, languages, and title. See [LLM reconciliation](#llm-reconciliation).
+
+Design constraints of the deterministic pass:
+
+- **Pure Python heuristics** — no LLM calls, no new I/O. All inputs already live
+  in `result.data` from `enrich_candidates`.
+- **Non-destructive** — the raw BoondManager payload is preserved untouched;
+  Agent1 only *adds* `_normalized_*` keys.
+- **Idempotent** — running it twice yields the same result.
+
+Keys written into `result.data`:
+
+| Key | Meaning |
+| --- | --- |
+| `_normalized_experience_years` | Best years-of-experience estimate. |
+| `_normalized_experience_source` | Which source won: `boondmanager`, `technical_document`, `cv`, `profile_text`, or `llm`. |
+| `_normalized_skills` | Deduplicated union of skills (structured + free-text). |
+| `_normalized_languages` | Deduplicated union of languages (structured + CV). |
+| `_normalized_title` | Best job-title estimate. |
+| `_normalized_conflicts` | List of detected coherence-conflict reasons (internal; never surfaced on the card). |
+
+### Experience resolution
+
+1. **Structured BoondManager `experienceMinYears` is authoritative** — when
+   present it is used directly (curated data).
+2. Otherwise, fall back to experience-qualified figures mined from free text, in
+   order of reliability: technical document → CV → profile title/snippet.
+3. Free-text mining only counts a number when it is **explicitly tied to an
+   experience keyword** in the same clause (e.g. "6 years of Experience",
+   "3+ years of hands-on technical experience", "16 ans d'expérience"). Stray
+   numbers — an age ("40 ans"), a duration ("4 years of data"), company history
+   ("société fondée il y a 40 ans") — are ignored. Values are capped at 50 years.
+
+### Skills & languages
+
+- Skills come from BoondManager structured fields first, then from the technical
+  document and CV free text matched against the shared `KNOWN_SKILL_PATTERNS`
+  table. Comma/newline-separated `skills` strings are split into individual tags
+  (no giant blob), and overly long tokens (sentences) are dropped.
+- Languages come from structured fields, supplemented by language mentions
+  detected in the CV (with level qualifiers when present).
+
+### LLM reconciliation
+
+The deterministic pass is fast and reliable but rigid: every tricky case (an age
+"40 ans" sitting next to "16 ans d'expérience") must be anticipated in code. The
+optional LLM layer adds **non-deterministic decisional flexibility** for exactly
+those cases, while keeping the deterministic result as the baseline/fallback.
+
+How it works:
+
+1. The deterministic pass records conflict reasons in `_normalized_conflicts`,
+   e.g. `age_present_with_experience`, `experience_multiple_figures`,
+   `experience_vs_structured_disagreement`, `title_seniority_mismatch`.
+2. In the `normalize_candidates` node, **only the conflicting candidates** are
+   sent to the reconciler — coherent candidates skip the LLM entirely (zero
+   cost in the common case). All conflicting candidates go in **one batched
+   call** per search.
+3. The LLM receives the grounded text (CV, technical document, title) plus the
+   deterministic values, and returns a validated JSON `Agent1Judgement` per
+   candidate with a `confidence`. It is instructed to never invent data and to
+   distinguish experience from age / durations.
+4. A judgement overrides the deterministic value **only when `confidence ≥
+   `settings.agent1_confidence_threshold`** (default 0.6); the winning
+   experience source is then `llm`.
+
+Guardrails:
+
+- **Off by default** (`AGENT1_LLM_RECONCILIATION=false`); Agent1 stays purely
+  deterministic until enabled.
+- **Fail-safe** — any LLM/parse/validation error returns no judgements, so the
+  deterministic result is kept (`Agent1Reconciler.reconcile` never raises).
+- **Bounded** — capped at `agent1_max_reconcile_candidates` per search; CV/tech
+  texts are truncated before sending.
+- **Determinism trade-off** — by design this pass is non-deterministic on
+  conflicting candidates only; tests mock the `ChatFn`, so the deterministic
+  suite stays stable.
+
+### Surfacing in the frontend card
+
+The card mapper (`candidate_mapper.py`) strips every `result.data` key starting
+with `_` unless it is whitelisted. Agent1's `_normalized_*` keys are therefore
+listed in `_SAFE_INTERNAL_FIELDS` and consumed by `_first_number`
+(experience), `_extract_skills`, and `_extract_languages`. **Any new
+`_normalized_*` key must be both whitelisted there and read by the relevant
+extractor, or it will never reach the card.** (`_normalized_conflicts` is
+deliberately *not* whitelisted — it is internal-only and never shown.)
+
+### Shared skill patterns & import boundary
+
+`KNOWN_SKILL_PATTERNS` lives in the dependency-free module `app/skill_patterns.py`
+and is imported by both `candidate_mapper.py` and Agent1. It is kept outside
+`app.services` on purpose: importing it from `app.services.candidate_mapper`
+would trigger `app.services.__init__` → `search_service` → `graph.nodes` →
+Agent1, creating a circular import.
+
+## Experience range & seniority cap
+
+The ranking models experience as a **range**, not just a floor. `analyze_intent`
+(and the LLM planner) populate two constraints:
+
+- `min_experience_years` — a floor (`senior`, `5+ ans`, `au moins 5 ans`).
+- `max_experience_years` — a cap (`junior`, `moins de 3 ans`, `up to 2 years`).
+
+A bare seniority word maps to a band when no number is given: **junior ≤ 2,
+confirmed 3-5, senior ≥ 5** (`extract_experience_bounds`). A range like
+`0-2 ans` sets both bounds.
+
+In `evidence_score`, the seniority dimension is credited only when the
+candidate's known years sit **within the requested band**. A candidate whose
+*known* experience exceeds the cap (e.g. a 7-year profile for a "junior 0-2 ans"
+search) loses the seniority credit **and** the final score is multiplied by
+`_OVER_CAP_PENALTY` (0.4) — so it drops far down the ranking but stays visible
+rather than being excluded. Unknown experience is never hit by the cap
+multiplier (we only penalise a known over-cap value).
 
 ## Retry Strategy
 

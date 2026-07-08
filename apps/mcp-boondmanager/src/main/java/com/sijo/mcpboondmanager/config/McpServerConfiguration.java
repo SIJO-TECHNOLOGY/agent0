@@ -1,6 +1,8 @@
 package com.sijo.mcpboondmanager.config;
 
 import com.sijo.mcpboondmanager.tools.BoondDictionaryTool;
+import com.sijo.mcpboondmanager.tools.CandidateAdministrativeTool;
+import com.sijo.mcpboondmanager.tools.CandidateCvTool;
 import com.sijo.mcpboondmanager.tools.CandidateDetailTool;
 import com.sijo.mcpboondmanager.tools.CandidateSearchTool;
 import com.sijo.mcpboondmanager.tools.CandidateTechnicalDocTool;
@@ -17,10 +19,12 @@ public class McpServerConfiguration {
             BoondDictionaryTool dictionaryTool,
             CandidateSearchTool searchTool,
             CandidateDetailTool detailTool,
-            CandidateTechnicalDocTool technicalDocTool
+            CandidateCvTool cvTool,
+            CandidateTechnicalDocTool technicalDocTool,
+            CandidateAdministrativeTool administrativeTool
     ) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(dictionaryTool, searchTool, detailTool, technicalDocTool)
+                .toolObjects(dictionaryTool, searchTool, detailTool, cvTool, technicalDocTool, administrativeTool)
                 .build();
     }
 }

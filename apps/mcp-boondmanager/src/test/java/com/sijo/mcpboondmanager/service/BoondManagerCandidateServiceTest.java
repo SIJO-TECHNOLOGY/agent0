@@ -23,7 +23,6 @@ import com.sijo.mcpboondmanager.exception.CandidateNotFoundException;
 import com.sijo.mcpboondmanager.exception.DictionaryResolutionException;
 import com.sijo.mcpboondmanager.exception.ExternalServiceException;
 import com.sijo.mcpboondmanager.support.TestFixtures;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -41,36 +40,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class BoondManagerCandidateServiceTest {
 
-    private static final ResolvedExperience RESOLVED_EXPERIENCE =
-            new ResolvedExperience(3, false, true, "3 ans");
-
     @Mock
     private BoondManagerClient client;
-
-    @Mock
-    private ExperienceDictionaryResolver experienceResolver;
-
-    @Mock
-    private AvailabilityDictionaryResolver availabilityResolver;
-
-    @BeforeEach
-    void stubResolvers() {
-        lenient().when(experienceResolver.resolve(any())).thenReturn(RESOLVED_EXPERIENCE);
-        lenient().when(availabilityResolver.resolve(any())).thenReturn("3 mois");
-    }
 
     @Test
     void givenDictionaryEndpoint_whenGetDictionary_thenMapsEnvelopeToMcpResponse() {
         BoondDictionaryEnvelope envelope = dictionaryEnvelope();
-        when(client.get(eq("/application/dictionary"), any(Consumer.class),
-                any(ParameterizedTypeReference.class)))
+        when(client.get(eq("/application/dictionary"), any(ParameterizedTypeReference.class)))
                 .thenReturn(envelope);
 
         DictionaryResponseDto response = service().getDictionary();
@@ -90,8 +72,7 @@ class BoondManagerCandidateServiceTest {
     void givenBoondApiFailure_whenGetDictionary_thenMapsToDictionaryResolutionException() {
         BoondApiException backend = new BoondApiException(
                 "boom", HttpStatus.SERVICE_UNAVAILABLE, "/application/dictionary", null);
-        when(client.get(eq("/application/dictionary"), any(Consumer.class),
-                any(ParameterizedTypeReference.class)))
+        when(client.get(eq("/application/dictionary"), any(ParameterizedTypeReference.class)))
                 .thenThrow(backend);
 
         assertThatThrownBy(() -> service().getDictionary())
@@ -100,38 +81,6 @@ class BoondManagerCandidateServiceTest {
                     assertThat(ex.path()).isEqualTo("/application/dictionary");
                     assertThat(ex.getCause()).isSameAs(backend);
                 });
-    }
-
-    @Test
-    void givenLanguage_whenGetDictionary_thenPassesLanguageQueryParam() {
-        when(client.get(eq("/application/dictionary"), any(Consumer.class),
-                any(ParameterizedTypeReference.class)))
-                .thenReturn(dictionaryEnvelope());
-
-        service().getDictionary("en");
-
-        ArgumentCaptor<Consumer<UriBuilder>> queryCaptor = ArgumentCaptor.captor();
-        verify(client).get(eq("/application/dictionary"), queryCaptor.capture(),
-                any(ParameterizedTypeReference.class));
-        UriComponentsBuilder builder = UriComponentsBuilder.newInstance();
-        queryCaptor.getValue().accept(builder);
-        assertThat(builder.build().getQueryParams()).containsEntry("language", List.of("en"));
-    }
-
-    @Test
-    void givenBlankLanguage_whenGetDictionary_thenOmitsLanguageQueryParam() {
-        when(client.get(eq("/application/dictionary"), any(Consumer.class),
-                any(ParameterizedTypeReference.class)))
-                .thenReturn(dictionaryEnvelope());
-
-        service().getDictionary("  ");
-
-        ArgumentCaptor<Consumer<UriBuilder>> queryCaptor = ArgumentCaptor.captor();
-        verify(client).get(eq("/application/dictionary"), queryCaptor.capture(),
-                any(ParameterizedTypeReference.class));
-        UriComponentsBuilder builder = UriComponentsBuilder.newInstance();
-        queryCaptor.getValue().accept(builder);
-        assertThat(builder.build().getQueryParams()).doesNotContainKey("language");
     }
 
     @Test
@@ -145,12 +94,6 @@ class BoondManagerCandidateServiceTest {
         assertThat(response.candidates()).hasSize(1);
         assertThat(response.candidates().getFirst().id()).isEqualTo(42);
         assertThat(response.candidates().getFirst().firstName()).isEqualTo("Ada");
-        assertThat(response.candidates().getFirst().experience()).isEqualTo(3);
-        assertThat(response.candidates().getFirst().experienceMinYears()).isEqualTo(3);
-        assertThat(response.candidates().getFirst().experienceSpecified()).isTrue();
-        // availability is resolved to a human-readable string via the availability resolver
-        assertThat(response.candidates().getFirst().availability()).isEqualTo("3 mois");
-        verify(availabilityResolver).resolve("9");
         assertThat(response.meta().totalRows()).isEqualTo(1);
         assertThat(response.meta().currentPage()).isEqualTo(1);
 
@@ -233,6 +176,7 @@ class BoondManagerCandidateServiceTest {
         TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
 
         assertThat(response.id()).isEqualTo(42);
+        assertThat(response.candidateId()).isEqualTo(42);
         assertThat(response.tdId()).isEqualTo("101");
         assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
         assertThat(response.tools())
@@ -240,14 +184,6 @@ class BoondManagerCandidateServiceTest {
                         TechnicalDocumentDto.ToolProficiency::level)
                 .containsExactly(org.assertj.core.groups.Tuple.tuple("IntelliJ", 5));
         assertThat(response.diplomas()).containsExactly("Engineering school");
-
-        // raw experience id is preserved and the language-neutral fields come from the resolver
-        assertThat(response.experience()).isEqualTo(3);
-        assertThat(response.experienceMinYears()).isEqualTo(3);
-        assertThat(response.experienceOpenEnded()).isFalse();
-        assertThat(response.experienceSpecified()).isTrue();
-        assertThat(response.experienceLabelRaw()).isEqualTo("3 ans");
-        verify(experienceResolver).resolve(3);
     }
 
     @Test
@@ -263,7 +199,7 @@ class BoondManagerCandidateServiceTest {
 
         assertThat(response.id()).isEqualTo(42);
         assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
-        assertThat(response.tdId()).isEqualTo("101");
+        assertThat(response.candidateId()).isEqualTo(42);
     }
 
     @Test
@@ -276,9 +212,9 @@ class BoondManagerCandidateServiceTest {
 
         TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
 
-        assertThat(response.id()).isEqualTo(42);
+        assertThat(response.id()).isEqualTo(101);
         assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
-        assertThat(response.tdId()).isEqualTo("101");
+        assertThat(response.candidateId()).isEqualTo(42);
     }
 
     @Test
@@ -324,13 +260,13 @@ class BoondManagerCandidateServiceTest {
     }
 
     private BoondManagerCandidateService service() {
-        return new BoondManagerCandidateService(client, experienceResolver, availabilityResolver);
+        return new BoondManagerCandidateService(client);
     }
 
     private BoondDictionaryEnvelope dictionaryEnvelope() {
         BoondDictionarySetting setting = new BoondDictionarySetting(
                 new BoondDictionarySetting.State(List.of(new DictionaryEntryDto("1", "Active"))),
-                new BoondDictionarySetting.TypeOf(List.of(new DictionaryEntryDto("2", "CDI"))),
+                new BoondDictionarySetting.TypeOf(List.of(new DictionaryEntryDto("2", "CDI")), null),
                 List.of(new DictionaryEntryDto("9", "Available after date")),
                 List.of(new DictionaryOptionEntryDto(
                         List.of(new DictionaryOptionEntryDto.OptionId("idf", "Ile-de-France")), "Ile-de-France")),
@@ -395,7 +331,7 @@ class BoondManagerCandidateServiceTest {
                 List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
                 List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")));
         return new BoondListEnvelope<>(
-                List.of(new BoondData<>("42", "candidate", attrs)),
+                List.of(new BoondData<>("101", "technicaldata", attrs)),
                 new BoondMeta(new BoondMeta.Totals(1), 1));
     }
 }

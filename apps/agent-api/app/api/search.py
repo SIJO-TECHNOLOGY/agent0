@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import get_search_service
@@ -31,10 +31,13 @@ router = APIRouter(tags=["search"])
 )
 async def search(
     payload: SearchRequest,
+    request: Request,
     service: SearchService = Depends(get_search_service),
 ) -> SearchResponse | JSONResponse:
     try:
-        return await service.search(payload)
+        return await service.search(
+            payload, ui_language=request.headers.get("accept-language")
+        )
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001 — boundary guard

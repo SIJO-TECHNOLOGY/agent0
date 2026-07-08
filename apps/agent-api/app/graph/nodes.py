@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 from app.graph.intent_keywords import (
     detect_tools,
     extract_candidate_id,
+    extract_experience_bounds,
     extract_keywords,
     extract_min_years_experience,
     extract_seniority,
@@ -34,8 +35,18 @@ from app.services.candidate_mapper import (
     candidate_full_name,
 )
 from app.services.dictionary_resolver import (
+    dictionary_activity_area_option_entries,
+    dictionary_availability_entries,
+    dictionary_candidate_state_entries,
+    dictionary_contract_entries,
+    dictionary_language_level_entries,
+    dictionary_language_spoken_entries,
+    dictionary_mobility_option_entries,
     dictionary_section_entries,
+    dictionary_tool_entries,
+    resolve_excluded_state_ids,
     resolve_experience_id,
+    resolve_label_for_id,
     resolve_tool_ids,
 )
 from app.services.search_strategy import (
@@ -56,6 +67,17 @@ from app.services.llm_planner import (
     PlannerConstraints,
 )
 from app.models.warnings import Warning
+from app.services.semantic_scorer import SemanticScorer
+from app.agents.agent1.normalizer import (
+    normalize_candidates as _agent1_normalize,
+    NORM_EXPERIENCE_YEARS,
+    NORM_EXPERIENCE_SOURCE,
+    NORM_SKILLS,
+    NORM_LANGUAGES,
+    NORM_TITLE,
+    NORM_CONFLICTS,
+)
+from app.agents.agent1.reconciler import Agent1Reconciler, ReconcileInput
 
 
 DEFAULT_ENRICHMENT_LIMIT: Final[int] = 5
@@ -76,6 +98,9 @@ class NodeContext:
     replan_skip_score: float = 0.8
     event_emitter: EventEmitter = field(default_factory=NoopEventEmitter)
     debug_mode: bool = False
+    semantic_scorer: SemanticScorer | None = None
+    semantic_boost_weight: float = 0.15
+    agent1_reconciler: Agent1Reconciler | None = None
 
 
 def _replace(state: GraphState, **changes: object) -> GraphState:
@@ -173,11 +198,16 @@ _EXPERIENCE_DICTIONARY_KEYS: Final[tuple[str, ...]] = (
 async def analyze_intent(state: GraphState, _: NodeContext) -> GraphState:
     """Interpret the natural-language query into structured intent."""
     query = state.original_query
-    keywords = extract_keywords(query)
+    # Extract technical/skill terms (removes stopwords, type hints like "dev"/"candidat").
+    # Space-separated terms let BoondManager score by relevance without forcing strict AND.
+    extracted = extract_keywords(query)
+    keywords = extracted if extracted else []
     seniority = extract_seniority(query)
     tool_hints = detect_tools(query)
     candidate_id = extract_candidate_id(query)
-    min_years_experience = extract_min_years_experience(query)
+    min_years_experience, max_years_experience = extract_experience_bounds(
+        query, seniority
+    )
 
     constraints: dict[str, str] = {}
     if seniority:
@@ -186,6 +216,8 @@ async def analyze_intent(state: GraphState, _: NodeContext) -> GraphState:
         constraints["candidate_id"] = str(candidate_id)
     if min_years_experience is not None:
         constraints["min_experience_years"] = str(min_years_experience)
+    if max_years_experience is not None:
+        constraints["max_experience_years"] = str(max_years_experience)
 
     if candidate_id is not None:
         objective = "get_candidate_detail"
@@ -520,7 +552,7 @@ async def _build_search_candidates_inputs(
     if "page" in property_names and "page" not in inputs:
         inputs["page"] = 1
     if "numberPerPage" in property_names and "numberPerPage" not in inputs:
-        inputs["numberPerPage"] = 10
+        inputs["numberPerPage"] = 8
 
     return inputs, warnings
 
@@ -852,6 +884,20 @@ async def execute_mcp_tools(state: GraphState, ctx: NodeContext) -> GraphState:
             for record in raw_records:
                 if isinstance(record, dict):
                     results.append(_record_to_result(record, tool_name))
+
+            # For candidate keyword searches, run a second pass on title+skills
+            # so candidates whose profile title matches (e.g. "Tech Lead Java backend")
+            # are found even when their CV text doesn't contain the exact keywords.
+            if tool_name == SEARCH_CANDIDATES_TOOL and inputs.get("keywords"):
+                title_inputs = {**inputs, "keywordsType": "titleSkills"}
+                title_call, title_records = await _execute_single_tool(
+                    ctx, tool_name, title_inputs
+                )
+                tool_calls.append(title_call)
+                if title_call.status is ToolCallStatus.SUCCESS:
+                    for record in title_records:
+                        if isinstance(record, dict):
+                            results.append(_record_to_result(record, tool_name))
         elif call.status is ToolCallStatus.FAILED:
             warnings.append(
                 Warning(
@@ -1118,6 +1164,214 @@ def should_replan_llm(state: GraphState) -> str:
 # without inventing fields. Prefixed with `_` so the mapper drops them.
 ENRICHMENT_DETAIL_KEY: Final[str] = "_enrichment_detail"
 ENRICHMENT_TECH_DOC_KEY: Final[str] = "_enrichment_technical_document"
+ENRICHMENT_RESUME_KEY: Final[str] = "_enrichment_resume"
+ENRICHMENT_ADMINISTRATIVE_KEY: Final[str] = "_enrichment_administrative"
+EXPERIENCE_MIN_YEARS_KEY: Final[str] = "experienceMinYears"
+RESUME_TOOL: Final[str] = "getCandidateCV"
+ADMINISTRATIVE_TOOL: Final[str] = "getCandidateAdministrative"
+
+# Resolved human-readable label keys stored in result.data for display
+AVAILABILITY_LABEL_KEY: Final[str] = "_availabilityLabel"
+EXPERIENCE_LABEL_KEY: Final[str] = "_experienceLabel"
+CONTRACT_LABEL_KEY: Final[str] = "_contractLabel"
+MOBILITY_LABEL_KEY: Final[str] = "_mobilityLabel"
+RESOLVED_TOOL_LABELS_KEY: Final[str] = "_resolvedToolLabels"
+STATE_LABEL_KEY: Final[str] = "_stateLabel"
+RESOLVED_LANGUAGE_LABELS_KEY: Final[str] = "_resolvedLanguageLabels"
+RESOLVED_ACTIVITY_AREA_LABELS_KEY: Final[str] = "_resolvedActivityAreaLabels"
+
+
+def _raw_availability(data: dict[str, object]) -> object | None:
+    raw = data.get("availability")
+    if raw is None:
+        attrs = data.get("attributes")
+        if isinstance(attrs, dict):
+            raw = attrs.get("availability")
+    return raw
+
+
+def _raw_experience_id(data: dict[str, object]) -> object | None:
+    for source in (data, data.get("attributes"), data.get(ENRICHMENT_TECH_DOC_KEY)):
+        if isinstance(source, dict):
+            raw = source.get("experience")
+            if raw is not None:
+                return raw
+    return None
+
+
+def _contract_value_from_source(source: object) -> object | None:
+    if not isinstance(source, dict):
+        return None
+    for field in ("desiredContract", "contractType", "typeOf", "contract"):
+        raw = source.get(field)
+        if raw is not None:
+            return raw
+    attrs = source.get("attributes")
+    if isinstance(attrs, dict):
+        for field in ("desiredContract", "contractType", "typeOf", "contract"):
+            raw = attrs.get(field)
+            if raw is not None:
+                return raw
+    return None
+
+
+def _raw_contract_type(data: dict[str, object]) -> object | None:
+    # Administrative endpoint is the authoritative source for desired contract type
+    # (typeOf / contractType from /candidates/{id}/administrative).
+    # Only fall back to /information if administrative was not fetched.
+    if ENRICHMENT_ADMINISTRATIVE_KEY in data:
+        raw = _contract_value_from_source(data.get(ENRICHMENT_ADMINISTRATIVE_KEY))
+        if raw is not None:
+            return raw
+        # Administrative was fetched but contractType is null/absent — stop here.
+        # Do not fall back to /information typeOf which is a resource-type ID,
+        # not the desired contract type.
+        return None
+
+    # Administrative not fetched: try detail as secondary source, then search summary.
+    if ENRICHMENT_DETAIL_KEY in data:
+        return _contract_value_from_source(data.get(ENRICHMENT_DETAIL_KEY))
+
+    for source in (data, data.get("attributes")):
+        raw = _contract_value_from_source(source)
+        if raw is not None:
+            return raw
+    return None
+
+
+def _inject_resolved_labels(
+    data: dict[str, object],
+    avail_entries: list[dict[str, object]],
+    exp_entries: list[dict[str, object]],
+    contract_entries: list[dict[str, object]] | None = None,
+    mobility_entries: list[dict[str, object]] | None = None,
+    tool_entries: list[dict[str, object]] | None = None,
+    state_entries: list[dict[str, object]] | None = None,
+    language_spoken_entries: list[dict[str, object]] | None = None,
+    language_level_entries: list[dict[str, object]] | None = None,
+    activity_area_entries: list[dict[str, object]] | None = None,
+) -> None:
+    """Resolve BoondManager integer IDs to human-readable labels in-place."""
+    if AVAILABILITY_LABEL_KEY not in data and avail_entries:
+        raw_avail = _raw_availability(data)
+        if raw_avail is not None:
+            label = resolve_label_for_id(avail_entries, raw_avail)
+            if label:
+                data[AVAILABILITY_LABEL_KEY] = label
+
+    if EXPERIENCE_LABEL_KEY not in data and exp_entries:
+        raw_exp = _raw_experience_id(data)
+        if raw_exp is not None:
+            label = resolve_label_for_id(exp_entries, raw_exp)
+            if label:
+                data[EXPERIENCE_LABEL_KEY] = label
+
+    if CONTRACT_LABEL_KEY not in data and contract_entries:
+        raw_contract = _raw_contract_type(data)
+        if raw_contract is not None:
+            label = resolve_label_for_id(contract_entries, raw_contract)
+            if label:
+                data[CONTRACT_LABEL_KEY] = label
+
+    if STATE_LABEL_KEY not in data and state_entries:
+        raw_state = data.get("state")
+        if raw_state is None:
+            attrs = data.get("attributes")
+            if isinstance(attrs, dict):
+                raw_state = attrs.get("state")
+        if raw_state is not None:
+            label = resolve_label_for_id(state_entries, raw_state)
+            if label:
+                data[STATE_LABEL_KEY] = label
+
+    if MOBILITY_LABEL_KEY not in data and mobility_entries:
+        raw_areas: object = data.get("mobilityAreas")
+        if raw_areas is None:
+            attrs = data.get("attributes")
+            if isinstance(attrs, dict):
+                raw_areas = attrs.get("mobilityAreas")
+        if isinstance(raw_areas, list) and raw_areas:
+            labels = [
+                resolve_label_for_id(mobility_entries, area_id) or str(area_id)
+                for area_id in raw_areas if area_id
+            ]
+            labels = [lb for lb in labels if lb]
+            if labels:
+                data[MOBILITY_LABEL_KEY] = ", ".join(labels[:3])
+
+    if RESOLVED_TOOL_LABELS_KEY not in data and tool_entries:
+        resolved: list[str] = []
+        for source_key in (ENRICHMENT_TECH_DOC_KEY, "tools"):
+            source = data.get(source_key)
+            if isinstance(source, dict):
+                raw_tools = source.get("tools")
+            elif isinstance(source, list):
+                raw_tools = source
+            else:
+                raw_tools = None
+            if not isinstance(raw_tools, list):
+                continue
+            for item in raw_tools:
+                if isinstance(item, dict):
+                    tool_id = item.get("tool")
+                    if tool_id:
+                        label = resolve_label_for_id(tool_entries, tool_id)
+                        name = label or str(tool_id)
+                        if name and name not in resolved:
+                            resolved.append(name)
+                elif isinstance(item, str) and item:
+                    label = resolve_label_for_id(tool_entries, item)
+                    name = label or item
+                    if name and name not in resolved:
+                        resolved.append(name)
+        if resolved:
+            data[RESOLVED_TOOL_LABELS_KEY] = resolved
+
+    if RESOLVED_LANGUAGE_LABELS_KEY not in data and (
+        language_spoken_entries or language_level_entries
+    ):
+        raw_languages = data.get("languages")
+        if raw_languages is None:
+            tech = data.get(ENRICHMENT_TECH_DOC_KEY)
+            if isinstance(tech, dict):
+                raw_languages = tech.get("languages")
+        if isinstance(raw_languages, list):
+            resolved_languages: list[dict[str, object]] = []
+            for item in raw_languages:
+                if not isinstance(item, dict):
+                    continue
+                raw_language = item.get("language") or item.get("name")
+                raw_level = item.get("level")
+                language = (
+                    resolve_label_for_id(language_spoken_entries or [], raw_language)
+                    or (str(raw_language).strip() if raw_language else None)
+                )
+                level = (
+                    resolve_label_for_id(language_level_entries or [], raw_level)
+                    or (str(raw_level).strip() if raw_level else None)
+                )
+                if language:
+                    entry: dict[str, object] = {"language": language}
+                    if level:
+                        entry["level"] = level
+                    resolved_languages.append(entry)
+            if resolved_languages:
+                data[RESOLVED_LANGUAGE_LABELS_KEY] = resolved_languages
+
+    if RESOLVED_ACTIVITY_AREA_LABELS_KEY not in data and activity_area_entries:
+        raw_areas_act = data.get("activityAreas")
+        if raw_areas_act is None:
+            tech = data.get(ENRICHMENT_TECH_DOC_KEY)
+            if isinstance(tech, dict):
+                raw_areas_act = tech.get("activityAreas")
+        if isinstance(raw_areas_act, list):
+            labels_act = [
+                resolve_label_for_id(activity_area_entries, area_id) or str(area_id)
+                for area_id in raw_areas_act if area_id
+            ]
+            labels_act = [lb for lb in labels_act if lb]
+            if labels_act:
+                data[RESOLVED_ACTIVITY_AREA_LABELS_KEY] = labels_act
 
 
 def _candidate_id_inputs(
@@ -1183,8 +1437,7 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
 
     tools_by_name = {tool.name: tool for tool in state.available_tools}
     detail_tool = tools_by_name.get(CANDIDATE_DETAIL_TOOL)
-    if detail_tool is None:
-        return state
+    # detail_tool may be None in mock mode — CV/admin enrichment still runs.
 
     eligible = [
         result
@@ -1205,9 +1458,55 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         if enrich_with_tech_docs
         else {}
     )
+    enrich_with_resume = RESUME_TOOL in tools_by_name
+    resume_schema: dict[str, object] = (
+        tools_by_name[RESUME_TOOL].input_schema if enrich_with_resume else {}
+    )
+    enrich_with_administrative = ADMINISTRATIVE_TOOL in tools_by_name
+    administrative_schema: dict[str, object] = (
+        tools_by_name[ADMINISTRATIVE_TOOL].input_schema
+        if enrich_with_administrative
+        else {}
+    )
+
+    # Fetch dictionary once for label resolution (availability, experience,
+    # contract, mobility, etc.). On the LLM path the dictionary may have
+    # already been called for filter resolution, but its content wasn't stored
+    # in state — we fetch it again here only if the tool is available.
+    dict_raw: list[dict[str, object]] = []
+    if DICTIONARY_TOOL in tools_by_name:
+        fetched = await _fetch_dictionary(ctx, tools_by_name)
+        if fetched:
+            dict_raw = fetched
+    avail_entries = dictionary_availability_entries(dict_raw)
+    exp_entries = dictionary_section_entries(dict_raw, "experience")
+    contract_entries = dictionary_contract_entries(dict_raw)
+    mobility_entries = dictionary_mobility_option_entries(dict_raw)
+    tool_entries = dictionary_tool_entries(dict_raw)
+    state_entries = dictionary_candidate_state_entries(dict_raw)
+    language_spoken_entries = dictionary_language_spoken_entries(dict_raw)
+    language_level_entries = dictionary_language_level_entries(dict_raw)
+    activity_area_entries = dictionary_activity_area_option_entries(dict_raw)
+
+    # Remove candidates with excluded states ("Ne plus contacter", "A SUPPRIMER", etc.)
+    # before enrichment so we never surface them to the frontend.
+    excluded_state_ids = {str(sid) for sid in resolve_excluded_state_ids(state_entries)}
+    if excluded_state_ids:
+        def _is_excluded(result: SearchResult) -> bool:
+            raw_state = result.data.get("state")
+            if raw_state is None:
+                attrs = result.data.get("attributes")
+                if isinstance(attrs, dict):
+                    raw_state = attrs.get("state")
+            return raw_state is not None and str(raw_state) in excluded_state_ids
+
+        eligible = [r for r in eligible if not _is_excluded(r)]
+        excluded_ids = {r.id for r in state.results if _is_excluded(r)}
+    else:
+        excluded_ids: set[str] = set()
 
     tool_calls = list(state.tool_calls)
-    enriched_results = list(state.results)
+    enriched_results = [r for r in state.results if r.id not in excluded_ids]
 
     enrichment_limit = len(eligible) if ctx.llm_planner is not None else ctx.max_enrichments
 
@@ -1223,7 +1522,7 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
 
         merged_data = dict(result.data)
 
-        if ctx.llm_planner is None and ENRICHMENT_DETAIL_KEY not in merged_data:
+        if detail_tool is not None and ENRICHMENT_DETAIL_KEY not in merged_data:
             detail_inputs = _candidate_id_inputs(result.id, detail_tool.input_schema)
             detail_call, detail_raw = await _execute_single_tool(
                 ctx, CANDIDATE_DETAIL_TOOL, detail_inputs
@@ -1249,6 +1548,40 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             ):
                 merged_data[ENRICHMENT_TECH_DOC_KEY] = doc_raw[0]
 
+        if enrich_with_resume and ENRICHMENT_RESUME_KEY not in merged_data:
+            resume_inputs = _candidate_id_inputs(result.id, resume_schema)
+            resume_call, resume_raw = await _execute_single_tool(
+                ctx, RESUME_TOOL, resume_inputs
+            )
+            tool_calls.append(resume_call)
+            if (
+                resume_call.status is ToolCallStatus.SUCCESS
+                and resume_raw
+                and isinstance(resume_raw[0], dict)
+                and resume_raw[0].get("hasContent")
+            ):
+                merged_data[ENRICHMENT_RESUME_KEY] = dict(resume_raw[0])
+
+        if enrich_with_administrative and ENRICHMENT_ADMINISTRATIVE_KEY not in merged_data:
+            admin_inputs = _candidate_id_inputs(result.id, administrative_schema)
+            admin_call, admin_raw = await _execute_single_tool(
+                ctx, ADMINISTRATIVE_TOOL, admin_inputs
+            )
+            tool_calls.append(admin_call)
+            if (
+                admin_call.status is ToolCallStatus.SUCCESS
+                and admin_raw
+                and isinstance(admin_raw[0], dict)
+            ):
+                merged_data[ENRICHMENT_ADMINISTRATIVE_KEY] = admin_raw[0]
+
+        _inject_resolved_labels(
+            merged_data, avail_entries, exp_entries,
+            contract_entries, mobility_entries, tool_entries,
+            state_entries, language_spoken_entries,
+            language_level_entries, activity_area_entries,
+        )
+
         enriched_results[position] = result.model_copy(
             update={"data": merged_data}
         )
@@ -1272,6 +1605,109 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     return _replace(state, results=enriched_results, tool_calls=tool_calls)
 
 
+def _reconcile_input_from_result(result: SearchResult) -> ReconcileInput:
+    """Build the grounded LLM input from a normalised SearchResult."""
+    data = result.data
+    resume = data.get(ENRICHMENT_RESUME_KEY)
+    cv_text = ""
+    if isinstance(resume, dict):
+        cv_text = str(resume.get("extractedText") or resume.get("text") or "")
+    techdoc = data.get(ENRICHMENT_TECH_DOC_KEY)
+    techdoc_text = ""
+    if isinstance(techdoc, dict):
+        techdoc_text = " ".join(
+            str(techdoc.get(f))
+            for f in ("title", "summary", "description", "text", "skills")
+            if isinstance(techdoc.get(f), str) and techdoc.get(f)
+        )
+    skills = data.get(NORM_SKILLS)
+    langs = data.get(NORM_LANGUAGES)
+    conflicts = data.get(NORM_CONFLICTS)
+    exp = data.get(NORM_EXPERIENCE_YEARS)
+    return ReconcileInput(
+        candidate_id=str(result.id),
+        title=data.get(NORM_TITLE) if isinstance(data.get(NORM_TITLE), str) else result.title,
+        cv_text=cv_text,
+        techdoc_text=techdoc_text,
+        conflicts=list(conflicts) if isinstance(conflicts, list) else [],
+        det_experience_years=exp if isinstance(exp, int) else None,
+        det_skills=list(skills) if isinstance(skills, list) else [],
+        det_languages=list(langs) if isinstance(langs, list) else [],
+    )
+
+
+def _apply_judgement(result: SearchResult, judgement) -> SearchResult:
+    """Overlay an LLM judgement onto a result's normalised keys.
+
+    Only non-empty fields override; empty lists/None leave the deterministic
+    value intact so the LLM can refine without erasing good data.
+    """
+    data = dict(result.data)
+    if judgement.experience_years is not None:
+        data[NORM_EXPERIENCE_YEARS] = judgement.experience_years
+        data[NORM_EXPERIENCE_SOURCE] = "llm"
+    elif judgement.experience_label:
+        # LLM judged that only a band is honest → drop the numeric guess so the
+        # card falls back to the experience label.
+        data[NORM_EXPERIENCE_YEARS] = None
+        data[NORM_EXPERIENCE_SOURCE] = "llm"
+    if judgement.skills:
+        data[NORM_SKILLS] = list(judgement.skills)
+    if judgement.languages:
+        data[NORM_LANGUAGES] = list(judgement.languages)
+    if judgement.title:
+        data[NORM_TITLE] = judgement.title
+    return result.model_copy(update={"data": data})
+
+
+async def normalize_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
+    """Agent1 — normalise candidate data quality before matching.
+
+    Two passes:
+      1. Deterministic heuristics reconcile BoondManager fields, CV text, and
+         the technical document into ``_normalized_*`` keys, and flag any
+         data-coherence conflicts (``_normalized_conflicts``).
+      2. When an LLM reconciler is configured, the *conflicting* candidates are
+         sent (batched, grounded) to the LLM, which judges coherence across
+         experience/skills/languages/title; confident judgements overlay the
+         deterministic values. Coherent candidates skip the LLM entirely.
+
+    Agent0's matching (``rank_candidates``) reads the normalised keys so it
+    never scores raw, incomplete BoondManager data.
+    """
+    if not state.results:
+        return state
+
+    normalised = _agent1_normalize(state.results)
+    conflicted = [
+        r for r in normalised
+        if isinstance(r.data.get(NORM_CONFLICTS), list) and r.data.get(NORM_CONFLICTS)
+    ]
+
+    applied = 0
+    if ctx.agent1_reconciler is not None and conflicted:
+        inputs = [_reconcile_input_from_result(r) for r in conflicted]
+        judgements = await ctx.agent1_reconciler.reconcile(inputs)
+        if judgements:
+            normalised = [
+                _apply_judgement(r, judgements[str(r.id)])
+                if str(r.id) in judgements else r
+                for r in normalised
+            ]
+            applied = len(judgements)
+
+    logger.info(
+        "graph.normalize_candidates",
+        extra={
+            "count": len(normalised),
+            "conflicted": len(conflicted),
+            "llm_applied": applied,
+        },
+    )
+
+    return _replace(state, results=normalised)
+
+
 def _collect_strings(value: object, sink: list[str]) -> None:
     if isinstance(value, str):
         sink.append(value)
@@ -1283,14 +1719,72 @@ def _collect_strings(value: object, sink: list[str]) -> None:
             _collect_strings(inner, sink)
 
 
+# Skill-relevant top-level fields from the BoondManager search payload.
+_SKILL_SURFACE_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "jobTitle",
+    "headline",
+    "position",
+    "summary",
+    "description",
+    "skills",
+    "tools",
+    "expertiseAreas",
+    "activityAreas",
+    "languages",
+)
+
+# Skill-relevant fields within the enrichment tech-doc payload.
+_TECH_DOC_SKILL_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "summary",
+    "description",
+    "text",
+    "skills",
+    "tools",
+    "expertiseAreas",
+    "activityAreas",
+    "diplomas",
+    "training",
+)
+
+
 def _evidence_haystack(result: SearchResult) -> str:
-    """Lower-cased string view of every textual field in the result."""
+    """Lower-cased string built only from skill-relevant fields.
+
+    Restricted to job title, skills, expertise, and tech-doc content so that
+    incidental strings in metadata fields (email, IDs, company names, addresses)
+    do not produce false skill matches.
+    """
     parts: list[str] = []
     if result.title:
         parts.append(result.title)
     if result.snippet:
         parts.append(result.snippet)
-    _collect_strings(result.data, parts)
+    flat = _flatten_for_domain(result.data)
+    for field in _SKILL_SURFACE_FIELDS:
+        value = flat.get(field)
+        if value:
+            _collect_strings(value, parts)
+    # Include tech doc skill fields when available.
+    tech = result.data.get(ENRICHMENT_TECH_DOC_KEY)
+    if isinstance(tech, dict):
+        for field in _TECH_DOC_SKILL_FIELDS:
+            value = tech.get(field)
+            if value:
+                _collect_strings(value, parts)
+    # Include CV extracted text via the dedicated reader.
+    resume_text = _resume_haystack(result)
+    if resume_text:
+        parts.append(resume_text)
+    # Include Agent1 normalised skills and languages (may add entries absent
+    # from BoondManager structured fields).
+    norm_skills = result.data.get(NORM_SKILLS)
+    if isinstance(norm_skills, list):
+        _collect_strings(norm_skills, parts)
+    norm_langs = result.data.get(NORM_LANGUAGES)
+    if isinstance(norm_langs, list):
+        _collect_strings(norm_langs, parts)
     return " ".join(parts).lower()
 
 
@@ -1362,6 +1856,15 @@ def _techdoc_haystack(result: SearchResult) -> str:
     return " ".join(parts).lower()
 
 
+def _resume_haystack(result: SearchResult) -> str:
+    """Raw CV text extracted from the candidate's PDF resume."""
+    payload = result.data.get(ENRICHMENT_RESUME_KEY)
+    if not isinstance(payload, dict):
+        return ""
+    text = payload.get("extractedText") or payload.get("text") or ""
+    return text.lower() if isinstance(text, str) else ""
+
+
 def _min_years_in(source: object) -> int | None:
     """Read an ``experienceMinYears`` value from a record/dict, if present."""
     if not isinstance(source, dict):
@@ -1381,12 +1884,16 @@ def _min_years_in(source: object) -> int | None:
 
 
 def _record_experience_min_years(result: SearchResult) -> int | None:
-    """MCP-resolved minimum years of experience for the candidate (or None).
+    """Best years-of-experience estimate for the candidate (or None).
 
-    BoondManager (via the MCP server) resolves the experience level id to a
-    canonical ``experienceMinYears`` on both the search summary and the
-    technical document; ``None`` means "not specified".
+    Prefers Agent1's normalised value (cross-validated across BoondManager,
+    CV, and technical document) over the raw BoondManager figure.
     """
+    # Agent1 normalised value takes precedence.
+    norm = result.data.get(NORM_EXPERIENCE_YEARS)
+    if isinstance(norm, int) and norm > 0:
+        return norm
+
     for source in (
         result.data,
         result.data.get("attributes"),
@@ -1499,6 +2006,18 @@ def _criteria_status(
                 domain_haystack=_techdoc_domain_text(result),
             )
             verified |= td_hits
+        resume = _resume_haystack(result)
+        if resume:
+            _, cv_hits = evidence_score(
+                resume,
+                skills=skills,
+                domains=domains,
+                role=role,
+                candidate_min_years=parse_years(resume),
+                required_min_years=required_years,
+                domain_haystack=resume,
+            )
+            verified |= cv_hits
         summary = _summary_haystack(result)
         _, sm_hits = evidence_score(
             summary,
@@ -1585,6 +2104,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     domains = _domain_terms(intent.constraints)
     role = intent.constraints.get("role") or None
     required_years = _int_or_none(intent.constraints.get("min_experience_years"))
+    required_max_years = _int_or_none(intent.constraints.get("max_experience_years"))
     requested_name = (intent.constraints.get("name") or "").strip()
     # The LLM may order the criteria by importance; the deterministic ranker
     # derives its weights from that ordering (off-vocabulary keys are dropped).
@@ -1592,6 +2112,25 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     if not (skills or domains or role or required_years is not None or requested_name):
         await _emit_candidate_cards_partial(ctx, state.results)
         return state
+
+    # Collect semantic boosts asynchronously upfront when scorer is available.
+    semantic_boosts: dict[str, float] = {}
+    if ctx.semantic_scorer is not None and (skills or domains):
+        query_terms = list(skills) + list(domains)
+        for result in state.results:
+            if not result.source_tool.startswith("search"):
+                continue
+            haystack = _evidence_haystack(result)
+            try:
+                boost = await ctx.semantic_scorer.boost(
+                    query_terms=query_terms,
+                    candidate_text=haystack,
+                )
+                semantic_boosts[result.id] = boost
+            except Exception:
+                logger.exception(
+                    "semantic_scorer.boost_failed", extra={"candidate_id": result.id}
+                )
 
     re_ranked: list[SearchResult] = []
     for result in state.results:
@@ -1606,14 +2145,25 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             role=role,
             candidate_min_years=_candidate_min_years(result, haystack),
             required_min_years=required_years,
+            required_max_years=required_max_years,
             domain_haystack=_domain_haystack(result),
             requested_name=requested_name or None,
             candidate_name=candidate_full_name(result) if requested_name else None,
             priority=priority,
         )
-        # Tiny tie-break for candidates we actually enriched with evidence.
+        # Semantic similarity boost — additive, capped at 1.0. Applied before
+        # the enrichment tie-break so the semantic signal is part of the base
+        # score rather than a separate post-processing step.
+        if score > 0.0 and result.id in semantic_boosts:
+            sem_boost = semantic_boosts[result.id] * ctx.semantic_boost_weight
+            score = min(1.0, score + sem_boost)
+        # Tiny tie-break for candidates enriched with a technical document or CV.
         if score > 0.0 and ENRICHMENT_TECH_DOC_KEY in result.data:
             score = min(1.0, score + 0.03)
+        if score > 0.0 and ENRICHMENT_RESUME_KEY in result.data:
+            resume_text = _resume_haystack(result)
+            if resume_text:
+                score = min(1.0, score + 0.02)
         is_full_match, unmet = _evaluate_match(
             hits,
             skills=skills,
@@ -1633,6 +2183,13 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         )
 
     re_ranked.sort(key=lambda r: r.score, reverse=True)
+
+    # Drop zero-score candidates when positive matches exist, then cap at 25.
+    search_results = [r for r in re_ranked if r.source_tool.startswith("search")]
+    other_results = [r for r in re_ranked if not r.source_tool.startswith("search")]
+    positive = [r for r in search_results if r.score > 0.0]
+    search_results = positive if positive else search_results
+    re_ranked = search_results[:25] + other_results
 
     # Distinguish verified (in a technical document) / visible (in a summary
     # only) / missing, so the message never claims a criterion is unverifiable
@@ -2155,6 +2712,7 @@ def _prerank_search_results(
     anchors_domains: tuple[str, ...],
     anchors_role: str | None,
     required_years: int | None,
+    required_max_years: int | None = None,
     requested_name: str | None = None,
     priority: tuple[str, ...] | None = None,
 ) -> None:
@@ -2181,6 +2739,7 @@ def _prerank_search_results(
             role=anchors_role,
             candidate_min_years=_candidate_min_years(result, haystack),
             required_min_years=required_years,
+            required_max_years=required_max_years,
             domain_haystack=_domain_haystack(result),
             requested_name=requested_name or None,
             candidate_name=candidate_full_name(result) if requested_name else None,
@@ -2248,6 +2807,7 @@ async def _execute_search_ladder(
         return False
 
     required_years = _int_or_none(intent.constraints.get("min_experience_years"))
+    required_max_years = _int_or_none(intent.constraints.get("max_experience_years"))
 
     start_len = len(tool_calls)
     used_relaxed: bool | None = None
@@ -2276,6 +2836,21 @@ async def _execute_search_ladder(
             )
             used_relaxed = search_pass.relaxed
             matched_label = search_pass.label
+            # Always complement with a titleSkills pass so candidates whose
+            # profile title matches (e.g. "Tech Lead Java backend") are included
+            # even when the resumeTd pass already returned results.
+            if search_pass.inputs.get("keywordsType") != "titleSkills":
+                title_inputs, _ = _sanitize_tool_inputs(
+                    {**search_pass.inputs, "keywordsType": "titleSkills"}, schema
+                )
+                title_call, title_records = await _execute_single_tool(
+                    ctx, tool.name, title_inputs
+                )
+                tool_calls.append(title_call)
+                if title_call.status is ToolCallStatus.SUCCESS and title_records:
+                    _absorb_direct_outcome(
+                        title_call, title_records, tool.name, results, warnings, errors
+                    )
             break
 
     # A named-person query that was NOT satisfied by the dedicated name pass
@@ -2292,6 +2867,7 @@ async def _execute_search_ladder(
             anchors_domains=anchors.domains,
             anchors_role=anchors.role,
             required_years=required_years,
+            required_max_years=required_max_years,
             requested_name=anchors.name,
             priority=_ranking_priority(intent.constraints),
         )

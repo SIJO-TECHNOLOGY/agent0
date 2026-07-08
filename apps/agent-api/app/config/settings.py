@@ -110,6 +110,62 @@ class Settings(BaseSettings):
         default=6, ge=1, le=20,
         description="Hard upper bound on planned tool calls per query.",
     )
+    # --- Agent1 LLM reconciliation (data-coherence judge) --------------------
+    agent1_llm_reconciliation: bool = Field(
+        default=False,
+        description=(
+            "When true, Agent1 sends candidates whose data the deterministic "
+            "pass flags as incoherent (e.g. an age conflicting with the stated "
+            "experience) to the LLM, which judges coherence across experience, "
+            "skills, languages, and title and returns a reconciled view. Only "
+            "conflicting candidates trigger a call (one batched call per "
+            "search). Requires LLM credentials. Off by default to avoid cost."
+        ),
+    )
+    agent1_confidence_threshold: float = Field(
+        default=0.6, ge=0.0, le=1.0,
+        description=(
+            "Minimum confidence for an Agent1 LLM judgement to override the "
+            "deterministic result. Below this, the deterministic value is kept."
+        ),
+    )
+    agent1_max_reconcile_candidates: int = Field(
+        default=10, ge=1, le=50,
+        description="Hard cap on candidates sent to the Agent1 LLM per search.",
+    )
+    # --- Semantic scoring (embedding-based skill boost) ----------------------
+    enable_semantic_scoring: bool = Field(
+        default=False,
+        description=(
+            "When true, an OpenAI embedding model computes a cosine-similarity "
+            "boost on top of the text-matching evidence score. Requires "
+            "openai_api_key to be set. Adds one embedding API call per "
+            "candidate per search (batched). Off by default to avoid "
+            "unexpected costs."
+        ),
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        description=(
+            "OpenAI API key used exclusively for semantic scoring embeddings. "
+            "Required when enable_semantic_scoring=true."
+        ),
+    )
+    semantic_model: str = Field(
+        default="text-embedding-3-small",
+        description="OpenAI embedding model used for semantic scoring.",
+    )
+    semantic_boost_weight: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=0.5,
+        description=(
+            "Maximum additive boost applied to the evidence score from "
+            "semantic similarity. 0.15 means a semantically perfect match "
+            "adds up to 0.15 to the evidence score (capped at 1.0)."
+        ),
+    )
+
     llm_planner_role: str = Field(
         default=(
             "You are an expert technical recruiter and CV search, matching, "

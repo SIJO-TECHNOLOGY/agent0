@@ -103,7 +103,8 @@ Owns UI orchestration:
 - Conversation loading
 - Sending chat messages
 - Rendering assistant responses by `ui.type`
-- Rendering enriched candidate cards, AI evaluations, highlights, and recent experiences
+- Rendering enriched candidate cards, AI evaluations, highlights, recent
+  experiences, diplomas, domains, tools, languages, and resolved metadata
 - Candidate drawer behavior
 - Clarification submission
 
@@ -144,6 +145,11 @@ apply lightweight local display controls such as sorting already received
 candidates by match score or hiding profiles that are not already marked as
 available.
 
+Candidate cards and the drawer may also render backend-normalized profile
+details such as `state_label`, `mobility`, `technical_summary`, `diplomas`,
+`expertise_areas`, `activity_areas`, `tools`, `languages`, `source`, and
+`last_update`. These values are display-only and must come from the backend.
+
 These controls do not replace backend filtering and do not construct
 BoondManager queries.
 
@@ -165,6 +171,7 @@ The frontend owns:
 - Current open candidate drawer
 - Rendering only
 - Lightweight display-only sorting/filtering of already received candidate cards
+- Empty reserved header identity slot until real user identity display is ready
 
 The frontend must not own:
 

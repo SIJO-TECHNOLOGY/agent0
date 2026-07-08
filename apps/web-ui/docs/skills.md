@@ -37,9 +37,15 @@ Candidate cards display:
 - Location
 - Contract preference
 - Availability
+- Candidate state
+- Mobility
 - Skills
 - Match score
 - Summary
+- Diplomas when provided
+- Expertise and activity areas when provided
+- Tools and levels when provided
+- Languages and levels when provided
 - Recent experiences when provided
 - Highlight keywords when provided
 - AI evaluation when provided
@@ -74,7 +80,14 @@ Candidate detail may include:
 - Salary expectation
 - TJM
 - Mobility
+- Candidate state
+- Source
+- Last update
 - Skills
+- Diplomas
+- Expertise and activity areas
+- Tools and levels
+- Languages and levels
 - Experiences
 - AI evaluation
 - Technical summary

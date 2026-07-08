@@ -137,7 +137,8 @@ public final class TestFixtures {
                 List.of("backend"),
                 List.of("finance"),
                 List.of(new TechnicalDocumentDto.ToolProficiency("IntelliJ", 5)),
-                List.of(new TechnicalDocumentDto.LanguageProficiency("en", "fluent"))
+                List.of(new TechnicalDocumentDto.LanguageProficiency("en", "fluent")),
+                42
         );
     }
 
@@ -156,7 +157,7 @@ public final class TestFixtures {
 
         return new DictionaryResponseDto(new DictionarySettingDto(
                 new DictionarySettingDto.State(List.of(activeState)),
-                new DictionarySettingDto.TypeOf(List.of(contract)),
+                new DictionarySettingDto.TypeOf(List.of(contract), null),
                 List.of(availability),
                 List.of(mobility),
                 List.of(new DictionaryEntryDto("3", "Senior")),
