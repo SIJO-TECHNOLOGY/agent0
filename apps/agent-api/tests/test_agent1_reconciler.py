@@ -212,6 +212,37 @@ class TestNormalizeCandidatesNode:
         assert not hasattr(card, "_normalized_conflicts")
 
     @pytest.mark.asyncio
+    async def test_llm_band_verdict_surfaces_experience_label(self):
+        # When the LLM judges that only an experience BAND is honest, the
+        # numeric guess is dropped AND the band must reach the card as the
+        # experience label — otherwise the frontend shows "Non renseigné".
+        from app.agents.agent1.reconciler import Agent1Judgement
+
+        fake = _FakeReconciler({"42": Agent1Judgement(
+            candidate_id="42", experience_years=None,
+            experience_label="5 à 10 ans", confidence=0.9,
+        )})
+        ctx = NodeContext(mcp_client=MockMcpClient(), agent1_reconciler=fake)
+        state = GraphState(
+            original_query="x",
+            results=[_result(_enrichment_resume={
+                "hasContent": True,
+                "extractedText": "40 ans. 16 ans d'expérience.",
+            })],
+        )
+
+        out = await normalize_candidates(state, ctx)
+
+        data = out.results[0].data
+        assert data[NORM_EXPERIENCE_YEARS] is None
+        assert data["_experienceLabel"] == "5 à 10 ans"
+
+        from app.services.candidate_mapper import candidate_cards_from_results
+
+        card = candidate_cards_from_results(out.results)[0]
+        assert card.experience_label == "5 à 10 ans"
+
+    @pytest.mark.asyncio
     async def test_no_reconciler_keeps_deterministic(self):
         ctx = NodeContext(mcp_client=MockMcpClient(), agent1_reconciler=None)
         state = GraphState(

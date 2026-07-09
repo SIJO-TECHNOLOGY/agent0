@@ -383,7 +383,9 @@ async def test_llm_flow_calls_tools_in_planned_order(
     )
     assert response.status_code == 200
 
-    tool_sequence = [name for name, _ in _calls]
+    # getDictionary may run first: the Agent API resolves the (backfilled)
+    # years-of-experience constraint into a search filter before searching.
+    tool_sequence = [name for name, _ in _calls if name != "getDictionary"]
     # searchCandidates first, then evidence enrichment via the technical
     # document. getCandidateDetail may run later for display-only fields.
     assert tool_sequence[0] == "searchCandidates"
@@ -466,7 +468,12 @@ async def test_llm_flow_returns_normalized_candidate_cards(
     body = response.json()
     assert body["ui"]["type"] == "candidate_cards"
     ids = {c["id"] for c in body["ui"]["candidates"]}
-    assert ids == {"41924", "41925"}
+    # QUERY_FUZZY asks for 10+ years. The backfilled seniority constraint is
+    # the only rankable criterion of this canned intent, so 41925 (no
+    # experience evidence anywhere) scores zero and is dropped while 41924
+    # ("10+ years" in its tech doc) is kept — empty dossiers no longer ride
+    # along at the top.
+    assert ids == {"41924"}
 
 
 @pytest.mark.asyncio

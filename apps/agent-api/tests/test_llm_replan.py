@@ -226,6 +226,66 @@ async def test_plan_with_llm_consumes_and_forwards_feedback() -> None:
     assert result.replan_feedback == ""  # consumed exactly once
 
 
+class _NoBoundsPlanner:
+    """Planner stub that never emits experience bounds in its constraints."""
+
+    async def plan(self, *, query, filters, tools, constraints, emitter=None, feedback=""):
+        return LlmToolPlan(
+            interpreted_intent={
+                "objective": "find",
+                "entities": ["java"],
+                "constraints": {},
+            },
+            plan=[],
+        )
+
+
+@pytest.mark.asyncio
+async def test_plan_with_llm_backfills_experience_bounds_from_query() -> None:
+    # The LLM omitted the seniority constraint the user clearly stated; the
+    # deterministic backstop must restore it so ranking scores the dimension.
+    state = GraphState(original_query="dev java 5 ans d'expérience")
+    result = await plan_with_llm(state, _ctx(_NoBoundsPlanner()))
+
+    assert result.interpreted_intent is not None
+    assert result.interpreted_intent.constraints["min_experience_years"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_plan_with_llm_skips_backfill_on_feedback_replan() -> None:
+    # On a reflection-triggered replan the LLM may have deliberately dropped
+    # the bound (e.g. "broaden the search") — do not re-add it.
+    state = GraphState(
+        original_query="dev java 5 ans d'expérience",
+        replan_feedback="drop the seniority constraint and broaden",
+    )
+    result = await plan_with_llm(state, _ctx(_NoBoundsPlanner()))
+
+    assert result.interpreted_intent is not None
+    assert "min_experience_years" not in result.interpreted_intent.constraints
+
+
+@pytest.mark.asyncio
+async def test_plan_with_llm_keeps_llm_emitted_bounds() -> None:
+    # When the LLM already interpreted the bounds, the backstop must not touch them.
+    class _BoundsPlanner:
+        async def plan(self, *, query, filters, tools, constraints, emitter=None, feedback=""):
+            return LlmToolPlan(
+                interpreted_intent={
+                    "objective": "find",
+                    "entities": ["java"],
+                    "constraints": {"min_experience_years": "7"},
+                },
+                plan=[],
+            )
+
+    state = GraphState(original_query="dev java 5 ans d'expérience")
+    result = await plan_with_llm(state, _ctx(_BoundsPlanner()))
+
+    assert result.interpreted_intent is not None
+    assert result.interpreted_intent.constraints["min_experience_years"] == "7"
+
+
 # ---------------------------------------------------------------------------
 # end-to-end: the bounded loop runs once through the compiled LLM graph
 # ---------------------------------------------------------------------------

@@ -388,8 +388,10 @@ async def test_rank_scores_by_evidence_fraction_and_nulls_zero_evidence() -> Non
     result = await rank_candidates(state, _ctx(MockMcpClient()))
 
     by_id = {r.id: r.score for r in result.results}
-    assert by_id["2"] == 1.0
-    assert by_id["1"] == 0.5
+    # Full / half criteria coverage, then ×0.85: neither profile carries any
+    # corroborating data (no tech doc, no CV, no known experience figure).
+    assert by_id["2"] == 0.85
+    assert by_id["1"] == 0.425
     # C# developer has no evidence and is filtered out (zero-score removed when positives exist).
     assert "3" not in by_id
     # Best-evidenced first.
@@ -419,8 +421,9 @@ async def test_rank_flags_unverifiable_criteria_as_warning() -> None:
     assert "cib" in warn.message
     # 'java' WAS evidenced, so it must not be flagged as unverified.
     assert "java" not in warn.message
-    # Partial coverage never reads as a full-confidence match.
-    assert result.results[0].score == 0.5
+    # Partial coverage never reads as a full-confidence match
+    # (0.5 coverage × 0.85 unverified-profile discount).
+    assert result.results[0].score == 0.425
 
 
 @pytest.mark.asyncio
@@ -659,7 +662,9 @@ async def test_rank_does_not_warn_when_all_criteria_evidenced() -> None:
     result = await rank_candidates(state, _ctx(MockMcpClient()))
 
     assert not any(w.code == "criteria_unverified" for w in result.warnings)
-    assert result.results[0].score == 1.0
+    # All criteria evidenced, but the profile carries no corroborating data
+    # (no tech doc / CV / known experience) so it cannot read as 100%.
+    assert result.results[0].score == 0.85
 
 
 @pytest.mark.asyncio
@@ -707,3 +712,91 @@ async def test_rank_does_not_touch_non_search_results() -> None:
 
     # Score must be unchanged for non-search source tools.
     assert result.results[0].score == 0.5
+
+
+@pytest.mark.asyncio
+async def test_rank_empty_dossier_never_tops_documented_profile() -> None:
+    # The reported live bug: on "dev java 5 ans d'expérience", candidates with
+    # NOTHING in their dossier (no CV, no tech doc, no experience — just the
+    # "java" skill tag) surfaced FIRST at 100%. They must rank strictly below
+    # a documented profile meeting the seniority bar, and never read as 100%.
+    state = GraphState(
+        original_query="dev java 5 ans d'expérience",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"min_experience_years": "5"},
+        ),
+        results=[
+            # Empty dossier: only the skill tag, listed first by BoondManager.
+            _result(candidate_id="empty", data={"skills": ["Java"]}),
+            # Documented: java + known 6 years + tech doc.
+            _result(
+                candidate_id="documented",
+                data={
+                    "jobTitle": "Développeur Java",
+                    "experienceMinYears": 6,
+                    "skills": ["Java"],
+                    ENRICHMENT_TECH_DOC_KEY: {"skills": ["Java", "Spring"]},
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    assert result.results[0].id == "documented"
+    empty = next(r for r in result.results if r.id == "empty")
+    assert empty.score < result.results[0].score
+    assert empty.score < 1.0
+    assert empty.is_full_match is False
+
+
+@pytest.mark.asyncio
+async def test_rank_parses_min_experience_with_unit_suffix() -> None:
+    # The LLM sometimes emits "5 ans" instead of "5"; the seniority dimension
+    # must still be scored (a strict int() would silently drop it).
+    state = GraphState(
+        original_query="dev java 5 ans d'expérience",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"min_experience_years": "5 ans"},
+        ),
+        results=[
+            _result(candidate_id="bare", data={"skills": ["Java"]}),
+            _result(
+                candidate_id="senior",
+                data={"skills": ["Java"], "experienceMinYears": 7},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    # If the constraint were dropped, both would score identically.
+    assert result.results[0].id == "senior"
+    assert result.results[0].score > result.results[1].score
+
+
+@pytest.mark.asyncio
+async def test_rank_ties_broken_by_evidence_depth() -> None:
+    # At equal criteria coverage, the candidate backed by corroborating data
+    # (known years) outranks the bare skill tag — regardless of Boond order.
+    state = GraphState(
+        original_query="java",
+        interpreted_intent=InterpretedIntent(
+            objective="find_consultants", entities=["java"]
+        ),
+        results=[
+            _result(candidate_id="bare", data={"skills": ["Java"]}),
+            _result(
+                candidate_id="known-years",
+                data={"skills": ["Java"], "experienceMinYears": 4},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    assert result.results[0].id == "known-years"

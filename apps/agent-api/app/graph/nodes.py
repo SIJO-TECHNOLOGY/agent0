@@ -1718,10 +1718,12 @@ def _apply_judgement(result: SearchResult, judgement) -> SearchResult:
         data[NORM_EXPERIENCE_YEARS] = judgement.experience_years
         data[NORM_EXPERIENCE_SOURCE] = "llm"
     elif judgement.experience_label:
-        # LLM judged that only a band is honest â†’ drop the numeric guess so the
-        # card falls back to the experience label.
+        # LLM judged that only a band is honest → drop the numeric guess and
+        # store the band so the card actually has a label to fall back to
+        # (otherwise the candidate would display as "not specified").
         data[NORM_EXPERIENCE_YEARS] = None
         data[NORM_EXPERIENCE_SOURCE] = "llm"
+        data.setdefault(EXPERIENCE_LABEL_KEY, judgement.experience_label)
     if judgement.skills:
         data[NORM_SKILLS] = list(judgement.skills)
     if judgement.languages:
@@ -2151,6 +2153,29 @@ def _evaluate_match(
     return (not unmet), unmet
 
 
+# Multiplier applied to a positive score when the profile carries NO
+# corroborating data at all — no technical document, no CV text, no known
+# experience figure. Such profiles stay visible but can never display as a
+# 100% match ahead of documented, verifiable ones.
+_UNVERIFIED_PROFILE_PENALTY: Final[float] = 0.85
+
+
+def _evidence_depth(result: SearchResult) -> int:
+    """How much corroborating data backs this profile (0–3).
+
+    Used as a ranking tie-break so that, at equal score, a candidate with a
+    technical document / CV / known experience outranks a bare skill tag.
+    """
+    depth = 0
+    if ENRICHMENT_TECH_DOC_KEY in result.data:
+        depth += 1
+    if _resume_haystack(result):
+        depth += 1
+    if _record_experience_min_years(result) is not None:
+        depth += 1
+    return depth
+
+
 async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     """Rank search-tool results by weighted, multi-criteria evidence.
 
@@ -2235,6 +2260,10 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             resume_text = _resume_haystack(result)
             if resume_text:
                 score = min(1.0, score + 0.02)
+        # A profile with no corroborating data at all is discounted: matching
+        # a lone skill tag must never read as a full-confidence match.
+        if score > 0.0 and _evidence_depth(result) == 0:
+            score *= _UNVERIFIED_PROFILE_PENALTY
         is_full_match, unmet = _evaluate_match(
             hits,
             skills=skills,
@@ -2253,7 +2282,10 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             )
         )
 
-    re_ranked.sort(key=lambda r: r.score, reverse=True)
+    # Evidence depth breaks score ties: at equal score, the profile backed by
+    # a technical document / CV / known experience comes first, so an empty
+    # dossier can never top a documented one.
+    re_ranked.sort(key=lambda r: (r.score, _evidence_depth(r)), reverse=True)
 
     # Drop zero-score candidates when positive matches exist, then cap at 25.
     search_results = [r for r in re_ranked if r.source_tool.startswith("search")]
@@ -2477,6 +2509,30 @@ async def plan_with_llm(state: GraphState, ctx: NodeContext) -> GraphState:
         ambiguity_notes=_string_list(intent_dict.get("ambiguity_notes"))
         or list(plan.assumptions),
     )
+    # Deterministic backstop: the ranker only scores the seniority dimension
+    # when the experience bounds are present in the constraints. If the LLM
+    # omitted them but the query states them ("5 ans d'expérience", "senior",
+    # "0-2 ans"), extract them here — otherwise a data-less profile matching
+    # only the skill would tie a fully-evidenced one at 100%. Skipped on a
+    # feedback replan, where the LLM may have deliberately dropped the bound.
+    if not feedback and not (
+        intent.constraints.get("min_experience_years")
+        or intent.constraints.get("max_experience_years")
+    ):
+        lo, hi = extract_experience_bounds(
+            state.original_query, extract_seniority(state.original_query)
+        )
+        if lo is not None or hi is not None:
+            backfilled = dict(intent.constraints)
+            if lo is not None:
+                backfilled["min_experience_years"] = str(lo)
+            if hi is not None:
+                backfilled["max_experience_years"] = str(hi)
+            intent = intent.model_copy(update={"constraints": backfilled})
+            logger.info(
+                "graph.plan_with_llm.experience_bounds_backfilled",
+                extra={"min_years": lo, "max_years": hi},
+            )
     extra_warnings = [
         Warning(code="llm_warning", message=msg)
         for msg in plan.warnings
@@ -2768,12 +2824,18 @@ def _experience_unmapped_warning() -> Warning:
 _MAX_SEARCH_PASSES: Final[int] = 5
 
 def _int_or_none(value: object) -> int | None:
-    if value is None:
+    """Leading integer of a constraint value ("5", "5 ans", "5+") or None.
+
+    The LLM sometimes emits the unit with the number; a strict int() would
+    silently drop the whole seniority dimension from scoring, so we accept
+    any value that STARTS with an integer.
+    """
+    if value is None or isinstance(value, bool):
         return None
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    match = re.match(r"\s*(\d{1,2})", str(value))
+    return int(match.group(1)) if match else None
 
 
 def _candidate_min_years(result: SearchResult, haystack: str) -> int | None:

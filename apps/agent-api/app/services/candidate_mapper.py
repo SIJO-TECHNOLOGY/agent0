@@ -46,6 +46,12 @@ _EXPERIENCE_FIELDS: Final[tuple[str, ...]] = (
     "yearsOfExperience",
     "experience_years",
     "_normalized_experience_years",  # Agent1 extraction from CV/tech-doc free text
+    # Last-resort fallback: the MCP server already resolves the BoondManager
+    # experience LEVEL id into years on every search summary. Surfacing it
+    # keeps the card filled even when Agent1 normalisation yielded nothing
+    # (e.g. enrichment failed for this candidate), instead of "Non renseigné".
+    "experienceMinYears",
+    "experience_min_years",
 )
 
 _CITY_FIELDS: Final[tuple[str, ...]] = ("city", "town", "locality")
