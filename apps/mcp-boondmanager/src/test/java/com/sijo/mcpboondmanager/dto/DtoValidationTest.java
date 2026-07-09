@@ -74,8 +74,17 @@ class DtoValidationTest {
     }
 
     @Test
+    void givenLimitAtMaximum_whenValidated_thenNoViolations() {
+        CandidateSearchRequestDto request = searchRequestWithPageAndLimit(1, 100);
+
+        Set<ConstraintViolation<CandidateSearchRequestDto>> violations = validator.validate(request);
+
+        assertThat(violations).isEmpty();
+    }
+
+    @Test
     void givenLimitAboveMaximum_whenValidated_thenLimitViolationIsReturned() {
-        CandidateSearchRequestDto request = searchRequestWithPageAndLimit(1, 501);
+        CandidateSearchRequestDto request = searchRequestWithPageAndLimit(1, 101);
 
         Set<ConstraintViolation<CandidateSearchRequestDto>> violations = validator.validate(request);
 
