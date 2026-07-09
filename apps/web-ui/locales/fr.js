@@ -32,7 +32,6 @@ export default {
     redirecting: "Redirection vers Microsoft...",
     connecting: "Connexion en cours...",
     logging_out: "Déconnexion en cours...",
-    default_user: "Utilisateur SIJO",
     errors: {
       finalize: "Impossible de finaliser la connexion Microsoft.",
       start: "Impossible de démarrer la connexion Microsoft.",

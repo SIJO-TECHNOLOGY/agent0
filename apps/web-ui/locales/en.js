@@ -32,7 +32,6 @@ export default {
     redirecting: "Redirecting to Microsoft...",
     connecting: "Signing in...",
     logging_out: "Signing out...",
-    default_user: "SIJO user",
     errors: {
       finalize: "Could not complete the Microsoft sign-in.",
       start: "Could not start the Microsoft sign-in.",
