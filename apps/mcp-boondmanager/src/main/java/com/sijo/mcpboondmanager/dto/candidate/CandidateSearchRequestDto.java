@@ -42,7 +42,7 @@ public record CandidateSearchRequestDto(
         @Min(1)
         Integer page,
         @Min(1)
-        @Max(500)
+        @Max(100)
         Integer maxResults,
         List<String> sort,
         String order,
