@@ -117,7 +117,12 @@ def _parse_years_from_text(text: str) -> int | None:
 
 
 def _years_from_boond(data: dict[str, object]) -> int | None:
-    """Read experienceMinYears from BoondManager structured fields."""
+    """Read experienceMinYears from BoondManager structured fields.
+
+    Zero is a genuine value: the MCP server resolves the "Pas d'expérience"
+    dictionary level to 0 (and leaves the field null when unspecified), so a
+    junior profile shows "0 an" rather than "not specified".
+    """
     for source in (data, data.get("attributes"), data.get(_ENRICHMENT_TECH_DOC_KEY)):
         if not isinstance(source, dict):
             continue
@@ -125,12 +130,12 @@ def _years_from_boond(data: dict[str, object]) -> int | None:
             value = source.get(key)
             if isinstance(value, bool):
                 continue
-            if isinstance(value, int) and 0 < value <= 50:
+            if isinstance(value, int) and 0 <= value <= 50:
                 return value
             if isinstance(value, str):
                 try:
                     v = int(value.strip())
-                    if 0 < v <= 50:
+                    if 0 <= v <= 50:
                         return v
                 except ValueError:
                     pass
@@ -819,7 +824,8 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     # Compute the graduation-year estimate up front: it is both a cross-check
     # signal for conflict detection and the value used by the fallback below.
     grad_years = _estimate_years_from_graduation(data)
-    # Sum of the CV's per-role durations — a cross-check only (never the value).
+    # Sum of the CV's per-role durations ("(4 ans 10 mois)" LinkedIn-style).
+    # Cross-check signal AND last-resort value when nothing else exists.
     duration_sum = _sum_experience_durations(data)
 
     conflicts = detect_conflicts(
@@ -830,14 +836,21 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
         duration_sum=duration_sum,
     )
 
-    # Graduation-based estimate. It only REPLACES the value in two cases:
-    #   1. no experience figure exists anywhere → graduation fills the gap;
+    # Estimates only REPLACE the value in two cases:
+    #   1. no experience figure exists anywhere → the estimate fills the gap
+    #      (durations actually worked first — they handle career gaps — then
+    #      the graduation year, which assumes continuous work);
     #   2. the value came from a SHAKY text-mined source (technical document /
     #      profile text) AND the data is conflicting → graduation corrects it.
     # Curated sources (cv, experienceMinYears, the recruiter-set experience
     # level) are NEVER auto-overridden — a conflict is only flagged, and the LLM
     # reconciler (when enabled) decides using the full CV. This keeps the card
     # and the ranking score on the same value and respects recruiter data.
+    if exp_years is None and duration_sum is not None:
+        exp_years = duration_sum
+        exp_source = "cv_durations"
+        data[NORM_EXPERIENCE_YEARS] = exp_years
+        data[NORM_EXPERIENCE_SOURCE] = exp_source
     needs_estimate = exp_years is None or (
         bool(conflicts) and exp_source in _GRAD_OVERRIDABLE_SOURCES
     )
@@ -849,9 +862,9 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
 
     # Re-evaluate conflicts on the FINAL experience value so that an age now
     # coexisting with the estimate, or a graduation/duration disagreement, is
-    # flagged. A graduation estimate is itself uncertain, so always flag it —
-    # this routes such candidates to the LLM reconciler (when enabled), which
-    # reads the whole CV and is far more reliable than regex on messy exports.
+    # flagged. An estimate is itself uncertain, so always flag it — this routes
+    # such candidates to the LLM reconciler (when enabled), which reads the
+    # whole CV and is far more reliable than regex on messy exports.
     conflicts = detect_conflicts(
         data,
         exp_years=exp_years,
@@ -861,6 +874,8 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     )
     if exp_source == "graduation":
         conflicts = [*conflicts, "experience_estimated_from_graduation"]
+    elif exp_source == "cv_durations":
+        conflicts = [*conflicts, "experience_estimated_from_durations"]
     # Deduplicate, preserve order.
     conflicts = list(dict.fromkeys(conflicts))
 

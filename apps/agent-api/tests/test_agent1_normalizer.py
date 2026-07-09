@@ -373,6 +373,46 @@ class TestGraduationEstimate:
         out = normalize_candidate(result)
         assert "experience_vs_duration_disagreement" in out.data[NORM_CONFLICTS]
 
+    def test_duration_sum_fills_gap_when_no_other_source(self):
+        # No explicit statement, no structured years, no label, no diploma —
+        # the CV's per-role durations are the only signal and must fill the
+        # card instead of "not specified". Flagged for LLM review.
+        cv = (
+            "Dev senior juillet 2019 - Present (4 ans 10 mois)\n"
+            "Consultant décembre 2016 - janvier 2019 (2 ans 2 mois)\n"
+        )
+        result = _result(
+            data={"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 7
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv_durations"
+        assert "experience_estimated_from_durations" in out.data[NORM_CONFLICTS]
+
+    def test_duration_sum_preferred_over_graduation_estimate(self):
+        # Both estimates available → durations (time actually worked) win over
+        # the graduation year (which assumes continuous work).
+        cv = "Dev 2021 - Present (3 ans)\n"
+        result = _result(
+            data={
+                "_enrichment_resume": {"hasContent": True, "extractedText": cv},
+                "_enrichment_technical_document": {
+                    "diplomas": ["Master informatique 2010"],
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 3
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv_durations"
+
+    def test_zero_years_is_a_genuine_value(self):
+        # "Pas d'expérience" resolves to experienceMinYears=0 on the MCP side;
+        # it must surface as 0, not as "not specified".
+        result = _result(data={"experienceMinYears": 0})
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 0
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
+
     def test_graduation_agreement_keeps_structured(self):
         # When the graduation estimate agrees with the structured value (within
         # the margin), there is no conflict and the structured value is kept.

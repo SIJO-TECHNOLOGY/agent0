@@ -66,9 +66,12 @@ public class BoondManagerCandidateService {
     private static final Duration DOCUMENT_DOWNLOAD_TIMEOUT = Duration.ofSeconds(15);
 
     private final BoondManagerClient client;
+    private final ExperienceDictionaryResolver experienceResolver;
 
-    public BoondManagerCandidateService(BoondManagerClient client) {
+    public BoondManagerCandidateService(
+            BoondManagerClient client, ExperienceDictionaryResolver experienceResolver) {
         this.client = client;
+        this.experienceResolver = experienceResolver;
     }
 
     public DictionaryResponseDto getDictionary() {
@@ -432,16 +435,17 @@ public class BoondManagerCandidateService {
         ));
     }
 
-    private static CandidateSearchResponseDto toSearchResponse(
+    private CandidateSearchResponseDto toSearchResponse(
             BoondListEnvelope<BoondCandidateSummaryAttributes> envelope) {
         List<CandidateSummaryDto> candidates = envelope.data().stream()
-                .map(BoondManagerCandidateService::toCandidateSummary)
+                .map(this::toCandidateSummary)
                 .toList();
         return new CandidateSearchResponseDto(candidates, toPaginationMeta(envelope.meta()));
     }
 
-    private static CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data) {
+    private CandidateSummaryDto toCandidateSummary(BoondData<BoondCandidateSummaryAttributes> data) {
         BoondCandidateSummaryAttributes attrs = data.attributes();
+        ResolvedExperience experience = experienceResolver.resolve(attrs.experience());
         return new CandidateSummaryDto(
                 parseId(data.id()),
                 attrs.firstName(),
@@ -455,10 +459,10 @@ public class BoondManagerCandidateService {
                 attrs.country(),
                 attrs.title(),
                 attrs.experience(),
-                null,   // experienceMinYears — resolved by agent-api via dictionary
-                false,  // experienceOpenEnded
-                false,  // experienceSpecified
-                null,   // experienceLabelRaw
+                experience.minYears(),
+                experience.openEnded(),
+                experience.specified(),
+                experience.rawLabel(),
                 attrs.skills(),
                 attrs.diplomas(),
                 attrs.expertiseAreas(),
@@ -509,13 +513,13 @@ public class BoondManagerCandidateService {
         );
     }
 
-    private static TechnicalDocumentDto toTechnicalDocument(
+    private TechnicalDocumentDto toTechnicalDocument(
             BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope,
             Integer candidateId) {
         return toTechnicalDocument(envelope.data(), candidateId);
     }
 
-    private static TechnicalDocumentDto toTechnicalDocument(
+    private TechnicalDocumentDto toTechnicalDocument(
             BoondListEnvelope<BoondTechnicalDocumentAttributes> envelope,
             Integer candidateId) {
         if (envelope.data() == null || envelope.data().isEmpty()) {
@@ -527,10 +531,11 @@ public class BoondManagerCandidateService {
         return toTechnicalDocument(envelope.data().getFirst(), candidateId);
     }
 
-    private static TechnicalDocumentDto toTechnicalDocument(
+    private TechnicalDocumentDto toTechnicalDocument(
             BoondData<BoondTechnicalDocumentAttributes> data,
             Integer candidateId) {
         BoondTechnicalDocumentAttributes a = data.attributes();
+        ResolvedExperience experience = experienceResolver.resolve(a.experience());
         return new TechnicalDocumentDto(
                 parseId(data.id()),
                 a.tdId(),
@@ -538,10 +543,10 @@ public class BoondManagerCandidateService {
                 a.description(),
                 a.summary(),
                 a.experience(),
-                null,   // experienceMinYears — resolved by agent-api via dictionary
-                false,  // experienceOpenEnded
-                false,  // experienceSpecified
-                null,   // experienceLabelRaw
+                experience.minYears(),
+                experience.openEnded(),
+                experience.specified(),
+                experience.rawLabel(),
                 a.training(),
                 a.diplomas(),
                 a.skills(),
