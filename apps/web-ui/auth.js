@@ -1,9 +1,11 @@
 import { DEV_MODE } from "./config.js";
 import { loginRequest, msalConfig } from "./msalConfig.js";
 
+// Empty identity: the UI falls back to the generic i18n labels
+// (auth.default_user / app.user_label) instead of a personal name.
 const DEV_USER = {
-  name: "Eva",
-  username: "eva@sijo.local",
+  name: "",
+  username: "",
 };
 
 let activeAccount = null;

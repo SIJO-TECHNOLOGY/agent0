@@ -250,6 +250,7 @@ function bindEvents() {
 function handleLanguageChange() {
   applyStaticTranslations();
   if (elements.langSwitcher) elements.langSwitcher.value = getLanguage();
+  if (!elements.appShell.hidden) updateSidebarIdentity();
 
   // Re-render the dynamically-generated chrome we can cheaply refresh.
   // Already-streamed chat bubbles and candidate cards keep their original
@@ -292,20 +293,23 @@ function showLoading(message = t("auth.connecting")) {
   elements.loadingText.textContent = message;
 }
 
+function updateSidebarIdentity() {
+  const user = getCurrentUser();
+  const displayName = user?.name || user?.username || t("app.user_label");
+  if (elements.sidebarUser) elements.sidebarUser.textContent = displayName;
+  if (elements.sidebarAvatar) elements.sidebarAvatar.textContent = initials(displayName);
+}
+
 function showChat() {
   if (!isAuthenticated()) {
     showLogin();
     return;
   }
 
-  const user = getCurrentUser();
-  const displayName = user?.name || user?.username || t("auth.default_user");
-
   elements.loginScreen.hidden = true;
   elements.loadingScreen.hidden = true;
   elements.appShell.hidden = false;
-  if (elements.sidebarUser) elements.sidebarUser.textContent = displayName;
-  if (elements.sidebarAvatar) elements.sidebarAvatar.textContent = initials(displayName);
+  updateSidebarIdentity();
   elements.conversationTitle.textContent ||= t("conversations.default_title");
   elements.loginBtn.disabled = false;
   setUiState("empty");
