@@ -233,6 +233,23 @@ class TestGraduationEstimate:
         }
         assert _estimate_years_from_graduation(data, current_year=2026) == 18
 
+    def test_continuing_education_diploma_does_not_reset_career_start(self):
+        # The Raja case: BAC 2003, engineering degree 2009, then a CNAM Master
+        # in 2022 obtained mid-career (formation continue). The career starts
+        # at the end of the INITIAL education block (2009 — the 2003→2009 gap
+        # is a normal BAC→ingénieur chain), NOT at the 2022 degree, which
+        # would absurdly yield 4 years for a ~17-year profile.
+        data = {
+            "_enrichment_technical_document": {
+                "diplomas": [
+                    "2022 - Master 2 finance de marché - CNAM",
+                    "2009 - Diplôme national d'ingénieur informatique - INSAT",
+                    "2003 - BAC Math - Lycée Pilote Ariana",
+                ],
+            }
+        }
+        assert _estimate_years_from_graduation(data, current_year=2026) == 17
+
     def test_cv_freetext_ignores_job_years_near_no_diploma_kw(self):
         # A job start year not next to a diploma keyword must not be taken; only
         # the diploma date is used.

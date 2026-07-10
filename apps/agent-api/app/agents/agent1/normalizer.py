@@ -202,6 +202,12 @@ _GRAD_DISAGREE_MARGIN: Final[int] = 3
 _GRAD_OVERRIDABLE_SOURCES: Final[frozenset[str]] = frozenset(
     {"technical_document", "profile_text"}
 )
+# Gap (in years) between two consecutive diploma years above which the later
+# diploma is treated as CONTINUING education (obtained mid-career, e.g. a CNAM
+# Master 13 years after the engineering degree) rather than part of the initial
+# education block. Standard chains (BAC → prépa → ingénieur/Master) never gap
+# more than ~7 years.
+_CONTINUING_EDUCATION_GAP: Final[int] = 7
 
 
 def _education_years(text: str) -> set[int]:
@@ -225,14 +231,19 @@ def _education_years(text: str) -> set[int]:
 def _estimate_years_from_graduation(
     data: dict[str, object], *, current_year: int | None = None
 ) -> int | None:
-    """Estimate years of experience as ``current_year - latest_graduation_year``.
+    """Estimate years of experience from the end of INITIAL education.
 
-    The graduation year is the most recent end year found in an education
-    context. Two sources, treated differently:
+    Two sources, treated differently:
       - the technical-document ``diplomas``/``training`` fields ARE diplomas, so
         every year in them counts directly (no keyword needed);
       - the CV free text mixes education with job dates, so only years sitting
         next to a diploma keyword are trusted (``_education_years``).
+
+    The career starts at the end of the INITIAL education block, not at the
+    most recent diploma: a continuing-education degree obtained mid-career
+    (e.g. "Master CNAM 2022" thirteen years after a 2009 engineering degree)
+    must not reset the estimate to ~0. Diploma years are walked in order and
+    the block ends at the first gap larger than ``_CONTINUING_EDUCATION_GAP``.
 
     Returns None when no plausible graduation year is found or the resulting
     estimate is out of range.
@@ -258,11 +269,19 @@ def _estimate_years_from_graduation(
         if isinstance(cv_text, str):
             years |= _education_years(cv_text)
 
-    plausible = [y for y in years if y <= year_now]
+    plausible = sorted(y for y in years if y <= year_now)
     if not plausible:
         return None
 
-    estimate = year_now - max(plausible)
+    # End of the initial-education block: walk the years in order and stop at
+    # the first continuing-education gap.
+    graduation = plausible[0]
+    for later in plausible[1:]:
+        if later - graduation > _CONTINUING_EDUCATION_GAP:
+            break
+        graduation = later
+
+    estimate = year_now - graduation
     if 0 <= estimate <= _MAX_PLAUSIBLE_YEARS:
         return estimate
     return None
