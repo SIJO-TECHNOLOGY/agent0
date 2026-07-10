@@ -375,6 +375,53 @@ class TestGraduationEstimate:
         data = {"_enrichment_resume": {"hasContent": True, "extractedText": "no durations"}}
         assert _sum_experience_durations(data) is None
 
+    def test_sum_durations_from_date_ranges(self):
+        # No parenthesised durations — the work-history date ranges themselves
+        # are summed: juil 2019→(mai 2026) = 82 mois + déc 2016→janv 2019 = 25
+        # mois → 107 mois → 9 ans.
+        cv = (
+            "EXPERIENCES\n"
+            "Dev senior chez Acme juillet 2019 - aujourd'hui\n"
+            "Consultant chez Beta décembre 2016 - janvier 2019\n"
+        )
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 9
+
+    def test_sum_durations_bare_year_ranges(self):
+        # "2018 - 2021" without months → plain year difference (3 ans).
+        cv = "Développeur JAVA 2018 - 2021 chez Amundi\n"
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 3
+
+    def test_sum_durations_merges_overlapping_ranges(self):
+        # Parallel roles must not double-count: 2015-2020 and 2018-2021 merge
+        # into 2015-2021 → 6 ans (not 9).
+        cv = (
+            "Lead dev 2015 - 2020 chez Acme\n"
+            "Freelance 2018 - 2021 pour Beta\n"
+        )
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 6
+
+    def test_sum_durations_ignores_education_ranges(self):
+        # A date range next to a diploma keyword is education, not work.
+        cv = "FORMATION\nMaster informatique 2010 à 2013 - Université de Lyon\n"
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) is None
+
+    def test_parenthesised_durations_win_over_date_ranges(self):
+        # When the CV states its own arithmetic, trust it — don't also add the
+        # date ranges (that would double-count the same roles).
+        cv = "Dev juillet 2019 - aujourd'hui (2 ans 1 mois, temps partiel)\n"
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 2
+
+    def test_numeric_month_ranges(self):
+        # "07/2019 - 01/2021" → 18 mois → 2 ans (arrondi).
+        cv = "Ingénieur d'études 07/2019 - 01/2021 chez Gamma\n"
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 2
+
     def test_duration_sum_overrides_structured_and_flags_disagreement(self):
         # Structured says 20 years but the CV durations sum to ~3 → the CV
         # (2nd priority, right after an explicit statement) wins, and the

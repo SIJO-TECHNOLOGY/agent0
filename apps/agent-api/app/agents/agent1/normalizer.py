@@ -302,17 +302,112 @@ _LESS_THAN_YEAR_RE: Final[re.Pattern[str]] = re.compile(
     r"moins\s+d['’]un\s+an|less\s+than\s+a\s+year", re.IGNORECASE
 )
 
+# --- date-range durations ("juillet 2019 - aujourd'hui", "2018 - 2021") ----
 
-def _sum_experience_durations(data: dict[str, object]) -> int | None:
+_MONTH_NAMES: Final[dict[str, int]] = {
+    "janvier": 1, "janv": 1, "jan": 1, "january": 1,
+    "février": 2, "fevrier": 2, "févr": 2, "fevr": 2, "feb": 2, "february": 2,
+    "mars": 3, "mar": 3, "march": 3,
+    "avril": 4, "avr": 4, "apr": 4, "april": 4,
+    "mai": 5, "may": 5,
+    "juin": 6, "jun": 6, "june": 6,
+    "juillet": 7, "juil": 7, "jul": 7, "july": 7,
+    "août": 8, "aout": 8, "aug": 8, "august": 8,
+    "septembre": 9, "sept": 9, "sep": 9, "september": 9,
+    "octobre": 10, "oct": 10, "october": 10,
+    "novembre": 11, "nov": 11, "november": 11,
+    "décembre": 12, "decembre": 12, "déc": 12, "dec": 12, "december": 12,
+}
+# One endpoint of a work-history date range: an optional month (name or "MM/")
+# followed by a plausible year.
+_DATE_POINT: Final[str] = (
+    r"(?:[A-Za-zÀ-ÿ\.]{3,12}\s+|(?:0?[1-9]|1[0-2])\s*/\s*)?(?:19[7-9]\d|20[0-4]\d)\b"
+)
+_PRESENT: Final[str] = (
+    r"(?:pr[ée]sent|present|aujourd['’]?\s?hui|en\s+cours|current|now|"
+    r"actuel(?:lement)?|[àa]\s+ce\s+jour|maintenant)"
+)
+_WORK_RANGE_RE: Final[re.Pattern[str]] = re.compile(
+    rf"(?P<a>{_DATE_POINT})\s*(?:-|–|—|→|à|au|to)\s*(?P<b>{_DATE_POINT}|{_PRESENT})",
+    re.IGNORECASE,
+)
+_PRESENT_RE: Final[re.Pattern[str]] = re.compile(rf"^{_PRESENT}$", re.IGNORECASE)
+_MM_PREFIX_RE: Final[re.Pattern[str]] = re.compile(r"^\s*(0?[1-9]|1[0-2])\s*/")
+_WORD_PREFIX_RE: Final[re.Pattern[str]] = re.compile(r"^\s*([A-Za-zÀ-ÿ]+)")
+
+
+def _point_month_index(token: str, *, default_month: int, today: date) -> int | None:
+    """Absolute month index (year*12 + month-1) of one range endpoint."""
+    if _PRESENT_RE.match(token.strip()):
+        return today.year * 12 + (today.month - 1)
+    year_match = _YEAR_RE.search(token)
+    if not year_match:
+        return None
+    month = default_month
+    mm = _MM_PREFIX_RE.match(token)
+    if mm:
+        month = int(mm.group(1))
+    else:
+        word = _WORD_PREFIX_RE.match(token)
+        if word:
+            month = _MONTH_NAMES.get(word.group(1).lower().rstrip("."), default_month)
+    return int(year_match.group(0)) * 12 + (month - 1)
+
+
+def _sum_date_range_durations(text: str, *, today: date) -> int | None:
+    """Total months from the CV's work-history date ranges, overlap-merged.
+
+    Recognises "juillet 2019 - aujourd'hui", "décembre 2016 - janvier 2019",
+    "07/2019 - 01/2021" and bare "2018 - 2021" (month defaults to January on
+    both ends → plain year difference). Ranges sitting next to a diploma
+    keyword are education, not work, and are skipped. Overlapping ranges are
+    merged before summing so parallel roles are not double-counted.
+    """
+    intervals: list[tuple[int, int]] = []
+    for match in _WORK_RANGE_RE.finditer(text):
+        # Education ranges ("Master ... 2010 à 2013") are not work experience.
+        window = text[max(0, match.start() - 45): match.end() + 45]
+        if _DIPLOMA_KW_RE.search(window):
+            continue
+        start = _point_month_index(match.group("a"), default_month=1, today=today)
+        end = _point_month_index(match.group("b"), default_month=1, today=today)
+        if start is None or end is None:
+            continue
+        if end <= start or (end - start) > _MAX_PLAUSIBLE_YEARS * 12:
+            continue
+        intervals.append((start, end))
+
+    if not intervals:
+        return None
+    # Merge overlaps, then sum the merged lengths.
+    intervals.sort()
+    total = 0
+    cur_start, cur_end = intervals[0]
+    for start, end in intervals[1:]:
+        if start <= cur_end:
+            cur_end = max(cur_end, end)
+        else:
+            total += cur_end - cur_start
+            cur_start, cur_end = start, end
+    total += cur_end - cur_start
+    return total
+
+
+def _sum_experience_durations(
+    data: dict[str, object], *, today: date | None = None
+) -> int | None:
     """Total years of experience summed from per-role durations in the CV.
 
-    Reads the explicit LinkedIn-style durations the CV states in parentheses
-    ("(4 ans 10 mois)", "(2 ans)", "(5 mois)", "moins d'un an") and sums them.
-    Reflects time actually worked (handles gaps) rather than assuming continuous
-    work since graduation. Returns None when no such duration is present.
+    Two layers, most explicit first:
+      1. LinkedIn-style parenthesised durations ("(4 ans 10 mois)", "(2 ans)",
+         "(5 mois)", "moins d'un an") — the CV's own arithmetic, summed as-is.
+      2. Otherwise, the work-history DATE RANGES themselves ("juillet 2019 -
+         aujourd'hui", "2018 - 2021", "07/2019 - 01/2021"), overlap-merged so
+         parallel roles are not double-counted; education ranges are excluded.
 
-    Note: simultaneous roles can be double-counted — this is a comparison
-    signal, not an authoritative figure.
+    Reflects time actually worked (handles gaps) rather than assuming
+    continuous work since graduation. Returns None when neither layer finds
+    anything.
     """
     resume = data.get(_ENRICHMENT_RESUME_KEY)
     if not isinstance(resume, dict):
@@ -320,6 +415,7 @@ def _sum_experience_durations(data: dict[str, object]) -> int | None:
     text = resume.get("extractedText") or resume.get("text") or ""
     if not isinstance(text, str) or not text:
         return None
+    now = today if today is not None else date.today()
 
     total_months = 0
     found = False
@@ -336,7 +432,12 @@ def _sum_experience_durations(data: dict[str, object]) -> int | None:
             found = True
 
     if not found:
-        return None
+        # No explicit durations — derive them from the date ranges instead.
+        range_months = _sum_date_range_durations(text, today=now)
+        if range_months is None:
+            return None
+        total_months = range_months
+
     years = round(total_months / 12)
     if 0 < years <= _MAX_PLAUSIBLE_YEARS:
         return years

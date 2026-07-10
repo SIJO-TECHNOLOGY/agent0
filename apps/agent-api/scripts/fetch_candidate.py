@@ -141,7 +141,9 @@ async def _fetch_all(client: RemoteMcpClient, candidate_id: str, only: str | Non
 
 _EXP_SOURCE_LABELS = {
     "cv": "Année clairement écrite dans le CV",
+    "cv_durations": "Somme des durées de postes du CV (durées explicites ou plages de dates)",
     "boondmanager": "Champ structuré BoondManager (experienceMinYears)",
+    "experience_level": "Niveau d'expérience BoondManager (label du dictionnaire)",
     "technical_document": "Mention dans le dossier technique",
     "profile_text": "Mention dans le titre / résumé du profil",
     "graduation": "Estimé depuis l'année de diplôme (année actuelle − fin d'études)",
