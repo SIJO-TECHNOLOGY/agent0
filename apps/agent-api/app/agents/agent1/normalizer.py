@@ -338,18 +338,21 @@ _TECH_DOC_TEXT_FIELDS: Final[tuple[str, ...]] = (
 def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | None]:
     """Return (best_years, source_label) reconciling structured + free-text data.
 
-    Strategy (policy: trust the CV when it *clearly* states experience):
+    Strategy (policy: the CV outranks the structured BoondManager fields):
       1. If the CV explicitly states a years-of-experience figure (a number
          tied to an experience keyword, e.g. "3+ years of hands-on technical
          experience", "16 ans d'expérience"), use it — the candidate's own
          clear statement wins over the structured field, which is often a
          coarse band or stale.
-      2. Else trust BoondManager's structured ``experienceMinYears``.
-      3. Else use the BoondManager experience *level* (``_experienceLabel`` →
+      2. Else sum the CV's per-role durations ("(4 ans 10 mois)"
+         LinkedIn-style): time actually worked, straight from the CV, so it
+         also outranks the structured field and handles career gaps.
+      3. Else trust BoondManager's structured ``experienceMinYears``.
+      4. Else use the BoondManager experience *level* (``_experienceLabel`` →
          years, e.g. "3 ans" → 3): a curated, near-1:1 figure the recruiter set.
          Using it (rather than ignoring it) keeps the card and the ranking score
          on the SAME value.
-      4. Else fall back to experience-qualified figures from the technical
+      5. Else fall back to experience-qualified figures from the technical
          document, then the profile title/snippet.
 
     Free-text mining only counts a number explicitly tied to an experience
@@ -366,17 +369,23 @@ def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | No
     if cv_years is not None:
         return cv_years, "cv"
 
-    # 2. Structured BoondManager min-years.
+    # 2. CV per-role durations summed — still the CV's own data, so it beats
+    # the structured field. Flagged downstream for LLM cross-checking.
+    duration_years = _sum_experience_durations(data)
+    if duration_years is not None:
+        return duration_years, "cv_durations"
+
+    # 3. Structured BoondManager min-years.
     boond_years = _years_from_boond(data)
     if boond_years is not None:
         return boond_years, "boondmanager"
 
-    # 3. BoondManager experience level (recruiter-set), parsed to a number.
+    # 4. BoondManager experience level (recruiter-set), parsed to a number.
     level_years = _years_from_experience_label(data)
     if level_years is not None:
         return level_years, "experience_level"
 
-    # 4. Technical document, then profile title/snippet.
+    # 5. Technical document, then profile title/snippet.
     techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
     if isinstance(techdoc, dict):
         td_text = " ".join(
@@ -824,8 +833,9 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     # Compute the graduation-year estimate up front: it is both a cross-check
     # signal for conflict detection and the value used by the fallback below.
     grad_years = _estimate_years_from_graduation(data)
-    # Sum of the CV's per-role durations ("(4 ans 10 mois)" LinkedIn-style).
-    # Cross-check signal AND last-resort value when nothing else exists.
+    # Sum of the CV's per-role durations ("(4 ans 10 mois)" LinkedIn-style) —
+    # cross-check signal here; as a VALUE it is priority 2 inside
+    # ``_normalize_experience`` (right after the CV's explicit statement).
     duration_sum = _sum_experience_durations(data)
 
     conflicts = detect_conflicts(
@@ -836,21 +846,15 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
         duration_sum=duration_sum,
     )
 
-    # Estimates only REPLACE the value in two cases:
-    #   1. no experience figure exists anywhere → the estimate fills the gap
-    #      (durations actually worked first — they handle career gaps — then
-    #      the graduation year, which assumes continuous work);
+    # The graduation estimate only REPLACES the value in two cases:
+    #   1. no experience figure exists anywhere → graduation fills the gap;
     #   2. the value came from a SHAKY text-mined source (technical document /
     #      profile text) AND the data is conflicting → graduation corrects it.
-    # Curated sources (cv, experienceMinYears, the recruiter-set experience
-    # level) are NEVER auto-overridden — a conflict is only flagged, and the LLM
-    # reconciler (when enabled) decides using the full CV. This keeps the card
-    # and the ranking score on the same value and respects recruiter data.
-    if exp_years is None and duration_sum is not None:
-        exp_years = duration_sum
-        exp_source = "cv_durations"
-        data[NORM_EXPERIENCE_YEARS] = exp_years
-        data[NORM_EXPERIENCE_SOURCE] = exp_source
+    # Curated sources (cv, cv_durations, experienceMinYears, the recruiter-set
+    # experience level) are NEVER auto-overridden — a conflict is only flagged,
+    # and the LLM reconciler (when enabled) decides using the full CV. This
+    # keeps the card and the ranking score on the same value and respects
+    # recruiter data.
     needs_estimate = exp_years is None or (
         bool(conflicts) and exp_source in _GRAD_OVERRIDABLE_SOURCES
     )

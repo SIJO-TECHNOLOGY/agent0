@@ -358,9 +358,10 @@ class TestGraduationEstimate:
         data = {"_enrichment_resume": {"hasContent": True, "extractedText": "no durations"}}
         assert _sum_experience_durations(data) is None
 
-    def test_duration_sum_flags_conflict_with_resolved_experience(self):
-        # Structured says 20 years, but the CV durations sum to ~3 → conflict
-        # flagged (comparison only; the displayed value is not forced here).
+    def test_duration_sum_overrides_structured_and_flags_disagreement(self):
+        # Structured says 20 years but the CV durations sum to ~3 → the CV
+        # (2nd priority, right after an explicit statement) wins, and the
+        # disagreement with the structured field is flagged for LLM review.
         result = _result(
             data={
                 "experienceMinYears": 20,
@@ -371,7 +372,10 @@ class TestGraduationEstimate:
             }
         )
         out = normalize_candidate(result)
-        assert "experience_vs_duration_disagreement" in out.data[NORM_CONFLICTS]
+        assert out.data[NORM_EXPERIENCE_YEARS] == 3
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv_durations"
+        assert "experience_vs_structured_disagreement" in out.data[NORM_CONFLICTS]
+        assert "experience_estimated_from_durations" in out.data[NORM_CONFLICTS]
 
     def test_duration_sum_fills_gap_when_no_other_source(self):
         # No explicit statement, no structured years, no label, no diploma —
