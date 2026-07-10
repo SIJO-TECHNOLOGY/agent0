@@ -28,7 +28,7 @@ public class CandidateSearchTool {
                     "reference filters (repeatable parameters whose values are unioned), geographic " +
                     "search (location or coordinates together with geoDistance), date-range filtering " +
                     "(period with startDate/endDate, or periodDynamic), pagination (page, maxResults up " +
-                    "to 500), sorting (sort + order) and response field selection (columns). Returns " +
+                    "to 100), sorting (sort + order) and response field selection (columns). Returns " +
                     "candidate summaries; call getCandidateDetail for a full profile and " +
                     "getCandidateTechnicalDocument for the skills/CV. Call order: getDictionary -> " +
                     "searchCandidates -> getCandidateDetail -> getCandidateTechnicalDocument."
@@ -120,7 +120,7 @@ public class CandidateSearchTool {
                     "Page number (1-based). Default: 1.")
             Integer page,
             @ToolParam(required = false, description =
-                    "Results per page (1-500). Default: 30.")
+                    "Results per page (1-100). Default: 30.")
             Integer maxResults,
             @ToolParam(required = false, description =
                     "Sort field(s), repeatable. One or more of: lastName, firstName, title, " +

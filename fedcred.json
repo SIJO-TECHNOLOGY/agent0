@@ -1,0 +1,6 @@
+﻿{
+  "name": "github-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:SIJO-TECHNOLOGY/agent0:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}

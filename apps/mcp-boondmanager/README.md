@@ -138,12 +138,12 @@ never sent.
 
 **Pagination, sorting & response shaping**
 
-| Parameter | Type | Description |
-|---|---|---|
-| `page` | `Integer` | Page number (1-based). Default: `1`. |
-| `maxResults` | `Integer` | Results per page (1–500). Default: `30`. |
-| `sort` | `List<String>` | Sort field(s): `lastName`, `firstName`, `title`, `availability`, `availabilityType`, `numberOfActivePositionings`, `mainManager.lastName`, `updateDate`, `state`, `experience`, `creationDate`, `evaluation`, `hrManager.lastName`, `source`, `distance`. |
-| `order` | `String` | Sort direction: `asc` or `desc`. |
+| Parameter | Type | Description                                                                                                                                                                                                                                                                                                                                                               |
+|---|---|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `page` | `Integer` | Page number (1-based). Default: `1`.                                                                                                                                                                                                                                                                                                                                      |
+| `maxResults` | `Integer` | Results per page (1–100). Default: `30`.                                                                                                                                                                                                                                                                                                                                  |
+| `sort` | `List<String>` | Sort field(s): `lastName`, `firstName`, `title`, `availability`, `availabilityType`, `numberOfActivePositionings`, `mainManager.lastName`, `updateDate`, `state`, `experience`, `creationDate`, `evaluation`, `hrManager.lastName`, `source`, `distance`.                                                                                                                 |
+| `order` | `String` | Sort direction: `asc` or `desc`.                                                                                                                                                                                                                                                                                                                                          |
 | `columns` | `List<String>` | Fields the API should include per candidate: `name`, `title`, `state`, `activePositionings`, `availability`, `mobilityAreas`, `details`, `updated`, `mainManager`, `resume`, `hrManager`, `expertiseAreas`, `creationDate`, `lastActionDate`, `source`, `diplomas`, `activityAreas`, `globalEvaluation`, `evaluations`, `experience`, `references`, `languages`, `tools`. |
 
 ## Package Structure

@@ -1,5 +1,9 @@
-﻿export const API_URL = "http://127.0.0.1:8000";
-export const DEV_MODE = true;
+// Build-time overrides (VITE_API_URL, VITE_DEV_MODE) let deployed builds
+// point at another API origin (empty string = same origin behind a proxy)
+// without touching this file. Local dev keeps the defaults below.
+const ENV = import.meta.env ?? {};
+export const API_URL = ENV.VITE_API_URL ?? "http://127.0.0.1:8000";
+export const DEV_MODE = ENV.VITE_DEV_MODE ? ENV.VITE_DEV_MODE !== "false" : true;
 export const DEV_API_MOCKS = false;
 
 export const APP_NAME = "SIJO Assistant";
