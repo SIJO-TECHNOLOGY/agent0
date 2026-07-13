@@ -1,11 +1,11 @@
-"""POST /api/search endpoint tests against the frontend-oriented contract."""
+﻿"""POST /api/search endpoint tests against the frontend-oriented contract."""
 
 from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
 
-REQUIRED_TOP_KEYS = {"conversation_id", "message", "ui"}
+REQUIRED_TOP_KEYS = {"conversation_id", "message", "ui", "answer", "sessionId", "candidates", "context", "debug"}
 REQUIRED_UI_KEYS = {"type", "candidates"}
 REQUIRED_CANDIDATE_KEYS = {
     "id",
@@ -54,6 +54,10 @@ async def test_search_returns_new_response_contract(client: AsyncClient) -> None
     assert isinstance(body["conversation_id"], str) and body["conversation_id"]
     assert body["conversation_id"].startswith("conv_")
     assert isinstance(body["message"], str) and body["message"]
+    assert body["answer"] == body["message"]
+    assert body["sessionId"] == body["conversation_id"]
+    assert isinstance(body["candidates"], list)
+    assert "currentSearch" in body["context"]
 
     ui = body["ui"]
     assert set(ui.keys()) == REQUIRED_UI_KEYS
@@ -137,3 +141,4 @@ async def test_search_emits_structured_workflow_logs(
         "graph.generate_final_response",
     }
     assert expected.issubset(log_events)
+

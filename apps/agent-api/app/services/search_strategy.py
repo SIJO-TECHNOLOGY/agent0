@@ -72,7 +72,7 @@ EXPERIENCE_FIELDS: Final[tuple[str, ...]] = (
 )
 PAGE_FIELD: Final[str] = "page"
 SIZE_FIELDS: Final[tuple[str, ...]] = ("maxResults", "numberPerPage")
-_DEFAULT_SIZE: Final[int] = 25
+_DEFAULT_SIZE: Final[int] = 40
 
 
 @dataclass(frozen=True)
@@ -203,10 +203,10 @@ def _size_field(fields: set[str]) -> str | None:
     return next((f for f in SIZE_FIELDS if f in fields), None)
 
 
-def _pagination(fields: set[str]) -> dict[str, object]:
+def _pagination(fields: set[str], page: int = 1) -> dict[str, object]:
     out: dict[str, object] = {}
     if PAGE_FIELD in fields:
-        out[PAGE_FIELD] = 1
+        out[PAGE_FIELD] = page
     size = _size_field(fields)
     if size is not None:
         out[size] = _DEFAULT_SIZE
@@ -214,14 +214,14 @@ def _pagination(fields: set[str]) -> dict[str, object]:
 
 
 def _keyword_inputs(
-    term: str, fields: set[str], *, keywords_type: str | None
+    term: str, fields: set[str], *, keywords_type: str | None, page: int = 1
 ) -> dict[str, object] | None:
     if KEYWORDS_FIELD not in fields:
         return None
     keywords = safe_keywords(term)
     if not keywords:
         return None
-    inputs: dict[str, object] = _pagination(fields)
+    inputs: dict[str, object] = _pagination(fields, page)
     inputs[KEYWORDS_FIELD] = keywords
     if keywords_type is not None and KEYWORDS_TYPE_FIELD in fields:
         inputs[KEYWORDS_TYPE_FIELD] = keywords_type
@@ -243,6 +243,7 @@ def build_recall_passes(
     *,
     schema_fields: set[str],
     max_passes: int = 5,
+    page: int = 1,
 ) -> list[SearchPass]:
     """Build a bounded, de-duplicated, KEYWORD-ONLY recall ladder.
 
@@ -276,7 +277,25 @@ def build_recall_passes(
     if anchors.name:
         add(
             "name",
-            _keyword_inputs(anchors.name, fields, keywords_type="resumeTd"),
+            _keyword_inputs(anchors.name, fields, keywords_type="resumeTd", page=page),
+            relaxed=False,
+        )
+
+    # Pass 0b — COMBINED content anchors (skills + domains/company) as ONE
+    # keyword query. BoondManager unions the terms and ranks by relevance, so a
+    # candidate matching the most discriminating terms (e.g. a company + a skill,
+    # "amundi java") surfaces at the top — far better recall than searching the
+    # generic skill alone. Role/seniority words are deliberately EXCLUDED here:
+    # in a full-text union they are noisy ("tech lead" pulls unrelated infra
+    # profiles). The role still drives the title pass below and the ranking.
+    content_terms: list[str] = []
+    for term in (*anchors.domains, *anchors.skills):
+        if term and term not in content_terms:
+            content_terms.append(term)
+    if len(content_terms) >= 2:
+        add(
+            "combined",
+            _keyword_inputs(" ".join(content_terms), fields, keywords_type="resumeTd", page=page),
             relaxed=False,
         )
 
@@ -284,7 +303,7 @@ def build_recall_passes(
     if primary is not None:
         add(
             "primary",
-            _keyword_inputs(primary, fields, keywords_type="resumeTd"),
+            _keyword_inputs(primary, fields, keywords_type="resumeTd", page=page),
             relaxed=False,
         )
 
@@ -292,12 +311,12 @@ def build_recall_passes(
     if anchors.role:
         add(
             "role-titleSkills",
-            _keyword_inputs(anchors.role, fields, keywords_type="titleSkills"),
+            _keyword_inputs(anchors.role, fields, keywords_type="titleSkills", page=page),
             relaxed=True,
         )
         add(
             "role-title",
-            _keyword_inputs(anchors.role, fields, keywords_type="title"),
+            _keyword_inputs(anchors.role, fields, keywords_type="title", page=page),
             relaxed=True,
         )
 
@@ -305,7 +324,7 @@ def build_recall_passes(
     for domain in anchors.domains:
         add(
             "domain",
-            _keyword_inputs(domain, fields, keywords_type="resumeTd"),
+            _keyword_inputs(domain, fields, keywords_type="resumeTd", page=page),
             relaxed=True,
         )
 
@@ -313,7 +332,7 @@ def build_recall_passes(
     for skill in anchors.skills[1:]:
         add(
             "skill",
-            _keyword_inputs(skill, fields, keywords_type="resumeTd"),
+            _keyword_inputs(skill, fields, keywords_type="resumeTd", page=page),
             relaxed=True,
         )
 

@@ -34,12 +34,13 @@ class _ReflectPlanner:
         self._verdict = verdict
         self.calls = 0
 
-    async def reflect(self, *, query, results_summary, emitter=None):
+    async def reflect(self, *, query, results_summary, criteria_summary="", emitter=None):
         self.calls += 1
         return self._verdict
 
 
-def _ctx(planner, *, emitter=None, max_replan=1, use_llm_replan=True, skip=0.8):
+def _ctx(planner, *, emitter=None, max_replan=1, use_llm_replan=True, skip=0.8,
+         allow_clarification=True):
     return NodeContext(
         mcp_client=MockMcpClient(),
         max_replan_attempts=max_replan,
@@ -47,6 +48,7 @@ def _ctx(planner, *, emitter=None, max_replan=1, use_llm_replan=True, skip=0.8):
         use_llm_replan=use_llm_replan,
         replan_skip_score=skip,
         event_emitter=emitter or _RecordingEmitter(),
+        allow_clarification=allow_clarification,
     )
 
 
@@ -74,6 +76,55 @@ def _weak_state() -> GraphState:
 # ---------------------------------------------------------------------------
 # reflect_on_results — the LLM-driven replan decision + its safety gates
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reflect_requests_clarification() -> None:
+    planner = _ReflectPlanner(
+        ReflectionVerdict(
+            needs_clarification=True,
+            clarification_question="Quelle technologie précisément ?",
+            clarification_fields=["skill"],
+        )
+    )
+    out = await reflect_on_results(_weak_state(), _ctx(planner))
+    assert out.clarification_question == "Quelle technologie précisément ?"
+    assert out.clarification_fields == ["skill"]
+    assert out.replan_feedback == ""  # clarify, not replan
+
+
+@pytest.mark.asyncio
+async def test_clarification_takes_precedence_over_replan() -> None:
+    planner = _ReflectPlanner(
+        ReflectionVerdict(
+            needs_replan=True,
+            guidance="broaden",
+            needs_clarification=True,
+            clarification_question="Quelle localisation ?",
+            clarification_fields=["location"],
+        )
+    )
+    out = await reflect_on_results(_weak_state(), _ctx(planner))
+    assert out.clarification_question == "Quelle localisation ?"
+    assert out.replan_feedback == ""
+    assert out.replan_count == 0
+
+
+@pytest.mark.asyncio
+async def test_clarification_ignored_when_disabled() -> None:
+    planner = _ReflectPlanner(
+        ReflectionVerdict(
+            needs_clarification=True,
+            clarification_question="?",
+            clarification_fields=["skill"],
+            needs_replan=True,
+            guidance="broaden",
+        )
+    )
+    out = await reflect_on_results(_weak_state(), _ctx(planner, allow_clarification=False))
+    # Clarification off → falls through to the replan path.
+    assert out.clarification_question == ""
+    assert out.replan_feedback == "broaden"
 
 
 @pytest.mark.asyncio
@@ -175,6 +226,66 @@ async def test_plan_with_llm_consumes_and_forwards_feedback() -> None:
     assert result.replan_feedback == ""  # consumed exactly once
 
 
+class _NoBoundsPlanner:
+    """Planner stub that never emits experience bounds in its constraints."""
+
+    async def plan(self, *, query, filters, tools, constraints, emitter=None, feedback=""):
+        return LlmToolPlan(
+            interpreted_intent={
+                "objective": "find",
+                "entities": ["java"],
+                "constraints": {},
+            },
+            plan=[],
+        )
+
+
+@pytest.mark.asyncio
+async def test_plan_with_llm_backfills_experience_bounds_from_query() -> None:
+    # The LLM omitted the seniority constraint the user clearly stated; the
+    # deterministic backstop must restore it so ranking scores the dimension.
+    state = GraphState(original_query="dev java 5 ans d'expérience")
+    result = await plan_with_llm(state, _ctx(_NoBoundsPlanner()))
+
+    assert result.interpreted_intent is not None
+    assert result.interpreted_intent.constraints["min_experience_years"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_plan_with_llm_skips_backfill_on_feedback_replan() -> None:
+    # On a reflection-triggered replan the LLM may have deliberately dropped
+    # the bound (e.g. "broaden the search") — do not re-add it.
+    state = GraphState(
+        original_query="dev java 5 ans d'expérience",
+        replan_feedback="drop the seniority constraint and broaden",
+    )
+    result = await plan_with_llm(state, _ctx(_NoBoundsPlanner()))
+
+    assert result.interpreted_intent is not None
+    assert "min_experience_years" not in result.interpreted_intent.constraints
+
+
+@pytest.mark.asyncio
+async def test_plan_with_llm_keeps_llm_emitted_bounds() -> None:
+    # When the LLM already interpreted the bounds, the backstop must not touch them.
+    class _BoundsPlanner:
+        async def plan(self, *, query, filters, tools, constraints, emitter=None, feedback=""):
+            return LlmToolPlan(
+                interpreted_intent={
+                    "objective": "find",
+                    "entities": ["java"],
+                    "constraints": {"min_experience_years": "7"},
+                },
+                plan=[],
+            )
+
+    state = GraphState(original_query="dev java 5 ans d'expérience")
+    result = await plan_with_llm(state, _ctx(_BoundsPlanner()))
+
+    assert result.interpreted_intent is not None
+    assert result.interpreted_intent.constraints["min_experience_years"] == "7"
+
+
 # ---------------------------------------------------------------------------
 # end-to-end: the bounded loop runs once through the compiled LLM graph
 # ---------------------------------------------------------------------------
@@ -209,7 +320,7 @@ class _LoopPlanner:
             plan=[PlannedToolCall(tool_name="searchCandidates", inputs={"keywords": "java"})],
         )
 
-    async def reflect(self, *, query, results_summary, emitter=None):
+    async def reflect(self, *, query, results_summary, criteria_summary="", emitter=None):
         self.reflect_calls += 1
         return ReflectionVerdict(needs_replan=True, reason="weak", guidance="add seniority")
 

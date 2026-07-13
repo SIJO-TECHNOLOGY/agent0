@@ -167,7 +167,7 @@ async def test_candidate_search_calls_search_candidates_with_string_keywords(
     assert "cib" in keywords_value
     # page / numberPerPage defaults injected when schema accepts them.
     assert inputs["page"] == 1
-    assert inputs["numberPerPage"] == 8
+    assert inputs["numberPerPage"] == 40
     # Second call uses titleSkills to cover profile title fields.
     if len(_captured_inputs) >= 2:
         assert _captured_inputs[1].get("keywordsType") == "titleSkills"

@@ -32,7 +32,9 @@ flowchart TD
     E --> F["rank_candidates"]
     F --> G["reflect_on_results"]
     G -->|"LLM: needs_replan (budget left)"| B
-    G -->|"good enough / budget spent"| H["generate_final_response"]
+    G -->|"LLM: needs_clarification"| H["generate_final_response"]
+    G -->|"good enough / budget spent"| H
+    H -->|"clarification pending"| K["clarification UI"]
 ```
 
 Key invariants:
@@ -62,6 +64,37 @@ Key invariants:
     and cleared by `plan_with_llm` on consumption, so the loop cannot
     spin. Re-runs **accumulate** candidates (executor de-dupes by
     `(source_tool, id)`) — a replan adds better-targeted profiles.
+- **Reflect: accept / retry / clarify.** The same `reflect_on_results` call now
+  picks one of three outcomes (the LLM decides). Besides accept and retry it may
+  **ask the user to clarify** — used mainly when a query parameter could not be
+  resolved (an unrecognised skill, an unknown location/company, contradictory
+  or too-vague criteria). It returns `needs_clarification` + a
+  `clarification_question` + `clarification_fields`; the node sets
+  `GraphState.clarification_question` (clarification takes precedence over
+  replan), the run finalizes, and `search_service` emits a `clarification` UI
+  (rendered as a small form; the answers come back as an `interaction` and are
+  merged into the next query). Guards: gated by the same reflection budget;
+  off by `allow_clarification=false`; at most one clarification per request
+  (`_already_clarified`); the criteria/warnings summary
+  (`_reflection_criteria_summary`) tells the LLM what was unresolved.
+- **In-session conversation memory.** `app/services/conversation_memory.py`
+  accumulates the conversation's effective search query per `conversation_id`
+  (`combine_query`): a follow-up turn refines the prior request instead of
+  restarting it (a bare "oui" adds nothing; duplicates are skipped), so
+  answering a clarification keeps the original criteria. It is shared by BOTH
+  the streaming route (`/api/search/stream`, used by the frontend) and
+  `/api/chat`, so they bind to the same state. The streaming route pins a stable
+  `conversation_id` (the workflow's per-call id is overridden in the
+  `search_started`/`final_response` events) and the frontend echoes it on the
+  next turn. In-memory; reset on new/deleted conversation; not persisted across
+  restarts.
+- **Result display & "d'autres".** All ranked candidates are displayed at once
+  (no in-chat pagination — the full set ships in one `candidate_cards` UI, and
+  the frontend's own sort/filter chips operate on it). The set is still stored
+  in session memory so follow-ups (filter / sort) work on it. A "d'autres" /
+  "more" turn (`is_more_request`) never re-searches or clarifies: since
+  everything is already displayed, it answers that no further candidates are
+  available for this search.
 
 ## Deterministic Workflow (fallback)
 
@@ -299,6 +332,30 @@ search) loses the seniority credit **and** the final score is multiplied by
 `_OVER_CAP_PENALTY` (0.4) — so it drops far down the ranking but stays visible
 rather than being excluded. Unknown experience is never hit by the cap
 multiplier (we only penalise a known over-cap value).
+
+## Recall ladder (search retrieval)
+
+`searchCandidates` is a recall tool whose keyword search **unions** terms and
+ranks by relevance. `build_recall_passes` (`app/services/search_strategy.py`)
+turns the interpreted anchors into a bounded, keyword-only ladder:
+
+1. **name** (if a person is named) — strongest anchor, searched first.
+2. **combined** — the discriminating *content* anchors (domains/company +
+   skills) joined into ONE keyword query (e.g. "amundi java"). Because the
+   engine unions and ranks by relevance, candidates matching the most terms
+   surface at the top — far better recall than searching a generic skill alone.
+   **Generic role/seniority words are deliberately excluded** from this union:
+   in full-text they are noisy ("tech lead" pulls unrelated infra profiles).
+   Built only when there are ≥2 content anchors.
+3. **primary / role (titleSkills, title) / domain / remaining skills** — the
+   single-term relaxation passes, used as fallback.
+
+The ladder stops at the first pass that returns candidates (then complements it
+with a `titleSkills` pass). Page size is `numberPerPage` (≈40) so the ranker has
+enough candidates to work with — too small a page silently drops matching
+profiles ranked just outside the top-N by the provider. Role/seniority and the
+other criteria are applied in **ranking** (`evidence_score`), not as hard
+retrieval filters (structured id filters can kill recall).
 
 ## Retry Strategy
 

@@ -595,9 +595,13 @@ def test_ladder_is_keyword_only_and_recall_first() -> None:
     anchors = Anchors(skills=("java",), role="developer", domains=("cib",))
     passes = build_recall_passes(anchors, schema_fields=_SCHEMA_FIELDS)
 
-    assert passes[0].label == "primary"
+    # First pass combines the discriminating content anchors (domain + skill),
+    # so a candidate matching both surfaces at the top.
+    assert passes[0].label == "combined"
     assert passes[0].relaxed is False
-    assert passes[0].inputs["keywords"] == "java"
+    assert passes[0].inputs["keywords"] == "cib java"
+    # The single-skill primary pass still follows as a relaxation.
+    assert any(p.label == "primary" and p.inputs.get("keywords") == "java" for p in passes)
 
     # The structured id filters are NEVER used (they can kill recall).
     for p in passes:
@@ -605,14 +609,28 @@ def test_ladder_is_keyword_only_and_recall_first() -> None:
         assert "experiences" not in p.inputs
         assert "keywords" in p.inputs
 
-    # Role + domain passes exist somewhere in the ladder.
+
+def test_combined_pass_skipped_for_single_content_term() -> None:
+    # Only one content anchor → nothing to combine → primary is first (unchanged).
+    anchors = Anchors(skills=("java",), role=None, domains=())
+    passes = build_recall_passes(anchors, schema_fields=_SCHEMA_FIELDS)
+    assert passes[0].label == "primary"
+    assert all(p.label != "combined" for p in passes)
+
+
+def test_combined_pass_excludes_generic_role_words() -> None:
+    # The role must NOT be folded into the combined keyword query (noisy union).
+    anchors = Anchors(skills=("java",), role="tech lead", domains=("amundi",))
+    passes = build_recall_passes(anchors, schema_fields=_SCHEMA_FIELDS)
+    combined = next(p for p in passes if p.label == "combined")
+    assert combined.inputs["keywords"] == "amundi java"
+    assert "lead" not in str(combined.inputs["keywords"]).lower()
+    # The role still drives the title pass (not the resumeTd content union).
     assert any(
-        p.inputs.get("keywords") == "developer"
+        p.inputs.get("keywords") == "tech lead"
         and p.inputs.get("keywordsType") == "titleSkills"
         for p in passes
     )
-    assert any(p.inputs.get("keywords") == "cib" for p in passes)
-
     # No pass ever carries boolean keyword syntax.
     for p in passes:
         kw = str(p.inputs.get("keywords", ""))
@@ -636,16 +654,18 @@ def test_ladder_searches_name_first_when_present() -> None:
     assert any(
         p.label == "primary" and p.inputs.get("keywords") == "java" for p in passes
     )
-    assert any(p.inputs.get("keywords") == "developer" for p in passes)
-    assert any(p.inputs.get("keywords") == "cib" for p in passes)
+    # The combined pass follows the name and carries both content anchors.
+    assert any(
+        p.label == "combined" and p.inputs.get("keywords") == "cib java" for p in passes
+    )
 
 
-def test_ladder_without_name_is_unchanged() -> None:
-    # Regression guard: a query with no person name produces the same first
-    # pass as before (skill primary), never a "name" pass.
+def test_ladder_without_name_starts_with_combined() -> None:
+    # A query with no person name and ≥2 content anchors starts with the
+    # combined pass, never a "name" pass.
     anchors = Anchors(skills=("java",), role="developer", domains=("cib",))
     passes = build_recall_passes(anchors, schema_fields=_SCHEMA_FIELDS)
-    assert passes[0].label == "primary"
+    assert passes[0].label == "combined"
     assert all(p.label != "name" for p in passes)
 
 

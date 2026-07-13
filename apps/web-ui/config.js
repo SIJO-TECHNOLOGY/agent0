@@ -11,6 +11,7 @@ export const APP_NAME = "SIJO Assistant";
 export const API_ENDPOINTS = {
   health: "/api/health",
   chat: "/api/chat",
+  chat_session_reset: "/api/chat/session/reset",
   search_stream: "/api/search/stream",
   conversations: "/api/conversations",
   conversation_detail: "/api/conversations/:id",
@@ -36,3 +37,4 @@ export const CANDIDATE_CONFIG = {
   open_boond_in_new_tab: true,
   show_candidate_drawer: true,
 };
+

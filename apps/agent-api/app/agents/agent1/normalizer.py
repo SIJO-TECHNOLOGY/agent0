@@ -117,7 +117,12 @@ def _parse_years_from_text(text: str) -> int | None:
 
 
 def _years_from_boond(data: dict[str, object]) -> int | None:
-    """Read experienceMinYears from BoondManager structured fields."""
+    """Read experienceMinYears from BoondManager structured fields.
+
+    Zero is a genuine value: the MCP server resolves the "Pas d'expérience"
+    dictionary level to 0 (and leaves the field null when unspecified), so a
+    junior profile shows "0 an" rather than "not specified".
+    """
     for source in (data, data.get("attributes"), data.get(_ENRICHMENT_TECH_DOC_KEY)):
         if not isinstance(source, dict):
             continue
@@ -125,12 +130,12 @@ def _years_from_boond(data: dict[str, object]) -> int | None:
             value = source.get(key)
             if isinstance(value, bool):
                 continue
-            if isinstance(value, int) and 0 < value <= 50:
+            if isinstance(value, int) and 0 <= value <= 50:
                 return value
             if isinstance(value, str):
                 try:
                     v = int(value.strip())
-                    if 0 < v <= 50:
+                    if 0 <= v <= 50:
                         return v
                 except ValueError:
                     pass
@@ -197,6 +202,12 @@ _GRAD_DISAGREE_MARGIN: Final[int] = 3
 _GRAD_OVERRIDABLE_SOURCES: Final[frozenset[str]] = frozenset(
     {"technical_document", "profile_text"}
 )
+# Gap (in years) between two consecutive diploma years above which the later
+# diploma is treated as CONTINUING education (obtained mid-career, e.g. a CNAM
+# Master 13 years after the engineering degree) rather than part of the initial
+# education block. Standard chains (BAC → prépa → ingénieur/Master) never gap
+# more than ~7 years.
+_CONTINUING_EDUCATION_GAP: Final[int] = 7
 
 
 def _education_years(text: str) -> set[int]:
@@ -220,14 +231,19 @@ def _education_years(text: str) -> set[int]:
 def _estimate_years_from_graduation(
     data: dict[str, object], *, current_year: int | None = None
 ) -> int | None:
-    """Estimate years of experience as ``current_year - latest_graduation_year``.
+    """Estimate years of experience from the end of INITIAL education.
 
-    The graduation year is the most recent end year found in an education
-    context. Two sources, treated differently:
+    Two sources, treated differently:
       - the technical-document ``diplomas``/``training`` fields ARE diplomas, so
         every year in them counts directly (no keyword needed);
       - the CV free text mixes education with job dates, so only years sitting
         next to a diploma keyword are trusted (``_education_years``).
+
+    The career starts at the end of the INITIAL education block, not at the
+    most recent diploma: a continuing-education degree obtained mid-career
+    (e.g. "Master CNAM 2022" thirteen years after a 2009 engineering degree)
+    must not reset the estimate to ~0. Diploma years are walked in order and
+    the block ends at the first gap larger than ``_CONTINUING_EDUCATION_GAP``.
 
     Returns None when no plausible graduation year is found or the resulting
     estimate is out of range.
@@ -253,11 +269,19 @@ def _estimate_years_from_graduation(
         if isinstance(cv_text, str):
             years |= _education_years(cv_text)
 
-    plausible = [y for y in years if y <= year_now]
+    plausible = sorted(y for y in years if y <= year_now)
     if not plausible:
         return None
 
-    estimate = year_now - max(plausible)
+    # End of the initial-education block: walk the years in order and stop at
+    # the first continuing-education gap.
+    graduation = plausible[0]
+    for later in plausible[1:]:
+        if later - graduation > _CONTINUING_EDUCATION_GAP:
+            break
+        graduation = later
+
+    estimate = year_now - graduation
     if 0 <= estimate <= _MAX_PLAUSIBLE_YEARS:
         return estimate
     return None
@@ -278,17 +302,112 @@ _LESS_THAN_YEAR_RE: Final[re.Pattern[str]] = re.compile(
     r"moins\s+d['’]un\s+an|less\s+than\s+a\s+year", re.IGNORECASE
 )
 
+# --- date-range durations ("juillet 2019 - aujourd'hui", "2018 - 2021") ----
 
-def _sum_experience_durations(data: dict[str, object]) -> int | None:
+_MONTH_NAMES: Final[dict[str, int]] = {
+    "janvier": 1, "janv": 1, "jan": 1, "january": 1,
+    "février": 2, "fevrier": 2, "févr": 2, "fevr": 2, "feb": 2, "february": 2,
+    "mars": 3, "mar": 3, "march": 3,
+    "avril": 4, "avr": 4, "apr": 4, "april": 4,
+    "mai": 5, "may": 5,
+    "juin": 6, "jun": 6, "june": 6,
+    "juillet": 7, "juil": 7, "jul": 7, "july": 7,
+    "août": 8, "aout": 8, "aug": 8, "august": 8,
+    "septembre": 9, "sept": 9, "sep": 9, "september": 9,
+    "octobre": 10, "oct": 10, "october": 10,
+    "novembre": 11, "nov": 11, "november": 11,
+    "décembre": 12, "decembre": 12, "déc": 12, "dec": 12, "december": 12,
+}
+# One endpoint of a work-history date range: an optional month (name or "MM/")
+# followed by a plausible year.
+_DATE_POINT: Final[str] = (
+    r"(?:[A-Za-zÀ-ÿ\.]{3,12}\s+|(?:0?[1-9]|1[0-2])\s*/\s*)?(?:19[7-9]\d|20[0-4]\d)\b"
+)
+_PRESENT: Final[str] = (
+    r"(?:pr[ée]sent|present|aujourd['’]?\s?hui|en\s+cours|current|now|"
+    r"actuel(?:lement)?|[àa]\s+ce\s+jour|maintenant)"
+)
+_WORK_RANGE_RE: Final[re.Pattern[str]] = re.compile(
+    rf"(?P<a>{_DATE_POINT})\s*(?:-|–|—|→|à|au|to)\s*(?P<b>{_DATE_POINT}|{_PRESENT})",
+    re.IGNORECASE,
+)
+_PRESENT_RE: Final[re.Pattern[str]] = re.compile(rf"^{_PRESENT}$", re.IGNORECASE)
+_MM_PREFIX_RE: Final[re.Pattern[str]] = re.compile(r"^\s*(0?[1-9]|1[0-2])\s*/")
+_WORD_PREFIX_RE: Final[re.Pattern[str]] = re.compile(r"^\s*([A-Za-zÀ-ÿ]+)")
+
+
+def _point_month_index(token: str, *, default_month: int, today: date) -> int | None:
+    """Absolute month index (year*12 + month-1) of one range endpoint."""
+    if _PRESENT_RE.match(token.strip()):
+        return today.year * 12 + (today.month - 1)
+    year_match = _YEAR_RE.search(token)
+    if not year_match:
+        return None
+    month = default_month
+    mm = _MM_PREFIX_RE.match(token)
+    if mm:
+        month = int(mm.group(1))
+    else:
+        word = _WORD_PREFIX_RE.match(token)
+        if word:
+            month = _MONTH_NAMES.get(word.group(1).lower().rstrip("."), default_month)
+    return int(year_match.group(0)) * 12 + (month - 1)
+
+
+def _sum_date_range_durations(text: str, *, today: date) -> int | None:
+    """Total months from the CV's work-history date ranges, overlap-merged.
+
+    Recognises "juillet 2019 - aujourd'hui", "décembre 2016 - janvier 2019",
+    "07/2019 - 01/2021" and bare "2018 - 2021" (month defaults to January on
+    both ends → plain year difference). Ranges sitting next to a diploma
+    keyword are education, not work, and are skipped. Overlapping ranges are
+    merged before summing so parallel roles are not double-counted.
+    """
+    intervals: list[tuple[int, int]] = []
+    for match in _WORK_RANGE_RE.finditer(text):
+        # Education ranges ("Master ... 2010 à 2013") are not work experience.
+        window = text[max(0, match.start() - 45): match.end() + 45]
+        if _DIPLOMA_KW_RE.search(window):
+            continue
+        start = _point_month_index(match.group("a"), default_month=1, today=today)
+        end = _point_month_index(match.group("b"), default_month=1, today=today)
+        if start is None or end is None:
+            continue
+        if end <= start or (end - start) > _MAX_PLAUSIBLE_YEARS * 12:
+            continue
+        intervals.append((start, end))
+
+    if not intervals:
+        return None
+    # Merge overlaps, then sum the merged lengths.
+    intervals.sort()
+    total = 0
+    cur_start, cur_end = intervals[0]
+    for start, end in intervals[1:]:
+        if start <= cur_end:
+            cur_end = max(cur_end, end)
+        else:
+            total += cur_end - cur_start
+            cur_start, cur_end = start, end
+    total += cur_end - cur_start
+    return total
+
+
+def _sum_experience_durations(
+    data: dict[str, object], *, today: date | None = None
+) -> int | None:
     """Total years of experience summed from per-role durations in the CV.
 
-    Reads the explicit LinkedIn-style durations the CV states in parentheses
-    ("(4 ans 10 mois)", "(2 ans)", "(5 mois)", "moins d'un an") and sums them.
-    Reflects time actually worked (handles gaps) rather than assuming continuous
-    work since graduation. Returns None when no such duration is present.
+    Two layers, most explicit first:
+      1. LinkedIn-style parenthesised durations ("(4 ans 10 mois)", "(2 ans)",
+         "(5 mois)", "moins d'un an") — the CV's own arithmetic, summed as-is.
+      2. Otherwise, the work-history DATE RANGES themselves ("juillet 2019 -
+         aujourd'hui", "2018 - 2021", "07/2019 - 01/2021"), overlap-merged so
+         parallel roles are not double-counted; education ranges are excluded.
 
-    Note: simultaneous roles can be double-counted — this is a comparison
-    signal, not an authoritative figure.
+    Reflects time actually worked (handles gaps) rather than assuming
+    continuous work since graduation. Returns None when neither layer finds
+    anything.
     """
     resume = data.get(_ENRICHMENT_RESUME_KEY)
     if not isinstance(resume, dict):
@@ -296,6 +415,7 @@ def _sum_experience_durations(data: dict[str, object]) -> int | None:
     text = resume.get("extractedText") or resume.get("text") or ""
     if not isinstance(text, str) or not text:
         return None
+    now = today if today is not None else date.today()
 
     total_months = 0
     found = False
@@ -312,7 +432,12 @@ def _sum_experience_durations(data: dict[str, object]) -> int | None:
             found = True
 
     if not found:
-        return None
+        # No explicit durations — derive them from the date ranges instead.
+        range_months = _sum_date_range_durations(text, today=now)
+        if range_months is None:
+            return None
+        total_months = range_months
+
     years = round(total_months / 12)
     if 0 < years <= _MAX_PLAUSIBLE_YEARS:
         return years
@@ -333,18 +458,21 @@ _TECH_DOC_TEXT_FIELDS: Final[tuple[str, ...]] = (
 def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | None]:
     """Return (best_years, source_label) reconciling structured + free-text data.
 
-    Strategy (policy: trust the CV when it *clearly* states experience):
+    Strategy (policy: the CV outranks the structured BoondManager fields):
       1. If the CV explicitly states a years-of-experience figure (a number
          tied to an experience keyword, e.g. "3+ years of hands-on technical
          experience", "16 ans d'expérience"), use it — the candidate's own
          clear statement wins over the structured field, which is often a
          coarse band or stale.
-      2. Else trust BoondManager's structured ``experienceMinYears``.
-      3. Else use the BoondManager experience *level* (``_experienceLabel`` →
+      2. Else sum the CV's per-role durations ("(4 ans 10 mois)"
+         LinkedIn-style): time actually worked, straight from the CV, so it
+         also outranks the structured field and handles career gaps.
+      3. Else trust BoondManager's structured ``experienceMinYears``.
+      4. Else use the BoondManager experience *level* (``_experienceLabel`` →
          years, e.g. "3 ans" → 3): a curated, near-1:1 figure the recruiter set.
          Using it (rather than ignoring it) keeps the card and the ranking score
          on the SAME value.
-      4. Else fall back to experience-qualified figures from the technical
+      5. Else fall back to experience-qualified figures from the technical
          document, then the profile title/snippet.
 
     Free-text mining only counts a number explicitly tied to an experience
@@ -361,17 +489,23 @@ def _normalize_experience(data: dict[str, object]) -> tuple[int | None, str | No
     if cv_years is not None:
         return cv_years, "cv"
 
-    # 2. Structured BoondManager min-years.
+    # 2. CV per-role durations summed — still the CV's own data, so it beats
+    # the structured field. Flagged downstream for LLM cross-checking.
+    duration_years = _sum_experience_durations(data)
+    if duration_years is not None:
+        return duration_years, "cv_durations"
+
+    # 3. Structured BoondManager min-years.
     boond_years = _years_from_boond(data)
     if boond_years is not None:
         return boond_years, "boondmanager"
 
-    # 3. BoondManager experience level (recruiter-set), parsed to a number.
+    # 4. BoondManager experience level (recruiter-set), parsed to a number.
     level_years = _years_from_experience_label(data)
     if level_years is not None:
         return level_years, "experience_level"
 
-    # 4. Technical document, then profile title/snippet.
+    # 5. Technical document, then profile title/snippet.
     techdoc = data.get(_ENRICHMENT_TECH_DOC_KEY)
     if isinstance(techdoc, dict):
         td_text = " ".join(
@@ -819,7 +953,9 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     # Compute the graduation-year estimate up front: it is both a cross-check
     # signal for conflict detection and the value used by the fallback below.
     grad_years = _estimate_years_from_graduation(data)
-    # Sum of the CV's per-role durations — a cross-check only (never the value).
+    # Sum of the CV's per-role durations ("(4 ans 10 mois)" LinkedIn-style) —
+    # cross-check signal here; as a VALUE it is priority 2 inside
+    # ``_normalize_experience`` (right after the CV's explicit statement).
     duration_sum = _sum_experience_durations(data)
 
     conflicts = detect_conflicts(
@@ -830,14 +966,15 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
         duration_sum=duration_sum,
     )
 
-    # Graduation-based estimate. It only REPLACES the value in two cases:
+    # The graduation estimate only REPLACES the value in two cases:
     #   1. no experience figure exists anywhere → graduation fills the gap;
     #   2. the value came from a SHAKY text-mined source (technical document /
     #      profile text) AND the data is conflicting → graduation corrects it.
-    # Curated sources (cv, experienceMinYears, the recruiter-set experience
-    # level) are NEVER auto-overridden — a conflict is only flagged, and the LLM
-    # reconciler (when enabled) decides using the full CV. This keeps the card
-    # and the ranking score on the same value and respects recruiter data.
+    # Curated sources (cv, cv_durations, experienceMinYears, the recruiter-set
+    # experience level) are NEVER auto-overridden — a conflict is only flagged,
+    # and the LLM reconciler (when enabled) decides using the full CV. This
+    # keeps the card and the ranking score on the same value and respects
+    # recruiter data.
     needs_estimate = exp_years is None or (
         bool(conflicts) and exp_source in _GRAD_OVERRIDABLE_SOURCES
     )
@@ -849,9 +986,9 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
 
     # Re-evaluate conflicts on the FINAL experience value so that an age now
     # coexisting with the estimate, or a graduation/duration disagreement, is
-    # flagged. A graduation estimate is itself uncertain, so always flag it —
-    # this routes such candidates to the LLM reconciler (when enabled), which
-    # reads the whole CV and is far more reliable than regex on messy exports.
+    # flagged. An estimate is itself uncertain, so always flag it — this routes
+    # such candidates to the LLM reconciler (when enabled), which reads the
+    # whole CV and is far more reliable than regex on messy exports.
     conflicts = detect_conflicts(
         data,
         exp_years=exp_years,
@@ -861,6 +998,8 @@ def normalize_candidate(result: SearchResult) -> SearchResult:
     )
     if exp_source == "graduation":
         conflicts = [*conflicts, "experience_estimated_from_graduation"]
+    elif exp_source == "cv_durations":
+        conflicts = [*conflicts, "experience_estimated_from_durations"]
     # Deduplicate, preserve order.
     conflicts = list(dict.fromkeys(conflicts))
 

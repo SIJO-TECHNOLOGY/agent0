@@ -1,4 +1,4 @@
-"""Search service: orchestrates the LangGraph workflow and shapes the API response."""
+﻿"""Search service: orchestrates the LangGraph workflow and shapes the API response."""
 
 from __future__ import annotations
 
@@ -12,12 +12,15 @@ from app.mcp.client import McpClient
 from app.models.api import (
     CandidateCard,
     CandidateCardsUI,
+    ClarificationQuestion,
+    ClarificationUI,
     SearchRequest,
     SearchResponse,
 )
 from app.models.graph_state import GraphState
 from app.models.tools import ToolCallStatus
 from app.services.candidate_mapper import candidate_cards_from_results
+from app.session import memory as session_memory
 from app.services.event_emitter import (
     DecisionTraceEmitter,
     EventEmitter,
@@ -47,6 +50,7 @@ class SearchService:
         semantic_scorer: SemanticScorer | None = None,
         semantic_boost_weight: float = 0.15,
         agent1_reconciler: Agent1Reconciler | None = None,
+        allow_clarification: bool = True,
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
@@ -60,6 +64,7 @@ class SearchService:
         self._semantic_scorer = semantic_scorer
         self._semantic_boost_weight = semantic_boost_weight
         self._agent1_reconciler = agent1_reconciler
+        self._allow_clarification = allow_clarification
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -81,6 +86,7 @@ class SearchService:
             semantic_scorer=self._semantic_scorer,
             semantic_boost_weight=self._semantic_boost_weight,
             agent1_reconciler=self._agent1_reconciler,
+            allow_clarification=self._allow_clarification,
         )
 
     async def search(
@@ -105,7 +111,7 @@ class SearchService:
         at the end of a successful run. Failures are raised to the caller
         (the streaming route turns them into ``search_failed`` events).
         """
-        conversation_id = f"conv_{uuid.uuid4().hex}"
+        conversation_id = request.sessionId or request.conversation_id or f"conv_{uuid.uuid4().hex}"
         planner_mode = "llm" if self._llm_planner is not None else "deterministic"
         # Wrap at the outermost point so the readable decision trace also
         # captures the search header and final result, not just node events.
@@ -132,13 +138,29 @@ class SearchService:
         )
 
         ctx = self._build_ctx(emitter, debug_mode=debug_mode)
+        session = session_memory.get_or_create(conversation_id)
         initial_state = GraphState(
             original_query=request.query,
             filters=dict(request.filters),
+            session_id=conversation_id,
+            conversation_history=list(session.messages[-12:]),
+            session_context=session.public_context(),
+            current_search=dict(session.current_search),
+            is_follow_up=bool(session.messages or session.current_search),
+            should_reset_search=False,
+            current_candidates=list(session.current_candidates),
         )
         final_state = await run_workflow(initial_state, ctx)
 
         candidates = candidate_cards_from_results(final_state.results)
+        candidate_dicts = [candidate.model_dump() for candidate in candidates]
+        context = session_memory.save_search_results(
+            conversation_id,
+            query=session.last_user_query or request.query,
+            effective_query=request.query,
+            candidates=candidate_dicts,
+            filters=dict(request.filters),
+        ).public_context()
 
         logger.info(
             "search.complete",
@@ -150,13 +172,72 @@ class SearchService:
             },
         )
 
-        response = SearchResponse(
-            conversation_id=conversation_id,
-            message=_build_message(candidates, final_state, language=ui_language),
-            ui=CandidateCardsUI(candidates=candidates),
-        )
+        # Agent0 may have decided to ask the user to clarify rather than return
+        # (poor) results â€” emit a clarification UI instead of candidate cards.
+        if final_state.clarification_question.strip():
+            response = _clarification_response(
+                conversation_id, final_state, language=ui_language, context=context
+            )
+        else:
+            message = _build_message(candidates, final_state, language=ui_language)
+            response = SearchResponse(
+                conversation_id=conversation_id,
+                message=message,
+                answer=message,
+                sessionId=conversation_id,
+                ui=CandidateCardsUI(candidates=candidates),
+                candidates=candidate_dicts,
+                context=context,
+            )
         await emitter.emit("final_response", response.model_dump())
         return response
+
+
+_CLARIFICATION_FIELD_LABELS_FR: dict[str, str] = {
+    "skill": "CompÃ©tence / technologie",
+    "skills": "CompÃ©tences / technologies",
+    "role": "RÃ´le / poste",
+    "location": "Localisation",
+    "company": "Entreprise",
+    "domain": "Domaine / secteur",
+    "experience": "AnnÃ©es d'expÃ©rience",
+    "seniority": "SÃ©nioritÃ©",
+    "details": "PrÃ©cisions",
+}
+
+
+def _clarification_response(
+    conversation_id: str,
+    final_state: GraphState,
+    *,
+    language: str | None = None,
+    context: dict[str, object] | None = None,
+) -> SearchResponse:
+    """Build a clarification UI response from the reflection's decision."""
+    lang = _normalize_language(language)
+    question = final_state.clarification_question.strip()
+    fields = final_state.clarification_fields or ["details"]
+    questions = [
+        ClarificationQuestion(
+            field=field,
+            label=_CLARIFICATION_FIELD_LABELS_FR.get(field, field.replace("_", " ").capitalize()),
+            required=(index == 0),
+        )
+        for index, field in enumerate(fields)
+    ]
+    title = (
+        "Quelques prÃ©cisions pour affiner la recherche"
+        if lang == "fr"
+        else "A few details to refine the search"
+    )
+    return SearchResponse(
+        conversation_id=conversation_id,
+        message=question,
+        answer=question,
+        sessionId=conversation_id,
+        ui=ClarificationUI(title=title, questions=questions),
+        context=context or {},
+    )
 
 
 # Warning codes that indicate the search ran with reduced criteria
@@ -190,7 +271,7 @@ def _build_message(
     base = _base_message(candidates, final_state, language=lang)
     hint = _limited_search_hint(final_state, language=lang)
     message = f"{base} {hint}" if hint else base
-    # A named-person miss is the most important context — lead with it so the
+    # A named-person miss is the most important context â€” lead with it so the
     # user knows these are fallback results, not the person they asked for.
     name_note = next(
         (
@@ -225,8 +306,8 @@ def _base_message(
     if count == 0:
         if _has_warning(final_state, "clarification_needed"):
             return (
-                "Précise ta recherche avec au moins un mot-clé "
-                "(compétence, technologie, rôle, localisation ou entreprise)."
+                "PrÃ©cise ta recherche avec au moins un mot-clÃ© "
+                "(compÃ©tence, technologie, rÃ´le, localisation ou entreprise)."
                 if lang == "fr"
                 else "Please refine your search with at least one keyword "
                 "(skill, technology, role, location, or company)."
@@ -234,32 +315,32 @@ def _base_message(
         if not final_state.tool_calls:
             return (
                 "Impossible de lancer une recherche candidat pour cette demande : "
-                "aucun outil MCP correspondant n’était disponible."
+                "aucun outil MCP correspondant nâ€™Ã©tait disponible."
                 if lang == "fr"
-                else "We couldn't run a candidate search for that query — no "
+                else "We couldn't run a candidate search for that query â€” no "
                 "matching MCP tool was available."
             )
         if not _ran_candidate_search(final_state):
             return (
-                "La recherche candidat ne s’est pas terminée. Précise ta "
-                "demande puis réessaie."
+                "La recherche candidat ne sâ€™est pas terminÃ©e. PrÃ©cise ta "
+                "demande puis rÃ©essaie."
                 if lang == "fr"
                 else "The candidate search did not complete. Please refine "
                 "your query and try again."
             )
         if _candidate_search_failed(final_state):
             return (
-                "La recherche candidat n’a pas pu aboutir car un outil de "
-                "recherche a échoué. Réessaie ou ajuste ta demande."
+                "La recherche candidat nâ€™a pas pu aboutir car un outil de "
+                "recherche a Ã©chouÃ©. RÃ©essaie ou ajuste ta demande."
                 if lang == "fr"
                 else "The candidate search could not be completed because a "
                 "search tool failed. Please try again or adjust your query."
             )
         if final_state.results:
             return (
-                "Des fiches candidats ont été retournées, mais elles n’ont "
-                "pas pu être normalisées en cartes affichables. Consulte "
-                "l’événement results_normalized du flux pour les raisons de rejet."
+                "Des fiches candidats ont Ã©tÃ© retournÃ©es, mais elles nâ€™ont "
+                "pas pu Ãªtre normalisÃ©es en cartes affichables. Consulte "
+                "lâ€™Ã©vÃ©nement results_normalized du flux pour les raisons de rejet."
                 if lang == "fr"
                 else "Candidate records were returned, but they could not be "
                 "normalized into displayable candidate cards. Check the "
@@ -267,7 +348,7 @@ def _base_message(
             )
         if _has_warning(final_state, "no_results_after_fallback"):
             return (
-                "Aucun candidat ne correspond à ta recherche, même après "
+                "Aucun candidat ne correspond à ta recherche, mÃªme aprÃ¨s "
                 "des recherches élargies. Essaie avec des termes différents ou moins nombreux."
                 if lang == "fr"
                 else "No candidates matched your search, even after broader "
@@ -289,8 +370,8 @@ def _base_message(
         if unverified:
             return (
                 f"J’ai trouvé 1 résultat candidat large ({name}), mais les "
-                "critères stricts n’ont pas pu être entièrement vérifiés. "
-                "J’affiche le profil le plus proche, classé selon les éléments disponibles."
+                "critères stricts nâ€™ont pas pu Ãªtre entièrement vérifiés. "
+                "Jâ€™affiche le profil le plus proche, classé selon les éléments disponibles."
                 if lang == "fr"
                 else f"I found 1 broad candidate result ({name}), but the strict "
                 "criteria could not be fully verified. Showing the closest "
@@ -304,8 +385,8 @@ def _base_message(
     if unverified:
         return (
             f"J’ai trouvé {count} résultats candidats larges, mais les "
-            "critères stricts n’ont pas pu être entièrement vérifiés. "
-            "J’affiche les profils les plus proches, classés selon les éléments disponibles."
+            "critères stricts nâ€™ont pas pu Ãªtre entièrement vérifiés. "
+            "Jâ€™affiche les profils les plus proches, classés selon les éléments disponibles."
             if lang == "fr"
             else f"I found {count} broad candidate results, but the strict "
             "criteria could not be fully verified. Showing the closest "
@@ -328,7 +409,7 @@ def _localize_warning_message(code: str, message: str | None, language: str) -> 
     if language != "fr" or not message:
         return message or ""
     if code == "criteria_unverified" and message.startswith("could not verify: "):
-        return "impossible à vérifier : " + message.split(": ", 1)[1]
+        return "impossible Ã  vÃ©rifier : " + message.split(": ", 1)[1]
     if code == "criteria_visible" and message.startswith(
         "visible on candidate profiles but not confirmed in technical documents: "
     ):
@@ -338,8 +419,8 @@ def _localize_warning_message(code: str, message: str | None, language: str) -> 
         )
     if code == "search_broadened":
         return (
-            "La recherche initiale a été élargie pour trouver des candidats ; "
-            "certains critères peuvent ne pas être strictement appliqués."
+            "La recherche initiale a Ã©tÃ© Ã©largie pour trouver des candidats ; "
+            "certains critères peuvent ne pas Ãªtre strictement appliquÃ©s."
         )
     if code == "name_not_found" and message.startswith("No candidate matching the name '"):
         try:
@@ -348,12 +429,12 @@ def _localize_warning_message(code: str, message: str | None, language: str) -> 
             return message
         if "showing candidates matching the other criteria instead" in message:
             return (
-                f"Aucun candidat correspondant au nom '{name}' n’a été trouvé ; "
-                "j’affiche plutôt les candidats correspondant aux autres critères."
+                f"Aucun candidat correspondant au nom '{name}' nâ€™a Ã©tÃ© trouvÃ© ; "
+                "jâ€™affiche plutÃ´t les candidats correspondant aux autres critères."
             )
         if "no candidates matched the other criteria either" in message:
             return (
-                f"Aucun candidat correspondant au nom '{name}' n’a été trouvé, "
+                f"Aucun candidat correspondant au nom '{name}' nâ€™a Ã©tÃ© trouvÃ©, "
                 "et aucun candidat ne correspond non plus aux autres critères."
             )
     return message
@@ -371,19 +452,19 @@ def _limited_search_hint(
     clauses: list[str] = []
     if any(w.code == "search_broadened" for w in triggered):
         clauses.append(
-            "recherche élargie pour trouver des candidats"
+            "recherche Ã©largie pour trouver des candidats"
             if lang == "fr"
             else "search was broadened to find candidates"
         )
     if any(w.code == "experience_filter_unmapped" for w in triggered):
         clauses.append(
-            "filtre d’expérience non applicable"
+            "filtre dâ€™expÃ©rience non applicable"
             if lang == "fr"
             else "experience filter could not be applied"
         )
     if any(w.code == "filter_unresolved" for w in triggered):
         clauses.append(
-            "certains filtres prévus n’ont pas pu être appliqués"
+            "certains filtres prÃ©vus nâ€™ont pas pu Ãªtre appliquÃ©s"
             if lang == "fr"
             else "some planned filters could not be applied"
         )
@@ -401,7 +482,7 @@ def _limited_search_hint(
         clauses.append(_localize_warning_message(visible.code, visible.message, lang))
     if not clauses:
         clauses.append(
-            "certains filtres n’ont pas pu être appliqués"
+            "certains filtres nâ€™ont pas pu Ãªtre appliquÃ©s"
             if lang == "fr"
             else "some filters could not be applied"
         )
@@ -425,3 +506,5 @@ def _candidate_search_failed(final_state: GraphState) -> bool:
         and call.status is ToolCallStatus.FAILED
         for call in final_state.tool_calls
     )
+
+

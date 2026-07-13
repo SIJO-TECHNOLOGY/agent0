@@ -1,4 +1,4 @@
-"""Tests for POST /api/search/stream Server-Sent Events surface."""
+﻿"""Tests for POST /api/search/stream Server-Sent Events surface."""
 
 from __future__ import annotations
 
@@ -236,7 +236,7 @@ async def unavailable_stream_client() -> AsyncIterator[AsyncClient]:
 
 @pytest_asyncio.fixture()
 async def deterministic_stream_client() -> AsyncIterator[AsyncClient]:
-    # No LLM planner — exercises deterministic graph's emission points.
+    # No LLM planner â€” exercises deterministic graph's emission points.
     app = _make_app(
         planner=None,
         mcp_tools=[],  # default MockMcpClient catalogue overridden to empty
@@ -273,13 +273,74 @@ def _parse_sse(body: str) -> list[dict[str, Any]]:
     return events
 
 
-async def _collect(client: AsyncClient, query: str) -> tuple[str, list[dict]]:
-    response = await client.post(
-        "/api/search/stream",
-        json={"query": query, "filters": {}},
-    )
+async def _collect(
+    client: AsyncClient, query: str, conversation_id: str | None = None
+) -> tuple[str, list[dict]]:
+    payload: dict[str, Any] = {"query": query, "filters": {}}
+    if conversation_id is not None:
+        payload["conversation_id"] = conversation_id
+    response = await client.post("/api/search/stream", json=payload)
     body = response.text
     return body, _parse_sse(body)
+
+
+def test_inject_conversation_context_pins_id_and_shows_all() -> None:
+    from app.api.search_stream import _inject_conversation_context
+    from app.services import conversation_memory as memory
+
+    cid = "conv_inject_test"
+    memory.reset(cid)
+    try:
+        started = _inject_conversation_context(
+            "search_started", {"conversation_id": "other"}, cid
+        )
+        assert started["conversation_id"] == cid
+
+        full = [{"id": f"c{i}"} for i in range(memory.PAGE_SIZE + 5)]
+        final = _inject_conversation_context(
+            "final_response",
+            {"conversation_id": "other", "message": "x",
+             "ui": {"type": "candidate_cards", "candidates": full}},
+            cid,
+        )
+        assert final["conversation_id"] == cid
+        # ALL candidates are displayed at once (no in-chat pagination) and the
+        # engine's own message is preserved.
+        assert len(final["ui"]["candidates"]) == len(full)
+        assert final["message"] == "x"
+        # The pool is stored fully-shown so "d'autres" doesn't re-serve page 1.
+        assert memory.next_page(cid)["candidates"] == []
+    finally:
+        memory.reset(cid)
+
+
+def test_inject_context_more_turn_excludes_seen_and_tracks_page() -> None:
+    from app.api.search_stream import _inject_conversation_context
+    from app.services import conversation_memory as memory
+    from app.session import memory as session_memory
+
+    cid = "conv_more_test"
+    memory.reset(cid)
+    try:
+        # A "more" turn (page 2) whose provider results overlap the first page:
+        # already-seen ids are dropped, only new profiles remain.
+        page2 = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        final = _inject_conversation_context(
+            "final_response",
+            {"conversation_id": "x", "message": "J'ai trouvé 3 candidats",
+             "ui": {"type": "candidate_cards", "candidates": page2}},
+            cid,
+            search_page=2,
+            exclude_ids={"a", "b"},
+        )
+        assert [c["id"] for c in final["ui"]["candidates"]] == ["c"]
+        assert "nouveau" in final["message"].lower()
+        # The session tracks the provider page and every id seen so far.
+        session = session_memory.get_or_create(cid)
+        assert session.current_search["page"] == 2
+        assert set(session.current_search["seenIds"]) == {"a", "b", "c"}
+    finally:
+        memory.reset(cid)
 
 
 # ---------- Tests ----------------------------------------------------------
@@ -336,7 +397,7 @@ async def test_stream_llm_path_emits_full_event_sequence(
     ):
         assert required in types, f"missing {required!r} in {types}"
 
-    # tools_discovered carries just (name, input_schema_keys) — no raw schema.
+    # tools_discovered carries just (name, input_schema_keys) â€” no raw schema.
     tools_event = next(e for e in events if e["type"] == "tools_discovered")
     for tool in tools_event["data"]["tools"]:
         assert set(tool.keys()) == {"name", "input_schema_keys"}
@@ -344,7 +405,10 @@ async def test_stream_llm_path_emits_full_event_sequence(
 
     # final_response mirrors the non-streaming SearchResponse contract.
     final = next(e for e in events if e["type"] == "final_response")["data"]
-    assert set(final.keys()) == {"conversation_id", "message", "ui"}
+    assert {"conversation_id", "message", "ui"}.issubset(final.keys())
+    assert final["answer"] == final["message"]
+    assert final["sessionId"] == final["conversation_id"]
+    assert "context" in final
     assert final["ui"]["type"] == "candidate_cards"
 
 
@@ -426,7 +490,10 @@ async def test_non_streaming_search_endpoint_still_works(
     )
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"conversation_id", "message", "ui"}
+    assert {"conversation_id", "message", "ui"}.issubset(body.keys())
+    assert body["answer"] == body["message"]
+    assert body["sessionId"] == body["conversation_id"]
+    assert "context" in body
     assert body["ui"]["type"] == "candidate_cards"
 
 
@@ -719,7 +786,7 @@ async def test_message_says_no_candidates_only_when_search_actually_ran(
 
 
 _UNMAPPABLE_SEARCH_RECORDS = [
-    # Record has no `id`, no `attributes.id`, no candidateId — exactly
+    # Record has no `id`, no `attributes.id`, no candidateId â€” exactly
     # the failure mode the production bug exhibited.
     {
         "type": "candidate",
@@ -820,8 +887,8 @@ async def test_normal_stream_does_not_include_result_preview(
         )
     # Defence in depth: raw MCP record VALUES must not appear in the
     # observability events. The final_response event legitimately
-    # contains candidate values (full_name, location, etc.) — those are
-    # the public contract — so we scope this check to the observability
+    # contains candidate values (full_name, location, etc.) â€” those are
+    # the public contract â€” so we scope this check to the observability
     # surface only.
     observability_text = repr(
         [
@@ -832,7 +899,7 @@ async def test_normal_stream_does_not_include_result_preview(
         ]
     )
     # Key names like "firstName" appear inside result_shape.nested_keys
-    # by design — they are schema-level structural metadata, not values.
+    # by design â€” they are schema-level structural metadata, not values.
     for value in ("Sarah", "Martin", "Paris", "France"):
         assert value not in observability_text, (
             f"raw MCP value {value!r} must not surface in observability events"
@@ -893,7 +960,7 @@ _wrapper_calls: list[tuple[str, dict]] = []
 async def _real_shape_search_handler(
     inputs: dict[str, object],
 ) -> dict[str, object]:
-    """Returns the production envelope: NOT a list — a wrapper dict."""
+    """Returns the production envelope: NOT a list â€” a wrapper dict."""
     _wrapper_calls.append(("searchCandidates", dict(inputs)))
     return _REAL_SHAPE_SEARCH_PAYLOAD
 
@@ -1030,3 +1097,27 @@ async def test_debug_stream_includes_sanitized_result_preview(
     assert preview, "expected a sanitized preview in debug mode"
     # Preview must be capped to a small number of records.
     assert len(preview) <= 2
+
+
+@pytest.mark.asyncio
+async def test_more_request_in_same_conversation_paginates(
+    llm_stream_client: AsyncClient,
+) -> None:
+    # First search establishes a conversation + result pool.
+    _, first = await _collect(llm_stream_client, QUERY)
+    final = next(e for e in first if e["type"] == "final_response")["data"]
+    conv_id = final["conversation_id"]
+    assert final["ui"]["type"] == "candidate_cards"
+
+    # "d'autres" in the SAME conversation re-runs the SAME search on the
+    # provider's next page and drops already-seen ids — candidate cards, never
+    # a clarification. (The mock returns the same record on page 2, so it is
+    # excluded and zero NEW candidates remain.)
+    _, second = await _collect(llm_stream_client, "d'autres", conversation_id=conv_id)
+    final2 = next(e for e in second if e["type"] == "final_response")["data"]
+    assert final2["conversation_id"] == conv_id
+    assert final2["ui"]["type"] == "candidate_cards"
+    assert "candidat" in final2["message"].lower()
+    seen_first = {c["id"] for c in final["ui"]["candidates"]}
+    assert all(c["id"] not in seen_first for c in final2["ui"]["candidates"])
+

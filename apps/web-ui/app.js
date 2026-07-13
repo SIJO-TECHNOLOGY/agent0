@@ -1,9 +1,10 @@
-import {
+﻿import {
   ApiError,
   createConversation,
   deleteConversation,
   getConversation,
   getConversations,
+  resetChatSession,
   sendClarification,
   streamSearch,
 } from "./api.js";
@@ -41,6 +42,18 @@ const state = {
   drawerTrigger: null,
   conversationQuery: "",
 };
+
+function generateSessionId() {
+  if (window.crypto?.randomUUID) return `session_${window.crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  return `session_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function ensureSessionId() {
+  if (!state.currentConversationId) {
+    state.currentConversationId = generateSessionId();
+  }
+  return state.currentConversationId;
+}
 
 const elements = {
   loginScreen: document.getElementById("loginScreen"),
@@ -395,7 +408,7 @@ function renderConversationList() {
     remove.type = "button";
     remove.className = "delete-conversation";
     remove.setAttribute("aria-label", t("conversations.delete_aria", { title: title.textContent }));
-    remove.textContent = "×";
+    remove.textContent = "Ã—";
     remove.addEventListener("click", (event) => {
       event.stopPropagation();
       removeConversation(conversation.id);
@@ -529,6 +542,10 @@ async function newChat() {
   showInputError("");
 
   try {
+    const previousSessionId = state.currentConversationId;
+    if (previousSessionId) {
+      await resetChatSession(previousSessionId).catch(console.warn);
+    }
     const conversation = await createConversation(t("conversations.default_title"));
     state.currentConversationId = conversation.id;
     state.conversations = [conversation, ...state.conversations];
@@ -1145,7 +1162,7 @@ function renderThinking() {
     if (!step) return;
     step.li.classList.remove("active");
     step.li.classList.add("done");
-    step.icon.textContent = "✓";
+    step.icon.textContent = "âœ“";
   }
 
   return {
@@ -1167,7 +1184,7 @@ function renderThinking() {
 
       li.append(icon, stepText);
       // Optional dynamic detail (the agent's actual reasoning) under the
-      // localized step label — secondary, muted.
+      // localized step label â€” secondary, muted.
       if (detail) {
         const stepDetail = document.createElement("span");
         stepDetail.className = "step-detail";
@@ -1190,7 +1207,7 @@ function renderThinking() {
 function clip(text, max = 160) {
   if (!text) return "";
   const flat = String(text).replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  return flat.length > max ? `${flat.slice(0, max - 1)}â€¦` : flat;
 }
 
 function planSearchReason(data) {
@@ -1285,7 +1302,10 @@ async function runSearchStream(text, thinking) {
         thinking.addStep(step.label, step.detail);
       }
     },
-    { signal: state.abortController.signal },
+    {
+      signal: state.abortController.signal,
+      conversationId: ensureSessionId(),
+    },
   );
 
   return { finalResponse, failure };
@@ -1302,6 +1322,7 @@ async function send() {
   }
 
   showInputError("");
+  ensureSessionId();
   renderMessage("user", text);
   updateTitleFromMessage(text);
   resetInput();
@@ -1563,7 +1584,7 @@ function renderExperiences(experiences, limit = 3) {
     const item = document.createElement("li");
 
     const main = document.createElement("strong");
-    main.textContent = [experience.title, experience.company].filter(Boolean).join(" · ") || t("candidate.sections.experience_item_fallback");
+    main.textContent = [experience.title, experience.company].filter(Boolean).join(" Â· ") || t("candidate.sections.experience_item_fallback");
     item.appendChild(main);
 
     if (experience.period) {
@@ -1698,8 +1719,8 @@ function createSkillElements(skills, highlights = []) {
 function isAvailableSoon(candidate) {
   const availability = String(candidate.availability || "").toLowerCase();
   if (!availability) return false;
-  if (availability.includes("préavis") || availability.includes("preavis")) return false;
-  return availability.includes("disponible") || availability.includes("immédiat") || availability.includes("immediat");
+  if (availability.includes("prÃ©avis") || availability.includes("preavis")) return false;
+  return availability.includes("disponible") || availability.includes("immÃ©diat") || availability.includes("immediat");
 }
 
 function emptyFragment() {
@@ -1716,7 +1737,7 @@ function formatExperience(years) {
 }
 
 // Experience display value: prefer the numeric years, otherwise fall back to
-// the BoondManager experience-level band label (e.g. "10 à 15 ans"), which is
+// the BoondManager experience-level band label (e.g. "10 Ã  15 ans"), which is
 // often the only experience signal a profile carries.
 function experienceDisplay(candidate) {
   const years = candidate.experience_years;
@@ -1775,3 +1796,4 @@ function getConversationLoadError(error) {
 
   return t("errors.conversations_load");
 }
+

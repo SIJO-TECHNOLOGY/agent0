@@ -233,6 +233,23 @@ class TestGraduationEstimate:
         }
         assert _estimate_years_from_graduation(data, current_year=2026) == 18
 
+    def test_continuing_education_diploma_does_not_reset_career_start(self):
+        # The Raja case: BAC 2003, engineering degree 2009, then a CNAM Master
+        # in 2022 obtained mid-career (formation continue). The career starts
+        # at the end of the INITIAL education block (2009 — the 2003→2009 gap
+        # is a normal BAC→ingénieur chain), NOT at the 2022 degree, which
+        # would absurdly yield 4 years for a ~17-year profile.
+        data = {
+            "_enrichment_technical_document": {
+                "diplomas": [
+                    "2022 - Master 2 finance de marché - CNAM",
+                    "2009 - Diplôme national d'ingénieur informatique - INSAT",
+                    "2003 - BAC Math - Lycée Pilote Ariana",
+                ],
+            }
+        }
+        assert _estimate_years_from_graduation(data, current_year=2026) == 17
+
     def test_cv_freetext_ignores_job_years_near_no_diploma_kw(self):
         # A job start year not next to a diploma keyword must not be taken; only
         # the diploma date is used.
@@ -358,9 +375,57 @@ class TestGraduationEstimate:
         data = {"_enrichment_resume": {"hasContent": True, "extractedText": "no durations"}}
         assert _sum_experience_durations(data) is None
 
-    def test_duration_sum_flags_conflict_with_resolved_experience(self):
-        # Structured says 20 years, but the CV durations sum to ~3 → conflict
-        # flagged (comparison only; the displayed value is not forced here).
+    def test_sum_durations_from_date_ranges(self):
+        # No parenthesised durations — the work-history date ranges themselves
+        # are summed: juil 2019→(mai 2026) = 82 mois + déc 2016→janv 2019 = 25
+        # mois → 107 mois → 9 ans.
+        cv = (
+            "EXPERIENCES\n"
+            "Dev senior chez Acme juillet 2019 - aujourd'hui\n"
+            "Consultant chez Beta décembre 2016 - janvier 2019\n"
+        )
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 9
+
+    def test_sum_durations_bare_year_ranges(self):
+        # "2018 - 2021" without months → plain year difference (3 ans).
+        cv = "Développeur JAVA 2018 - 2021 chez Amundi\n"
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 3
+
+    def test_sum_durations_merges_overlapping_ranges(self):
+        # Parallel roles must not double-count: 2015-2020 and 2018-2021 merge
+        # into 2015-2021 → 6 ans (not 9).
+        cv = (
+            "Lead dev 2015 - 2020 chez Acme\n"
+            "Freelance 2018 - 2021 pour Beta\n"
+        )
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 6
+
+    def test_sum_durations_ignores_education_ranges(self):
+        # A date range next to a diploma keyword is education, not work.
+        cv = "FORMATION\nMaster informatique 2010 à 2013 - Université de Lyon\n"
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) is None
+
+    def test_parenthesised_durations_win_over_date_ranges(self):
+        # When the CV states its own arithmetic, trust it — don't also add the
+        # date ranges (that would double-count the same roles).
+        cv = "Dev juillet 2019 - aujourd'hui (2 ans 1 mois, temps partiel)\n"
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 2
+
+    def test_numeric_month_ranges(self):
+        # "07/2019 - 01/2021" → 18 mois → 2 ans (arrondi).
+        cv = "Ingénieur d'études 07/2019 - 01/2021 chez Gamma\n"
+        data = {"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        assert _sum_experience_durations(data, today=date(2026, 5, 1)) == 2
+
+    def test_duration_sum_overrides_structured_and_flags_disagreement(self):
+        # Structured says 20 years but the CV durations sum to ~3 → the CV
+        # (2nd priority, right after an explicit statement) wins, and the
+        # disagreement with the structured field is flagged for LLM review.
         result = _result(
             data={
                 "experienceMinYears": 20,
@@ -371,7 +436,50 @@ class TestGraduationEstimate:
             }
         )
         out = normalize_candidate(result)
-        assert "experience_vs_duration_disagreement" in out.data[NORM_CONFLICTS]
+        assert out.data[NORM_EXPERIENCE_YEARS] == 3
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv_durations"
+        assert "experience_vs_structured_disagreement" in out.data[NORM_CONFLICTS]
+        assert "experience_estimated_from_durations" in out.data[NORM_CONFLICTS]
+
+    def test_duration_sum_fills_gap_when_no_other_source(self):
+        # No explicit statement, no structured years, no label, no diploma —
+        # the CV's per-role durations are the only signal and must fill the
+        # card instead of "not specified". Flagged for LLM review.
+        cv = (
+            "Dev senior juillet 2019 - Present (4 ans 10 mois)\n"
+            "Consultant décembre 2016 - janvier 2019 (2 ans 2 mois)\n"
+        )
+        result = _result(
+            data={"_enrichment_resume": {"hasContent": True, "extractedText": cv}}
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 7
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv_durations"
+        assert "experience_estimated_from_durations" in out.data[NORM_CONFLICTS]
+
+    def test_duration_sum_preferred_over_graduation_estimate(self):
+        # Both estimates available → durations (time actually worked) win over
+        # the graduation year (which assumes continuous work).
+        cv = "Dev 2021 - Present (3 ans)\n"
+        result = _result(
+            data={
+                "_enrichment_resume": {"hasContent": True, "extractedText": cv},
+                "_enrichment_technical_document": {
+                    "diplomas": ["Master informatique 2010"],
+                },
+            }
+        )
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 3
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "cv_durations"
+
+    def test_zero_years_is_a_genuine_value(self):
+        # "Pas d'expérience" resolves to experienceMinYears=0 on the MCP side;
+        # it must surface as 0, not as "not specified".
+        result = _result(data={"experienceMinYears": 0})
+        out = normalize_candidate(result)
+        assert out.data[NORM_EXPERIENCE_YEARS] == 0
+        assert out.data[NORM_EXPERIENCE_SOURCE] == "boondmanager"
 
     def test_graduation_agreement_keeps_structured(self):
         # When the graduation estimate agrees with the structured value (within

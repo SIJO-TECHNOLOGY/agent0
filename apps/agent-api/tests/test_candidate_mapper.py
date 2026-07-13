@@ -123,6 +123,31 @@ def test_experience_years_not_filled_from_boond_level_id() -> None:
     assert card.experience_years is None
 
 
+def test_experience_years_falls_back_to_mcp_resolved_min_years() -> None:
+    # `experienceMinYears` is the MCP server's resolution of the BoondManager
+    # experience level into years — it must fill the card when Agent1
+    # normalisation produced nothing (e.g. enrichment failed), so a candidate
+    # whose experience IS set in BoondManager never shows "Non renseigné".
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"experienceMinYears": 5, "_normalized_experience_years": None},
+        )
+    )
+    assert card.experience_years == 5.0
+
+
+def test_experience_years_prefers_agent1_normalized_over_min_years() -> None:
+    # Agent1's reconciled value (CV-first policy) wins over the raw level years.
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"experienceMinYears": 3, "_normalized_experience_years": 8},
+        )
+    )
+    assert card.experience_years == 8.0
+
+
 def test_skills_extracted_from_tools_proficiency_list() -> None:
     # Technical-document `tools` is a list of {tool, level} dicts.
     card = candidate_card_from_result(

@@ -40,6 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -48,6 +49,9 @@ class BoondManagerCandidateServiceTest {
 
     @Mock
     private BoondManagerClient client;
+
+    @Mock
+    private ExperienceDictionaryResolver experienceResolver;
 
     @Test
     void givenDictionaryEndpoint_whenGetDictionary_thenMapsEnvelopeToMcpResponse() {
@@ -81,6 +85,26 @@ class BoondManagerCandidateServiceTest {
                     assertThat(ex.path()).isEqualTo("/application/dictionary");
                     assertThat(ex.getCause()).isSameAs(backend);
                 });
+    }
+
+    @Test
+    void givenResolvedExperience_whenSearchCandidates_thenSummaryCarriesExperienceYears() {
+        // The experience LEVEL id must be resolved into years on every summary,
+        // so downstream consumers never depend on a separate dictionary call.
+        BoondManagerCandidateService svc = service();
+        when(client.get(eq("/candidates"), any(Consumer.class), any(ParameterizedTypeReference.class)))
+                .thenReturn(searchEnvelope());
+        when(experienceResolver.resolve(3))
+                .thenReturn(new ResolvedExperience(3, false, true, "3 ans"));
+
+        CandidateSearchResponseDto response = svc.searchCandidates(TestFixtures.searchRequest());
+
+        var summary = response.candidates().getFirst();
+        assertThat(summary.experience()).isEqualTo(3);
+        assertThat(summary.experienceMinYears()).isEqualTo(3);
+        assertThat(summary.experienceSpecified()).isTrue();
+        assertThat(summary.experienceOpenEnded()).isFalse();
+        assertThat(summary.experienceLabelRaw()).isEqualTo("3 ans");
     }
 
     @Test
@@ -260,7 +284,11 @@ class BoondManagerCandidateServiceTest {
     }
 
     private BoondManagerCandidateService service() {
-        return new BoondManagerCandidateService(client);
+        // Default: experience unresolved, as when the dictionary is unavailable.
+        // Individual tests re-stub resolve() to exercise the resolved path.
+        lenient().when(experienceResolver.resolve(any()))
+                .thenReturn(ResolvedExperience.UNSPECIFIED);
+        return new BoondManagerCandidateService(client, experienceResolver);
     }
 
     private BoondDictionaryEnvelope dictionaryEnvelope() {
