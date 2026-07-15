@@ -18,6 +18,7 @@ criterion into one call and never emit boolean keyword syntax.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Final
 
@@ -428,6 +429,80 @@ _WEIGHTS = EvidenceWeights()
 # query). Strong but non-zero so the profile stays visible, just ranked low.
 _OVER_CAP_PENALTY: Final[float] = 0.4
 
+# Multiplier applied when the requested role and the candidate's job title
+# resolve to disjoint role families (e.g. a "Business Analyst" title on a
+# "développeur" query). Same visible-but-demoted philosophy as the over-cap
+# penalty: the profile stays in the list, it just cannot top real matches.
+_ROLE_CONFLICT_PENALTY: Final[float] = 0.4
+
+# Credit earned when the requested role is evidenced only in the candidate's
+# body text (CV/tech-doc), not in a job-title surface — mirrors the 0.5
+# partial credit used when seniority is inferred from the title.
+_ROLE_BODY_CREDIT: Final[float] = 0.5
+
+# Canonical role families used by the role dimension. Keywords are matched
+# token-wise (never substrings, so "devops" can't read as "dev") against an
+# accent-folded job-title surface. Deliberately limited to clearly
+# distinguishable métiers: generic titles (consultant, ingénieur, architecte)
+# map to NO family, so an unknown or ambiguous title can never trigger the
+# conflict penalty.
+_ROLE_FAMILY_KEYWORDS: Final[dict[str, tuple[str, ...]]] = {
+    "developer": (
+        "developpeur",
+        "developer",
+        "programmeur",
+        "programmer",
+        "fullstack",
+        "full stack",
+        "frontend",
+        "front end",
+        "backend",
+        "back end",
+        "software engineer",
+        "ingenieur logiciel",
+        "ingenieur etudes",
+        "ingenieur developpement",
+    ),
+    "analyst": ("analyste", "analyst", "amoa", "moa"),
+    "manager": (
+        "chef de projet",
+        "project manager",
+        "product owner",
+        "product manager",
+        "scrum master",
+        "directeur de projet",
+        "manager",
+    ),
+    "tester": ("testeur", "tester", "qa", "quality assurance", "recetteur"),
+    "designer": ("designer", "graphiste", "ux", "ui"),
+    "devops": ("devops", "sre", "site reliability"),
+}
+
+
+def _fold(text: str) -> str:
+    """Lowercase + strip accents so 'Développeur' matches 'developpeur'."""
+    normalized = unicodedata.normalize("NFKD", text.lower())
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def role_families(text: str) -> frozenset[str]:
+    """Canonical role families evidenced in a job-title-like text.
+
+    Multi-word keywords require every token present (word-order tolerant).
+    Titles outside the vocabulary map to no family, so only an explicit,
+    recognised métier can ever conflict with the requested role.
+    """
+    tokens = {tok for tok in _TOKEN_SPLIT_RE.split(_fold(text)) if tok}
+    if not tokens:
+        return frozenset()
+    found: set[str] = set()
+    for family, keywords in _ROLE_FAMILY_KEYWORDS.items():
+        for keyword in keywords:
+            if all(tok in tokens for tok in keyword.split()):
+                found.add(family)
+                break
+    return frozenset(found)
+
 # Closed vocabulary of criterion keys the LLM may order in `ranking_priority`.
 RANKING_CRITERIA: Final[frozenset[str]] = frozenset(
     {"skill", "domain", "role", "seniority", "name"}
@@ -513,6 +588,7 @@ def evidence_score(
     required_min_years: int | None,
     required_max_years: int | None = None,
     domain_haystack: str | None = None,
+    role_haystack: str | None = None,
     requested_name: str | None = None,
     candidate_name: str | None = None,
     priority: tuple[str, ...] | None = None,
@@ -531,6 +607,15 @@ def evidence_score(
     ``domain_haystack`` (when given) restricts the domain dimension to a
     high-signal surface (title + technical-document summary) so an incidental
     business word buried in a noisy skills blob does not earn domain credit.
+
+    ``role_haystack`` (when given) does the same for the role dimension using
+    the candidate's job-title surface: a title match (verbatim or via role
+    families, so "Développeur Java" satisfies "fullstack developer") earns
+    full credit; a role mentioned only in the body text earns partial credit
+    (a BA whose CV merely *mentions* developers is not a developer); and a
+    title resolving to a DIFFERENT role family than the requested one incurs
+    the ``_ROLE_CONFLICT_PENALTY`` on the final score. With ``role_haystack``
+    ``None`` the role dimension keeps its historical whole-haystack behaviour.
 
     ``requested_name``/``candidate_name`` add a ``name`` dimension (token recall
     of the requested person's name against the candidate's), present only when a
@@ -566,12 +651,40 @@ def evidence_score(
             hits.add("domain")
         dims.append(("domain", weights.domain, 1.0 if domain_found else 0.0))
 
+    role_conflict = False
     if role and role.strip():
-        low = role.lower()
-        role_found = low in hay or all(tok in hay for tok in low.split())
-        if role_found:
+        folded_role = _fold(role)
+        folded_hay = _fold(haystack)
+        body_found = folded_role in folded_hay or all(
+            tok in folded_hay for tok in folded_role.split()
+        )
+        if role_haystack is not None:
+            role_hay = _fold(role_haystack)
+            requested_families = role_families(role)
+            title_families = role_families(role_haystack)
+            title_found = (
+                folded_role in role_hay
+                or all(tok in role_hay for tok in folded_role.split())
+                or bool(requested_families & title_families)
+            )
+            # Conflict = both sides resolve to a known family and share none
+            # (intersection would have set title_found). An unrecognised
+            # title or an unrecognised requested role never conflicts.
+            role_conflict = (
+                not title_found
+                and bool(requested_families)
+                and bool(title_families)
+            )
+            fraction = (
+                1.0
+                if title_found
+                else (_ROLE_BODY_CREDIT if body_found else 0.0)
+            )
+        else:
+            fraction = 1.0 if body_found else 0.0
+        if fraction > 0.0:
             hits.add("role")
-        dims.append(("role", weights.role, 1.0 if role_found else 0.0))
+        dims.append(("role", weights.role, fraction))
 
     over_cap = False
     if required_min_years is not None or required_max_years is not None:
@@ -637,4 +750,9 @@ def evidence_score(
     # cannot top the ranking, while staying visible rather than excluded.
     if over_cap:
         score *= _OVER_CAP_PENALTY
+    # A candidate whose job title names a DIFFERENT métier than the requested
+    # role (e.g. "Business Analyst" on a "développeur" query) is likewise
+    # demoted, not excluded.
+    if role_conflict:
+        score *= _ROLE_CONFLICT_PENALTY
     return score, hits

@@ -2043,6 +2043,46 @@ def _domain_haystack(result: SearchResult) -> str:
     return f"{summary} {techdoc}".strip()
 
 
+# Job-title-like fields only — narrower than the domain surface (no
+# summary/description prose), because the ROLE dimension must reflect what the
+# candidate IS, not what their profile talks about.
+_ROLE_TITLE_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "jobTitle",
+    "headline",
+    "position",
+    "function",
+)
+
+
+def _role_haystack(result: SearchResult) -> str:
+    """Job-title surface for the role dimension of ``evidence_score``.
+
+    Collects the result title, Agent1's normalised title, title-like record
+    fields, and the technical-document title. May legitimately be empty (or
+    contain a person's name via the ``result.title`` fallback) — the scorer
+    then falls back to partial body-text credit and never applies the
+    role-conflict penalty on an unrecognised title.
+    """
+    parts: list[str] = []
+    if result.title:
+        parts.append(result.title)
+    norm_title = result.data.get(NORM_TITLE)
+    if isinstance(norm_title, str) and norm_title:
+        parts.append(norm_title)
+    flat = _flatten_for_domain(result.data)
+    for field in _ROLE_TITLE_FIELDS:
+        value = flat.get(field)
+        if isinstance(value, str):
+            parts.append(value)
+    techdoc = result.data.get(ENRICHMENT_TECH_DOC_KEY)
+    if isinstance(techdoc, dict):
+        td_title = techdoc.get("title")
+        if isinstance(td_title, str):
+            parts.append(td_title)
+    return " ".join(parts).lower()
+
+
 def _criteria_status(
     results: list[SearchResult],
     *,
@@ -2243,6 +2283,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             required_min_years=required_years,
             required_max_years=required_max_years,
             domain_haystack=_domain_haystack(result),
+            role_haystack=_role_haystack(result),
             requested_name=requested_name or None,
             candidate_name=candidate_full_name(result) if requested_name else None,
             priority=priority,
@@ -2892,6 +2933,7 @@ def _prerank_search_results(
             required_min_years=required_years,
             required_max_years=required_max_years,
             domain_haystack=_domain_haystack(result),
+            role_haystack=_role_haystack(result),
             requested_name=requested_name or None,
             candidate_name=candidate_full_name(result) if requested_name else None,
             priority=priority,
