@@ -846,8 +846,35 @@ def test_unrecognised_title_is_never_penalised() -> None:
         role_haystack="",
     )
     assert "role" not in hits
-    # skill 0.4 evidenced, role 0.2 not: 0.4 / 0.6 — no conflict multiplier.
-    assert score == pytest.approx(0.4 / 0.6)
+    # skill 0.4 evidenced, role 0.3 not: 0.4 / 0.7 — no conflict multiplier.
+    assert score == pytest.approx(0.4 / 0.7)
+
+
+def test_role_weight_matches_domain_weight() -> None:
+    # An explicitly requested métier is as structuring as a stated business
+    # context: missing the role must cost exactly as much as missing the
+    # domain, all else equal.
+    missing_role, _ = evidence_score(
+        "java sgcib",
+        skills=("java",),
+        domains=("cib",),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        domain_haystack="java sgcib",
+        role_haystack="",
+    )
+    missing_domain, _ = evidence_score(
+        "java développeur",
+        skills=("java",),
+        domains=("cib",),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        domain_haystack="java développeur",
+        role_haystack="développeur",
+    )
+    assert missing_role == pytest.approx(missing_domain)
 
 
 def test_role_without_role_haystack_keeps_historical_behaviour() -> None:

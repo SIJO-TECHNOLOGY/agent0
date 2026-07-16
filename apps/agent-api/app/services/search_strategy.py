@@ -413,12 +413,18 @@ def infer_years_from_title(title_haystack: str) -> int | None:
 
 @dataclass(frozen=True)
 class EvidenceWeights:
-    """Relative importance of each criterion dimension."""
+    """Relative importance of each criterion dimension.
+
+    The role dimension only exists when the query explicitly requested a
+    role, so it carries the same weight as the domain — a stated métier is
+    as structuring as a stated business context (missing it must cost more
+    than a mere modifier).
+    """
 
     skill: float = 0.4
     domain: float = 0.3
     seniority: float = 0.3
-    role: float = 0.2
+    role: float = 0.3
     name: float = 0.4
 
 

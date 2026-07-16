@@ -23,6 +23,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import date
 from typing import Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -265,6 +266,7 @@ def build_planner_prompt(
     constraints: PlannerConstraints,
     role: str = "",
     feedback: str = "",
+    current_date: date | None = None,
 ) -> tuple[str, str]:
     """Build the (system_prompt, user_prompt) pair sent to the LLM.
 
@@ -277,6 +279,11 @@ def build_planner_prompt(
     decided the first results were inadequate). When set, it is added to the
     user prompt so this re-plan changes its approach. With ``feedback=""`` the
     user prompt is identical to a first-pass prompt.
+
+    ``current_date`` (defaults to today) is stated in the user prompt so the
+    LLM can convert date-anchored criteria — e.g. a graduation window
+    ('diplômé entre 2010 et 2020') — into experience-year bounds; injectable
+    for deterministic tests.
     """
     persona = f"{role.strip()}\n\n" if role and role.strip() else ""
     system = (
@@ -329,7 +336,14 @@ def build_planner_prompt(
         "both bounds. For a CAP ('junior', 'moins de 3 ans', 'up to 2 years') "
         "set `max_experience_years` (junior ⇒ 2; do not also set a min). For a "
         "FLOOR ('senior', '5+ years', 'au moins 5 ans') set "
-        "`min_experience_years` (senior ⇒ 5). Keep the user's original acronym/term "
+        "`min_experience_years` (senior ⇒ 5). If the user anchors seniority to "
+        "a GRADUATION/degree period ('diplômé entre 2010 et 2020', 'graduated "
+        "in 2015'), convert it to experience bounds using the current date "
+        "given in the user message: min_experience_years = current_year − "
+        "LATEST graduation year, max_experience_years = current_year − "
+        "EARLIEST graduation year (a single graduation year sets both bounds "
+        "from that year). Never put graduation years in `entities` or "
+        "`keywords`. Keep the user's original acronym/term "
         "verbatim in `domain`. These drive Agent-API-side recall, filter "
         "resolution, and honest scoring/messaging; do not omit a criterion "
         "you understood. IMPORTANT: always normalise skill/technology names "
@@ -390,7 +404,9 @@ def build_planner_prompt(
             "keywords, `ranking_priority`, or broaden/drop a constraint):\n"
             f"{feedback.strip()}\n\n"
         )
+    today = current_date if current_date is not None else date.today()
     user = (
+        f"Current date: {today.isoformat()}\n"
         f"User query: {query!r}\n"
         f"User filters (raw): {json.dumps(filters, default=str)}\n"
         f"Execution constraints: {json.dumps(constraints.as_dict())}\n\n"

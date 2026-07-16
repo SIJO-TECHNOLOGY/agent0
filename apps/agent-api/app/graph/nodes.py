@@ -2250,9 +2250,12 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         return state
 
     # Collect semantic boosts asynchronously upfront when scorer is available.
+    # The role is part of the query terms so a profile whose text reads like
+    # the requested métier (e.g. "software engineer" for "développeur") gets
+    # semantic credit — not just skill/domain paraphrases.
     semantic_boosts: dict[str, float] = {}
-    if ctx.semantic_scorer is not None and (skills or domains):
-        query_terms = list(skills) + list(domains)
+    if ctx.semantic_scorer is not None and (skills or domains or role):
+        query_terms = list(skills) + list(domains) + ([role] if role else [])
         for result in state.results:
             if not result.source_tool.startswith("search"):
                 continue

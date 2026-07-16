@@ -83,6 +83,35 @@ def test_prompt_includes_query_tools_and_constraints() -> None:
     assert '"max_enrichments": 3' in user
 
 
+def test_prompt_teaches_graduation_window_conversion_and_states_date() -> None:
+    import datetime
+
+    system, user = build_planner_prompt(
+        query="développeur diplômé entre 2010 et 2020",
+        filters={},
+        tools=[_search_candidates_tool()],
+        constraints=PlannerConstraints(),
+        current_date=datetime.date(2026, 7, 16),
+    )
+    # The rules must teach the graduation-window → experience-bounds
+    # conversion (min from the LATEST year, max from the EARLIEST)...
+    assert "GRADUATION" in system
+    assert "LATEST graduation year" in system
+    assert "EARLIEST graduation year" in system
+    # ...and forbid leaking raw graduation years into recall inputs.
+    assert "Never put graduation years" in system
+    # The user prompt states the current date so the arithmetic is possible.
+    assert "Current date: 2026-07-16" in user
+    # Default (no injected date) still emits a Current date line.
+    _sys2, user2 = build_planner_prompt(
+        query="q",
+        filters={},
+        tools=[_search_candidates_tool()],
+        constraints=PlannerConstraints(),
+    )
+    assert "Current date: " in user2
+
+
 def test_planner_role_setting_default_and_env_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
