@@ -2316,18 +2316,21 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         if role_exclusive and role_conflict:
             excluded_conflicts += 1
             continue
+        # Boost eligibility: a role-conflicting profile, or one evidencing
+        # NONE of the requested technologies, earns no boosts — semantic
+        # similarity (e.g. .NET reading as "close to java") must not refund
+        # what the penalties removed.
+        boostable = not role_conflict and "skills_missing" not in hits
         # Semantic similarity boost â€” additive, capped at 1.0. Applied before
         # the enrichment tie-break so the semantic signal is part of the base
-        # score rather than a separate post-processing step. A role-conflicting
-        # profile earns NO boosts: similarity to the skill/domain vocabulary
-        # must not refund what the conflict penalty removed.
-        if score > 0.0 and not role_conflict and result.id in semantic_boosts:
+        # score rather than a separate post-processing step.
+        if score > 0.0 and boostable and result.id in semantic_boosts:
             sem_boost = semantic_boosts[result.id] * ctx.semantic_boost_weight
             score = min(1.0, score + sem_boost)
         # Tiny tie-break for candidates enriched with a technical document or CV.
-        if score > 0.0 and not role_conflict and ENRICHMENT_TECH_DOC_KEY in result.data:
+        if score > 0.0 and boostable and ENRICHMENT_TECH_DOC_KEY in result.data:
             score = min(1.0, score + 0.03)
-        if score > 0.0 and not role_conflict and ENRICHMENT_RESUME_KEY in result.data:
+        if score > 0.0 and boostable and ENRICHMENT_RESUME_KEY in result.data:
             resume_text = _resume_haystack(result)
             if resume_text:
                 score = min(1.0, score + 0.02)

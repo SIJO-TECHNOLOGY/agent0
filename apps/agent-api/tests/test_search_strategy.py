@@ -441,21 +441,37 @@ def test_evidence_score_partial_name_is_not_a_hit() -> None:
 
 
 def test_priority_ordering_is_generic_over_any_dimension() -> None:
-    # Two candidates: A evidences the skill only, B the domain only. Whichever
+    # Two candidates: A evidences the role only, B the domain only. Whichever
     # dimension the LLM ranks higher should win — proving the ordering is
-    # generic, not name-specific.
-    a_hay = "java engineer"  # skill yes, domain no
-    b_hay = "consultant at sgcib"  # domain yes, skill no
-    kw = dict(skills=("java",), domains=("cib",), role=None,
+    # generic, not name-specific. (Role/domain are used here because a
+    # candidate missing EVERY requested skill now takes the no-skill penalty,
+    # which rightly dominates any priority re-weighting.)
+    a_hay = "software developer"  # role yes, domain no
+    b_hay = "consultant at sgcib"  # domain yes, role no
+    kw = dict(skills=(), domains=("cib",), role="developer",
               candidate_min_years=None, required_min_years=None)
 
-    a_skill, _ = evidence_score(a_hay, **kw, priority=("skill", "domain"))
-    b_skill, _ = evidence_score(b_hay, **kw, priority=("skill", "domain"))
-    assert a_skill > b_skill  # skill ranked first -> skill candidate wins
+    a_role, _ = evidence_score(a_hay, **kw, priority=("role", "domain"))
+    b_role, _ = evidence_score(b_hay, **kw, priority=("role", "domain"))
+    assert a_role > b_role  # role ranked first -> role candidate wins
 
-    a_domain, _ = evidence_score(a_hay, **kw, priority=("domain", "skill"))
-    b_domain, _ = evidence_score(b_hay, **kw, priority=("domain", "skill"))
+    a_domain, _ = evidence_score(a_hay, **kw, priority=("domain", "role"))
+    b_domain, _ = evidence_score(b_hay, **kw, priority=("domain", "role"))
     assert b_domain > a_domain  # domain ranked first -> domain candidate wins
+
+
+def test_no_skill_penalty_dominates_priority_reweighting() -> None:
+    # Even when the LLM ranks domain above skill, a candidate with ZERO
+    # requested-skill evidence must not overtake one that has the skill.
+    kw = dict(skills=("java",), domains=("cib",), role=None,
+              candidate_min_years=None, required_min_years=None)
+    with_skill, _ = evidence_score(
+        "java engineer", **kw, priority=("domain", "skill")
+    )
+    zero_skill, _ = evidence_score(
+        "consultant at sgcib", **kw, priority=("domain", "skill")
+    )
+    assert with_skill > zero_skill
 
 
 def test_priority_lifts_exact_name_over_perfect_criteria() -> None:
@@ -883,6 +899,49 @@ def test_role_weight_matches_domain_weight() -> None:
         role_haystack="développeur",
     )
     assert missing_role == pytest.approx(missing_domain)
+
+
+def test_zero_requested_skills_cannot_ride_other_criteria_high() -> None:
+    # The Rami case: a pure .NET profile matching role+domain+seniority but
+    # NONE of the requested technologies must be strongly demoted, never
+    # read as a near-full match.
+    dotnet, hits = evidence_score(
+        "développeur fullstack .net c# sgcib front office",
+        skills=("java", "angular"),
+        domains=("cib",),
+        role="développeur fullstack",
+        candidate_min_years=8,
+        required_min_years=5,
+        domain_haystack="développeur fullstack .net sgcib front office",
+        role_haystack="développeur fullstack .net",
+    )
+    java_dev, _ = evidence_score(
+        "développeur fullstack java angular sgcib",
+        skills=("java", "angular"),
+        domains=("cib",),
+        role="développeur fullstack",
+        candidate_min_years=8,
+        required_min_years=5,
+        domain_haystack="développeur fullstack sgcib",
+        role_haystack="développeur fullstack",
+    )
+    assert "skills_missing" in hits
+    assert java_dev == 1.0
+    assert dotnet < 0.35
+
+
+def test_partial_skill_coverage_takes_no_penalty() -> None:
+    # One of two requested skills present: pro-rated credit, no multiplier.
+    score, hits = evidence_score(
+        "java spring",
+        skills=("java", "angular"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skills_missing" not in hits
+    assert score == pytest.approx(0.5)
 
 
 def test_role_conflict_marker_exposed_in_hits() -> None:

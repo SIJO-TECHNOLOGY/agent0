@@ -446,6 +446,14 @@ _ROLE_CONFLICT_PENALTY: Final[float] = 0.4
 # partial credit used when seniority is inferred from the title.
 _ROLE_BODY_CREDIT: Final[float] = 0.5
 
+# Multiplier applied when the query names concrete skills and the candidate
+# evidences NONE of them (e.g. a pure .NET profile on a "java angular"
+# query). Matching the surrounding criteria (role/domain/seniority) without
+# a single requested technology must never read as a near-full match.
+# Partial skill coverage (one of two skills) is already pro-rated and takes
+# no penalty.
+_NO_SKILL_PENALTY: Final[float] = 0.4
+
 # Canonical role families used by the role dimension. Keywords are matched
 # token-wise (never substrings, so "devops" can't read as "dev") against an
 # accent-folded job-title surface. Deliberately limited to clearly
@@ -642,11 +650,17 @@ def evidence_score(
     dims: list[tuple[str, float, float]] = []
     hits: set[str] = set()
 
+    skills_missing = False
     norm_skills = [s.lower() for s in skills if s and s.strip()]
     if norm_skills:
         found = [s for s in norm_skills if _term_present(s, hay)]
         for skill in found:
             hits.add(f"skill:{skill}")
+        if not found:
+            skills_missing = True
+            # Marker key (not a criterion) — callers use it to withhold
+            # score boosts from a profile with zero requested-tech evidence.
+            hits.add("skills_missing")
         dims.append(("skill", weights.skill, len(found) / len(norm_skills)))
 
     norm_domains = [d for d in domains if d and d.strip()]
@@ -770,4 +784,9 @@ def evidence_score(
     # demoted, not excluded.
     if role_conflict:
         score *= _ROLE_CONFLICT_PENALTY
+    # A candidate evidencing NONE of the requested technologies (e.g. a pure
+    # .NET profile on a "java angular" query) cannot ride role/domain/
+    # seniority to a near-full match.
+    if skills_missing:
+        score *= _NO_SKILL_PENALTY
     return score, hits

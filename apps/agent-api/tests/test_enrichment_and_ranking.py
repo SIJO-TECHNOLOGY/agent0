@@ -427,6 +427,56 @@ async def test_role_exclusive_never_reads_a_surname_as_a_metier() -> None:
 
 
 @pytest.mark.asyncio
+async def test_zero_skill_dotnet_profile_ranks_far_below_java_devs() -> None:
+    # The Rami Brahem case: a .NET fullstack in CIB with the right seniority
+    # but zero java/angular evidence used to reach ~90%; it must now sit far
+    # below a genuine java+angular developer.
+    state = GraphState(
+        original_query="développeur fullstack java angular en CIB, 6-16 ans",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java", "angular"],
+            constraints={
+                "role": "développeur fullstack",
+                "domain": "CIB",
+                "min_experience_years": "6",
+            },
+        ),
+        results=[
+            _result(
+                candidate_id="rami",
+                data={
+                    "firstName": "Rami",
+                    "lastName": "Brahem",
+                    "jobTitle": "Développeur Fullstack .NET",
+                    "skills": [".NET", "C#"],
+                    "summary": "Développeur .NET chez SGCIB, front office",
+                    "experienceMinYears": 8,
+                },
+            ),
+            _result(
+                candidate_id="javadev",
+                data={
+                    "jobTitle": "Développeur Fullstack Java",
+                    "skills": ["Java", "Angular"],
+                    "summary": "Développeur Java Angular chez SGCIB",
+                    "experienceMinYears": 7,
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    rami = next(r for r in result.results if r.id == "rami")
+    javadev = next(r for r in result.results if r.id == "javadev")
+    assert javadev.score > rami.score
+    assert rami.score < 0.5
+    assert rami.is_full_match is False
+    assert "java" in rami.unmet_criteria and "angular" in rami.unmet_criteria
+
+
+@pytest.mark.asyncio
 async def test_conflicting_metier_stays_visible_without_exclusive_flag() -> None:
     # Without the exclusivity flag the BA keeps the visible-but-demoted
     # behaviour: present, but strictly below the actual developer.
