@@ -2242,6 +2242,12 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     required_years = _int_or_none(intent.constraints.get("min_experience_years"))
     required_max_years = _int_or_none(intent.constraints.get("max_experience_years"))
     requested_name = (intent.constraints.get("name") or "").strip()
+    # "uniquement des développeurs" / "only developers": the LLM sets
+    # `role_exclusive`, and a candidate whose job title names a DIFFERENT
+    # métier is then excluded outright instead of merely demoted.
+    role_exclusive = str(
+        intent.constraints.get("role_exclusive") or ""
+    ).strip().lower() in ("true", "1", "yes", "oui")
     # The LLM may order the criteria by importance; the deterministic ranker
     # derives its weights from that ordering (off-vocabulary keys are dropped).
     priority = _ranking_priority(intent.constraints)
@@ -2272,6 +2278,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
                 )
 
     re_ranked: list[SearchResult] = []
+    excluded_conflicts = 0
     for result in state.results:
         if not result.source_tool.startswith("search"):
             re_ranked.append(result)
@@ -2291,16 +2298,25 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             candidate_name=candidate_full_name(result) if requested_name else None,
             priority=priority,
         )
+        role_conflict = "role_conflict" in hits
+        # The user asked for ONLY this métier: a title naming a different one
+        # is excluded outright (removed, not zero-scored, so the empty-results
+        # fallback can never resurface it).
+        if role_exclusive and role_conflict:
+            excluded_conflicts += 1
+            continue
         # Semantic similarity boost â€” additive, capped at 1.0. Applied before
         # the enrichment tie-break so the semantic signal is part of the base
-        # score rather than a separate post-processing step.
-        if score > 0.0 and result.id in semantic_boosts:
+        # score rather than a separate post-processing step. A role-conflicting
+        # profile earns NO boosts: similarity to the skill/domain vocabulary
+        # must not refund what the conflict penalty removed.
+        if score > 0.0 and not role_conflict and result.id in semantic_boosts:
             sem_boost = semantic_boosts[result.id] * ctx.semantic_boost_weight
             score = min(1.0, score + sem_boost)
         # Tiny tie-break for candidates enriched with a technical document or CV.
-        if score > 0.0 and ENRICHMENT_TECH_DOC_KEY in result.data:
+        if score > 0.0 and not role_conflict and ENRICHMENT_TECH_DOC_KEY in result.data:
             score = min(1.0, score + 0.03)
-        if score > 0.0 and ENRICHMENT_RESUME_KEY in result.data:
+        if score > 0.0 and not role_conflict and ENRICHMENT_RESUME_KEY in result.data:
             resume_text = _resume_haystack(result)
             if resume_text:
                 score = min(1.0, score + 0.02)
@@ -2373,6 +2389,8 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             "skills": list(skills),
             "domains": list(domains),
             "role": role,
+            "role_exclusive": role_exclusive,
+            "excluded_role_conflicts": excluded_conflicts,
             "required_years": required_years,
             "missing_criteria": list(missing),
             "visible_unverified_criteria": list(visible_only),

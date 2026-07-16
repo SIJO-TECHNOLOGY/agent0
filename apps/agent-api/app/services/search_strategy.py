@@ -681,6 +681,11 @@ def evidence_score(
                 and bool(requested_families)
                 and bool(title_families)
             )
+            if role_conflict:
+                # Marker key (not a criterion) so callers can act on the
+                # conflict — e.g. exclude the candidate outright when the
+                # user asked for ONLY that métier, or withhold score boosts.
+                hits.add("role_conflict")
             fraction = (
                 1.0
                 if title_found

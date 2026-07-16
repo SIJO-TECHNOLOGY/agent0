@@ -100,6 +100,10 @@ def test_prompt_teaches_graduation_window_conversion_and_states_date() -> None:
     assert "EARLIEST graduation year" in system
     # ...and forbid leaking raw graduation years into recall inputs.
     assert "Never put graduation years" in system
+    # An exclusivity phrasing ("uniquement des développeurs") must be
+    # captured as constraints.role_exclusive.
+    assert "role_exclusive" in system
+    assert "uniquement des" in system
     # The user prompt states the current date so the arithmetic is possible.
     assert "Current date: 2026-07-16" in user
     # Default (no injected date) still emits a Current date line.

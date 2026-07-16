@@ -333,6 +333,68 @@ async def test_rank_priority_demotes_coach_below_cib_developer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_role_exclusive_excludes_conflicting_metier() -> None:
+    # "uniquement des développeurs": a Business Analyst title is EXCLUDED
+    # from the results, not merely demoted.
+    state = GraphState(
+        original_query="java dev, je veux uniquement des développeurs",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "développeur", "role_exclusive": "true"},
+        ),
+        results=[
+            _result(
+                candidate_id="ba1",
+                data={"jobTitle": "Business Analyst", "skills": ["Java"]},
+            ),
+            _result(
+                candidate_id="dev1",
+                data={"jobTitle": "Développeur Java", "skills": ["Java"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    ids = [r.id for r in result.results]
+    assert "dev1" in ids
+    assert "ba1" not in ids
+
+
+@pytest.mark.asyncio
+async def test_conflicting_metier_stays_visible_without_exclusive_flag() -> None:
+    # Without the exclusivity flag the BA keeps the visible-but-demoted
+    # behaviour: present, but strictly below the actual developer.
+    state = GraphState(
+        original_query="développeur java",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "développeur"},
+        ),
+        results=[
+            _result(
+                candidate_id="ba1",
+                data={"jobTitle": "Business Analyst", "skills": ["Java"]},
+            ),
+            _result(
+                candidate_id="dev1",
+                data={"jobTitle": "Développeur Java", "skills": ["Java"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    ids = [r.id for r in result.results]
+    assert ids.index("dev1") < ids.index("ba1")
+    dev = next(r for r in result.results if r.id == "dev1")
+    ba = next(r for r in result.results if r.id == "ba1")
+    assert dev.score > ba.score
+
+
+@pytest.mark.asyncio
 async def test_rank_promotes_candidates_with_matching_evidence() -> None:
     state = GraphState(
         original_query="dev java cib",

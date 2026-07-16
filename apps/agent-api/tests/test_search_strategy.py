@@ -877,6 +877,33 @@ def test_role_weight_matches_domain_weight() -> None:
     assert missing_role == pytest.approx(missing_domain)
 
 
+def test_role_conflict_marker_exposed_in_hits() -> None:
+    # Callers (ranking) must be able to see the conflict to act on it —
+    # e.g. exclude the candidate when the user asked for ONLY that métier.
+    _, hits = evidence_score(
+        "java angular",
+        skills=(),
+        domains=(),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="business analyst",
+    )
+    assert "role_conflict" in hits
+    assert "role" not in hits
+    # No conflict -> no marker.
+    _, clean_hits = evidence_score(
+        "java angular",
+        skills=(),
+        domains=(),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="développeur java",
+    )
+    assert "role_conflict" not in clean_hits
+
+
 def test_role_without_role_haystack_keeps_historical_behaviour() -> None:
     # Callers that pass no title surface (e.g. criteria-status messaging)
     # keep the old whole-haystack semantics: full credit on body presence.
