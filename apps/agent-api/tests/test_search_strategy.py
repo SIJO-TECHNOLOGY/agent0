@@ -700,6 +700,14 @@ def test_role_families_accent_and_language_tolerant() -> None:
     assert "manager" in role_families("Chef de projet MOE")
 
 
+def test_role_families_recognises_ba_abbreviation_in_title() -> None:
+    # BoondManager titles commonly abbreviate Business Analyst as "BA"
+    # ("BA Finance de Marché ...") — that must register as analyst.
+    families = role_families("BA Finance de Marché en Banque d'investissements")
+    assert "analyst" in families
+    assert "developer" not in families
+
+
 def test_role_families_token_based_devops_is_not_developer() -> None:
     families = role_families("Ingénieur DevOps")
     assert "devops" in families

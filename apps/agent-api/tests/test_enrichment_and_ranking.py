@@ -363,6 +363,70 @@ async def test_role_exclusive_excludes_conflicting_metier() -> None:
 
 
 @pytest.mark.asyncio
+async def test_role_exclusive_excludes_ba_abbreviated_title() -> None:
+    # The Stephane MALTESE case: the BoondManager title abbreviates the
+    # métier as "BA ..." — it must still be recognised and excluded.
+    state = GraphState(
+        original_query="développeur fullstack java, uniquement des développeurs",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "développeur fullstack", "role_exclusive": "true"},
+        ),
+        results=[
+            _result(
+                candidate_id="maltese",
+                data={
+                    "firstName": "Stephane",
+                    "lastName": "MALTESE",
+                    "jobTitle": "BA Finance de Marché en Banque d'investissements",
+                    "skills": ["marchés financiers", "java"],
+                },
+            ),
+            _result(
+                candidate_id="dev1",
+                data={"jobTitle": "Développeur Java", "skills": ["Java"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    ids = [r.id for r in result.results]
+    assert "dev1" in ids
+    assert "maltese" not in ids
+
+
+@pytest.mark.asyncio
+async def test_role_exclusive_never_reads_a_surname_as_a_metier() -> None:
+    # When no job title exists, result.title falls back to the person's
+    # NAME — the surname "Ba" must not register as Business Analyst and
+    # get the candidate wrongly excluded.
+    state = GraphState(
+        original_query="développeur java, uniquement des développeurs",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "développeur", "role_exclusive": "true"},
+        ),
+        results=[
+            SearchResult(
+                id="amadou",
+                type="candidate",
+                title="Amadou Ba",  # name fallback, no job title anywhere
+                score=0.5,
+                source_tool="searchCandidates",
+                data={"firstName": "Amadou", "lastName": "Ba", "skills": ["Java"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    assert [r.id for r in result.results] == ["amadou"]
+
+
+@pytest.mark.asyncio
 async def test_conflicting_metier_stays_visible_without_exclusive_flag() -> None:
     # Without the exclusivity flag the BA keeps the visible-but-demoted
     # behaviour: present, but strictly below the actual developer.

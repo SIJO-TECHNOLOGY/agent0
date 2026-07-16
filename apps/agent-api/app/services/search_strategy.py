@@ -469,7 +469,11 @@ _ROLE_FAMILY_KEYWORDS: Final[dict[str, tuple[str, ...]]] = {
         "ingenieur etudes",
         "ingenieur developpement",
     ),
-    "analyst": ("analyste", "analyst", "amoa", "moa"),
+    # "ba" is how BoondManager titles commonly abbreviate Business Analyst
+    # ("BA Finance de Marché ..."). Safe as a token match ONLY because the
+    # role surface excludes name-fallback titles (see _role_haystack) — the
+    # surname "Ba" must never register as a métier.
+    "analyst": ("analyste", "analyst", "ba", "amoa", "moa"),
     "manager": (
         "chef de projet",
         "project manager",

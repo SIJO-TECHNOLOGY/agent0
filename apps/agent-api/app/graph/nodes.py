@@ -2059,14 +2059,25 @@ def _role_haystack(result: SearchResult) -> str:
     """Job-title surface for the role dimension of ``evidence_score``.
 
     Collects the result title, Agent1's normalised title, title-like record
-    fields, and the technical-document title. May legitimately be empty (or
-    contain a person's name via the ``result.title`` fallback) — the scorer
-    then falls back to partial body-text credit and never applies the
-    role-conflict penalty on an unrecognised title.
+    fields, and the technical-document title. May legitimately be empty —
+    the scorer then falls back to partial body-text credit and never applies
+    the role-conflict penalty on an unrecognised title.
+
+    ``result.title`` falls back to the person's name / email / id when no
+    job title exists (see ``_record_to_result``); those are excluded here so
+    they can never register as a métier — e.g. the surname "Ba" must not
+    read as Business Analyst.
     """
     parts: list[str] = []
-    if result.title:
-        parts.append(result.title)
+    title = (result.title or "").strip()
+    full_name = (candidate_full_name(result) or "").strip()
+    if (
+        title
+        and title.lower() != full_name.lower()
+        and "@" not in title
+        and not title.isdigit()
+    ):
+        parts.append(title)
     norm_title = result.data.get(NORM_TITLE)
     if isinstance(norm_title, str) and norm_title:
         parts.append(norm_title)
