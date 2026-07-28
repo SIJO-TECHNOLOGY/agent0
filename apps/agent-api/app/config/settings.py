@@ -61,6 +61,17 @@ class Settings(BaseSettings):
             "considered (bounds cost)."
         ),
     )
+    min_match_score: float = Field(
+        default=0.5, ge=0.0, le=1.0,
+        description=(
+            "Low-score replacement gate: after ranking, any returned "
+            "candidate scoring strictly below this triggers ONE deterministic "
+            "better-targeted replan pass (within max_replan_attempts) to try "
+            "to replace it. Results accumulate across passes, so when the "
+            "retry finds nothing better the original candidates are returned "
+            "unchanged. 0 disables the gate."
+        ),
+    )
 
     use_mock_mcp: bool = Field(default=True)
 
