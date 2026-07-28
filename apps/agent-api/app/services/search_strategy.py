@@ -570,10 +570,15 @@ def _canonical_term(term: str) -> str:
 def _term_present(term: str, haystack: str) -> bool:
     """True if ``term`` (or any of its aliases) appears in the haystack.
 
-    Single-word skills match as substrings (``"java"`` in ``"javafx"`` etc.);
-    multi-word terms match when EVERY token is present (word-order tolerant).
-    The canonical form and the original alias are both tried so "k8s" matches
-    a profile that only mentions "kubernetes" and vice-versa.
+    Pure-alphanumeric single-word skills match on TOKEN boundaries, plus a
+    numeric version suffix — ``"java"`` matches ``"java"`` and ``"java8"``
+    but NEVER ``"javascript"`` (substring matching wrongly credited java to
+    pure frontend profiles). Related-tech spellings that SHOULD still count
+    ("javafx", "angularjs") are handled as aliases, not substrings.
+    Symbolic terms (``"c#"``, ``".net"``, ``"c++"``) and multi-word terms
+    keep substring semantics (tokenising would destroy them). The canonical
+    form and the original alias are both tried so "k8s" matches a profile
+    that only mentions "kubernetes" and vice-versa.
     """
     term = term.strip().lower()
     if not term:
@@ -585,13 +590,28 @@ def _term_present(term: str, haystack: str) -> bool:
         if canonical == term:
             candidates.add(alias)
 
+    hay_tokens: set[str] | None = None
     for t in candidates:
         if not t:
             continue
-        if t in haystack:
-            return True
         tokens = [tok for tok in _TOKEN_SPLIT_RE.split(t) if tok]
-        if len(tokens) > 1 and all(tok in haystack for tok in tokens):
+        if len(tokens) > 1:
+            if all(tok in haystack for tok in tokens):
+                return True
+            continue
+        if t.isalnum():
+            if hay_tokens is None:
+                hay_tokens = {
+                    tok for tok in _TOKEN_SPLIT_RE.split(haystack) if tok
+                }
+            if t in hay_tokens:
+                return True
+            if any(
+                tok.startswith(t) and tok[len(t):].isdigit()
+                for tok in hay_tokens
+            ):
+                return True
+        elif t in haystack:
             return True
     return False
 

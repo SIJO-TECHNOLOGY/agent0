@@ -901,6 +901,55 @@ def test_role_weight_matches_domain_weight() -> None:
     assert missing_role == pytest.approx(missing_domain)
 
 
+def test_javascript_never_credits_java() -> None:
+    # The 95%-without-java case: "java" used to substring-match inside
+    # "javascript", crediting java to pure frontend profiles.
+    _, hits = evidence_score(
+        "développeur javascript typescript angular",
+        skills=("java", "angular"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:angular" in hits
+    assert "skill:java" not in hits
+
+
+def test_versioned_and_related_spellings_still_credit_the_skill() -> None:
+    # Token + numeric-suffix matching keeps legitimate variants working.
+    for hay in ("java8 spring", "java 11 backend", "javafx developer"):
+        _, hits = evidence_score(
+            hay,
+            skills=("java",),
+            domains=(),
+            role=None,
+            candidate_min_years=None,
+            required_min_years=None,
+        )
+        assert "skill:java" in hits, hay
+    # angularjs still counts as angular (alias, not substring).
+    _, hits = evidence_score(
+        "angularjs frontend",
+        skills=("angular",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:angular" in hits
+    # Symbolic terms keep substring semantics.
+    _, hits = evidence_score(
+        "c# .net core",
+        skills=("c#",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:c#" in hits
+
+
 def test_zero_requested_skills_cannot_ride_other_criteria_high() -> None:
     # The Rami case: a pure .NET profile matching role+domain+seniority but
     # NONE of the requested technologies must be strongly demoted, never

@@ -477,6 +477,45 @@ async def test_zero_skill_dotnet_profile_ranks_far_below_java_devs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_partial_skill_profile_earns_no_enrichment_boost() -> None:
+    # A profile missing one requested skill must not regain points from the
+    # technical-document tie-break (nor, in real mode, the semantic boost):
+    # with identical evidence, enriched and non-enriched partial profiles
+    # score the same.
+    def _partial(candidate_id: str, extra: dict) -> SearchResult:
+        return _result(
+            candidate_id=candidate_id,
+            data={
+                "jobTitle": "Développeur Angular",
+                "skills": ["Angular", "TypeScript"],
+                # Known experience on BOTH so neither takes the
+                # unverified-profile discount — isolates the tie-break.
+                "experienceMinYears": 5,
+                **extra,
+            },
+        )
+
+    state = GraphState(
+        original_query="développeur java angular",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java", "angular"],
+            constraints={"role": "développeur"},
+        ),
+        results=[
+            _partial("enriched", {"_enrichment_technical_document": {"summary": "profil angular"}}),
+            _partial("plain", {}),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    enriched = next(r for r in result.results if r.id == "enriched")
+    plain = next(r for r in result.results if r.id == "plain")
+    assert enriched.score == plain.score
+
+
+@pytest.mark.asyncio
 async def test_conflicting_metier_stays_visible_without_exclusive_flag() -> None:
     # Without the exclusivity flag the BA keeps the visible-but-demoted
     # behaviour: present, but strictly below the actual developer.

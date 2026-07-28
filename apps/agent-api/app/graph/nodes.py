@@ -2316,11 +2316,15 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         if role_exclusive and role_conflict:
             excluded_conflicts += 1
             continue
-        # Boost eligibility: a role-conflicting profile, or one evidencing
-        # NONE of the requested technologies, earns no boosts — semantic
-        # similarity (e.g. .NET reading as "close to java") must not refund
-        # what the penalties removed.
-        boostable = not role_conflict and "skills_missing" not in hits
+        # Boost eligibility: boosts only separate near-ties among profiles
+        # already evidencing EVERY requested technology and the right métier.
+        # Semantic similarity (e.g. .NET reading as "close to java") or a
+        # documented dossier must never refund a missing requested skill —
+        # that is how an angular-only profile used to reach ~95% on a
+        # "java angular" query.
+        boostable = not role_conflict and all(
+            f"skill:{s.lower()}" in hits for s in skills
+        )
         # Semantic similarity boost â€” additive, capped at 1.0. Applied before
         # the enrichment tie-break so the semantic signal is part of the base
         # score rather than a separate post-processing step.
