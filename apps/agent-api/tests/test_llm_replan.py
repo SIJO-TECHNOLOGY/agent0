@@ -40,13 +40,14 @@ class _ReflectPlanner:
 
 
 def _ctx(planner, *, emitter=None, max_replan=1, use_llm_replan=True, skip=0.8,
-         allow_clarification=True):
+         allow_clarification=True, min_match=0.5):
     return NodeContext(
         mcp_client=MockMcpClient(),
         max_replan_attempts=max_replan,
         llm_planner=planner,
         use_llm_replan=use_llm_replan,
         replan_skip_score=skip,
+        min_match_score=min_match,
         event_emitter=emitter or _RecordingEmitter(),
         allow_clarification=allow_clarification,
     )
@@ -71,6 +72,90 @@ def _weak_state() -> GraphState:
         interpreted_intent=InterpretedIntent(objective="find", entities=["java"]),
         results=[_result("1", score=0.5, full=False, unmet=["CIB", "10+ years"])],
     )
+
+
+# ---------------------------------------------------------------------------
+# Deterministic low-score gate (min_match_score)
+# ---------------------------------------------------------------------------
+
+
+def _low_state() -> GraphState:
+    return GraphState(
+        original_query="java dev in CIB",
+        interpreted_intent=InterpretedIntent(objective="find", entities=["java"]),
+        results=[
+            _result("1", score=0.72, full=False),
+            _result("2", score=0.3, full=False, unmet=["CIB", "java"]),
+            _result("3", score=0.2, full=False, unmet=["CIB"]),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_low_score_gate_triggers_replan_without_llm_call() -> None:
+    # Profiles under min_match_score deterministically trigger ONE retry —
+    # no reflection LLM call is spent, and the guidance names the criteria
+    # the low scorers most often miss.
+    emitter = _RecordingEmitter()
+    planner = _ReflectPlanner(ReflectionVerdict())  # would ACCEPT if asked
+    out = await reflect_on_results(_low_state(), _ctx(planner, emitter=emitter))
+
+    assert planner.calls == 0
+    assert out.replan_count == 1
+    assert "below 50%" in out.replan_feedback
+    assert "CIB" in out.replan_feedback
+    event = next(e for e in emitter.events if e[0] == "replan_requested")
+    assert event[1]["decided_by"] == "low_score_gate"
+
+
+@pytest.mark.asyncio
+async def test_low_score_gate_fires_even_when_top_results_are_strong() -> None:
+    # The strong-results skip must not excuse a weak tail: a full-match head
+    # with sub-threshold profiles behind it still triggers the retry.
+    state = GraphState(
+        original_query="java dev",
+        interpreted_intent=InterpretedIntent(objective="find", entities=["java"]),
+        results=[
+            _result("1", score=1.0, full=True),
+            _result("2", score=0.2, full=False, unmet=["java"]),
+        ],
+    )
+    out = await reflect_on_results(state, _ctx(_ReflectPlanner(ReflectionVerdict())))
+    assert out.replan_count == 1
+    assert out.replan_feedback != ""
+
+
+@pytest.mark.asyncio
+async def test_low_score_gate_silent_when_all_results_clear_threshold() -> None:
+    # All candidates at/above the bar → the gate stays out of the way and the
+    # normal LLM reflection path runs.
+    state = GraphState(
+        original_query="java dev",
+        interpreted_intent=InterpretedIntent(objective="find", entities=["java"]),
+        results=[_result("1", score=0.62, full=False)],
+    )
+    planner = _ReflectPlanner(ReflectionVerdict())  # ACCEPT
+    out = await reflect_on_results(state, _ctx(planner))
+    assert planner.calls == 1
+    assert out.replan_count == 0
+
+
+@pytest.mark.asyncio
+async def test_low_score_gate_respects_replan_budget() -> None:
+    # Budget already spent → the gate cannot loop.
+    state = _low_state().model_copy(update={"replan_count": 1})
+    planner = _ReflectPlanner(ReflectionVerdict())
+    out = await reflect_on_results(state, _ctx(planner, max_replan=1))
+    assert out.replan_count == 1
+    assert out.replan_feedback == ""
+
+
+@pytest.mark.asyncio
+async def test_low_score_gate_disabled_with_zero_threshold() -> None:
+    planner = _ReflectPlanner(ReflectionVerdict())
+    out = await reflect_on_results(_low_state(), _ctx(planner, min_match=0.0))
+    assert out.replan_count == 0
+    assert out.replan_feedback == ""
 
 
 # ---------------------------------------------------------------------------

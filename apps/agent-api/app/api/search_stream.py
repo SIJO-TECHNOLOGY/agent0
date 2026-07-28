@@ -270,6 +270,7 @@ def _build_service(
         max_plan_steps=settings.llm_max_plan_steps,
         use_llm_replan=settings.use_llm_replan,
         replan_skip_score=settings.replan_skip_score,
+        min_match_score=settings.min_match_score,
         agent_trace=settings.agent_trace != "off",
         agent_trace_verbose=settings.agent_trace == "verbose",
     )

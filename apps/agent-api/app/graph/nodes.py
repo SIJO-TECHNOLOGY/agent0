@@ -98,6 +98,10 @@ class NodeContext:
     max_plan_steps: int = DEFAULT_LLM_PLAN_STEPS
     use_llm_replan: bool = True
     replan_skip_score: float = 0.8
+    # Low-score replacement gate: any returned candidate scoring strictly
+    # below this triggers ONE deterministic replan pass to try to replace it
+    # (0 disables the gate).
+    min_match_score: float = 0.5
     event_emitter: EventEmitter = field(default_factory=NoopEventEmitter)
     debug_mode: bool = False
     semantic_scorer: SemanticScorer | None = None
@@ -1146,6 +1150,39 @@ async def reflect_on_results(state: GraphState, ctx: NodeContext) -> GraphState:
         return state
     if ctx.max_replan_attempts <= 0 or state.replan_count >= ctx.max_replan_attempts:
         return state
+
+    # Deterministic low-score gate — no LLM call needed, and it runs BEFORE
+    # the strong-results skip because a strong head does not excuse a weak
+    # tail. Any returned profile under ``min_match_score`` warrants one
+    # better-targeted second pass. Results accumulate across passes (execute
+    # appends + dedupes, ranking re-sorts), so low scorers are displaced
+    # only by genuinely better profiles — when the retry finds nothing
+    # better, the original candidates are returned unchanged.
+    low_scores = [
+        r
+        for r in state.results
+        if r.source_tool.startswith("search") and r.score < ctx.min_match_score
+    ]
+    if low_scores and ctx.min_match_score > 0.0:
+        guidance = _low_score_guidance(low_scores, ctx.min_match_score)
+        await ctx.event_emitter.emit(
+            "replan_requested",
+            {
+                "reason": (
+                    f"{len(low_scores)} candidate(s) below "
+                    f"{round(ctx.min_match_score * 100)}% match"
+                ),
+                "guidance": guidance[:300],
+                "replan_count": state.replan_count + 1,
+                "decided_by": "low_score_gate",
+            },
+        )
+        return _replace(
+            state,
+            replan_count=state.replan_count + 1,
+            replan_feedback=guidance,
+        )
+
     reflect = getattr(ctx.llm_planner, "reflect", None)
     if reflect is None:
         return state
@@ -1201,6 +1238,29 @@ async def reflect_on_results(state: GraphState, ctx: NodeContext) -> GraphState:
         state,
         replan_count=state.replan_count + 1,
         replan_feedback=guidance,
+    )
+
+
+def _low_score_guidance(
+    low_scores: list[SearchResult], threshold: float
+) -> str:
+    """Deterministic replan guidance built from the low scorers' unmet criteria.
+
+    Names the criteria most often missed so the next plan targets them,
+    and states the replacement contract (keep, only displace with better).
+    """
+    counts: dict[str, int] = {}
+    for result in low_scores:
+        for label in result.unmet_criteria:
+            counts[label] = counts.get(label, 0) + 1
+    top = [label for label, _ in sorted(counts.items(), key=lambda kv: -kv[1])[:4]]
+    missed = f" They most often miss: {', '.join(top)}." if top else ""
+    return (
+        f"{len(low_scores)} returned candidate(s) score below "
+        f"{round(threshold * 100)}% match.{missed} Retarget the search to "
+        "find candidates satisfying those criteria (e.g. different keywords, "
+        "employer names, or a narrower title focus). Existing candidates are "
+        "kept and only replaced by better-scoring ones."
     )
 
 
