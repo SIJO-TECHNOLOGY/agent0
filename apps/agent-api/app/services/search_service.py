@@ -45,6 +45,7 @@ class SearchService:
         max_plan_steps: int = DEFAULT_LLM_PLAN_STEPS,
         use_llm_replan: bool = True,
         replan_skip_score: float = 0.8,
+        min_match_score: float = 0.5,
         agent_trace: bool = False,
         agent_trace_verbose: bool = False,
         semantic_scorer: SemanticScorer | None = None,
@@ -59,6 +60,7 @@ class SearchService:
         self._max_plan_steps = max_plan_steps
         self._use_llm_replan = use_llm_replan
         self._replan_skip_score = replan_skip_score
+        self._min_match_score = min_match_score
         self._agent_trace = agent_trace
         self._agent_trace_verbose = agent_trace_verbose
         self._semantic_scorer = semantic_scorer
@@ -81,6 +83,7 @@ class SearchService:
             max_plan_steps=self._max_plan_steps,
             use_llm_replan=self._use_llm_replan,
             replan_skip_score=self._replan_skip_score,
+            min_match_score=self._min_match_score,
             event_emitter=emitter,
             debug_mode=debug_mode,
             semantic_scorer=self._semantic_scorer,

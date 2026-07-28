@@ -20,6 +20,21 @@ from app.models.tools import McpTool
 from app.services.llm_planner import PlannerConstraints, validate_plan
 
 
+@pytest.fixture(autouse=True)
+def _disable_low_score_gate(monkeypatch: pytest.MonkeyPatch):
+    """Keep these single-shot stream contracts out of the low-score retry.
+
+    The deterministic ``min_match_score`` gate would add a second search
+    pass (and its events) whenever the mock candidates rank under 50%,
+    breaking the exact event-sequence assertions below. The gate has its
+    own dedicated tests in test_llm_replan.py.
+    """
+    monkeypatch.setenv("MIN_MATCH_SCORE", "0")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 # ---------- MCP tool fixtures ----------------------------------------------
 
 SEARCH_TOOL = McpTool(
