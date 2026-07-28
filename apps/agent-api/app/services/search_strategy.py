@@ -18,6 +18,7 @@ criterion into one call and never emit boolean keyword syntax.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Final
 
@@ -412,12 +413,20 @@ def infer_years_from_title(title_haystack: str) -> int | None:
 
 @dataclass(frozen=True)
 class EvidenceWeights:
-    """Relative importance of each criterion dimension."""
+    """Relative importance of each criterion dimension.
+
+    Ordering encodes the agreed matching hierarchy: requested métier and
+    technologies are the identity/hard criteria (role conflicts and missing
+    skills additionally take multiplicative penalties), the business domain
+    qualifies, and seniority — usually DERIVED from the query (graduation
+    window → experience bounds) — weighs least. ``name`` stays top-tier
+    because a named person is the strongest possible request.
+    """
 
     skill: float = 0.4
+    role: float = 0.35
     domain: float = 0.3
-    seniority: float = 0.3
-    role: float = 0.2
+    seniority: float = 0.25
     name: float = 0.4
 
 
@@ -427,6 +436,93 @@ _WEIGHTS = EvidenceWeights()
 # exceeds the requested maximum (e.g. a 7-year profile for a "junior 0-2 ans"
 # query). Strong but non-zero so the profile stays visible, just ranked low.
 _OVER_CAP_PENALTY: Final[float] = 0.4
+
+# Multiplier applied when the requested role and the candidate's job title
+# resolve to disjoint role families (e.g. a "Business Analyst" title on a
+# "développeur" query). Same visible-but-demoted philosophy as the over-cap
+# penalty: the profile stays in the list, it just cannot top real matches.
+_ROLE_CONFLICT_PENALTY: Final[float] = 0.4
+
+# Credit earned when the requested role is evidenced only in the candidate's
+# body text (CV/tech-doc), not in a job-title surface — mirrors the 0.5
+# partial credit used when seniority is inferred from the title.
+_ROLE_BODY_CREDIT: Final[float] = 0.5
+
+# Base of the graduated hard-skill penalty. Requested technologies are HARD
+# criteria: the score is multiplied by ``_SKILL_MISS_BASE ** (missing /
+# requested)``, so missing one of two skills halves the score (0.25**0.5),
+# missing one of five costs ~×0.76, and evidencing none collapses it to
+# ×0.25 (e.g. a pure .NET profile on a "java angular" query). A soft
+# modifier miss (e.g. "développeur java" without the word "fullstack") is
+# NOT a skill — role families absorb it at no cost.
+_SKILL_MISS_BASE: Final[float] = 0.25
+
+# Canonical role families used by the role dimension. Keywords are matched
+# token-wise (never substrings, so "devops" can't read as "dev") against an
+# accent-folded job-title surface. Deliberately limited to clearly
+# distinguishable métiers: generic titles (consultant, ingénieur, architecte)
+# map to NO family, so an unknown or ambiguous title can never trigger the
+# conflict penalty.
+_ROLE_FAMILY_KEYWORDS: Final[dict[str, tuple[str, ...]]] = {
+    "developer": (
+        "developpeur",
+        "developer",
+        "programmeur",
+        "programmer",
+        "fullstack",
+        "full stack",
+        "frontend",
+        "front end",
+        "backend",
+        "back end",
+        "software engineer",
+        "ingenieur logiciel",
+        "ingenieur etudes",
+        "ingenieur developpement",
+    ),
+    # "ba" is how BoondManager titles commonly abbreviate Business Analyst
+    # ("BA Finance de Marché ..."). Safe as a token match ONLY because the
+    # role surface excludes name-fallback titles (see _role_haystack) — the
+    # surname "Ba" must never register as a métier.
+    "analyst": ("analyste", "analyst", "ba", "amoa", "moa"),
+    "manager": (
+        "chef de projet",
+        "project manager",
+        "product owner",
+        "product manager",
+        "scrum master",
+        "directeur de projet",
+        "manager",
+    ),
+    "tester": ("testeur", "tester", "qa", "quality assurance", "recetteur"),
+    "designer": ("designer", "graphiste", "ux", "ui"),
+    "devops": ("devops", "sre", "site reliability"),
+}
+
+
+def _fold(text: str) -> str:
+    """Lowercase + strip accents so 'Développeur' matches 'developpeur'."""
+    normalized = unicodedata.normalize("NFKD", text.lower())
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def role_families(text: str) -> frozenset[str]:
+    """Canonical role families evidenced in a job-title-like text.
+
+    Multi-word keywords require every token present (word-order tolerant).
+    Titles outside the vocabulary map to no family, so only an explicit,
+    recognised métier can ever conflict with the requested role.
+    """
+    tokens = {tok for tok in _TOKEN_SPLIT_RE.split(_fold(text)) if tok}
+    if not tokens:
+        return frozenset()
+    found: set[str] = set()
+    for family, keywords in _ROLE_FAMILY_KEYWORDS.items():
+        for keyword in keywords:
+            if all(tok in tokens for tok in keyword.split()):
+                found.add(family)
+                break
+    return frozenset(found)
 
 # Closed vocabulary of criterion keys the LLM may order in `ranking_priority`.
 RANKING_CRITERIA: Final[frozenset[str]] = frozenset(
@@ -477,10 +573,15 @@ def _canonical_term(term: str) -> str:
 def _term_present(term: str, haystack: str) -> bool:
     """True if ``term`` (or any of its aliases) appears in the haystack.
 
-    Single-word skills match as substrings (``"java"`` in ``"javafx"`` etc.);
-    multi-word terms match when EVERY token is present (word-order tolerant).
-    The canonical form and the original alias are both tried so "k8s" matches
-    a profile that only mentions "kubernetes" and vice-versa.
+    Pure-alphanumeric single-word skills match on TOKEN boundaries, plus a
+    numeric version suffix — ``"java"`` matches ``"java"`` and ``"java8"``
+    but NEVER ``"javascript"`` (substring matching wrongly credited java to
+    pure frontend profiles). Related-tech spellings that SHOULD still count
+    ("javafx", "angularjs") are handled as aliases, not substrings.
+    Symbolic terms (``"c#"``, ``".net"``, ``"c++"``) and multi-word terms
+    keep substring semantics (tokenising would destroy them). The canonical
+    form and the original alias are both tried so "k8s" matches a profile
+    that only mentions "kubernetes" and vice-versa.
     """
     term = term.strip().lower()
     if not term:
@@ -492,13 +593,28 @@ def _term_present(term: str, haystack: str) -> bool:
         if canonical == term:
             candidates.add(alias)
 
+    hay_tokens: set[str] | None = None
     for t in candidates:
         if not t:
             continue
-        if t in haystack:
-            return True
         tokens = [tok for tok in _TOKEN_SPLIT_RE.split(t) if tok]
-        if len(tokens) > 1 and all(tok in haystack for tok in tokens):
+        if len(tokens) > 1:
+            if all(tok in haystack for tok in tokens):
+                return True
+            continue
+        if t.isalnum():
+            if hay_tokens is None:
+                hay_tokens = {
+                    tok for tok in _TOKEN_SPLIT_RE.split(haystack) if tok
+                }
+            if t in hay_tokens:
+                return True
+            if any(
+                tok.startswith(t) and tok[len(t):].isdigit()
+                for tok in hay_tokens
+            ):
+                return True
+        elif t in haystack:
             return True
     return False
 
@@ -513,6 +629,7 @@ def evidence_score(
     required_min_years: int | None,
     required_max_years: int | None = None,
     domain_haystack: str | None = None,
+    role_haystack: str | None = None,
     requested_name: str | None = None,
     candidate_name: str | None = None,
     priority: tuple[str, ...] | None = None,
@@ -532,6 +649,15 @@ def evidence_score(
     high-signal surface (title + technical-document summary) so an incidental
     business word buried in a noisy skills blob does not earn domain credit.
 
+    ``role_haystack`` (when given) does the same for the role dimension using
+    the candidate's job-title surface: a title match (verbatim or via role
+    families, so "Développeur Java" satisfies "fullstack developer") earns
+    full credit; a role mentioned only in the body text earns partial credit
+    (a BA whose CV merely *mentions* developers is not a developer); and a
+    title resolving to a DIFFERENT role family than the requested one incurs
+    the ``_ROLE_CONFLICT_PENALTY`` on the final score. With ``role_haystack``
+    ``None`` the role dimension keeps its historical whole-haystack behaviour.
+
     ``requested_name``/``candidate_name`` add a ``name`` dimension (token recall
     of the requested person's name against the candidate's), present only when a
     name was requested. ``priority`` is an LLM-supplied ordering of criterion
@@ -547,11 +673,17 @@ def evidence_score(
     dims: list[tuple[str, float, float]] = []
     hits: set[str] = set()
 
+    skill_miss_fraction = 0.0
     norm_skills = [s.lower() for s in skills if s and s.strip()]
     if norm_skills:
         found = [s for s in norm_skills if _term_present(s, hay)]
         for skill in found:
             hits.add(f"skill:{skill}")
+        if not found:
+            # Marker key (not a criterion) — callers use it to spot a
+            # profile with zero requested-tech evidence.
+            hits.add("skills_missing")
+        skill_miss_fraction = 1.0 - len(found) / len(norm_skills)
         dims.append(("skill", weights.skill, len(found) / len(norm_skills)))
 
     norm_domains = [d for d in domains if d and d.strip()]
@@ -566,12 +698,45 @@ def evidence_score(
             hits.add("domain")
         dims.append(("domain", weights.domain, 1.0 if domain_found else 0.0))
 
+    role_conflict = False
     if role and role.strip():
-        low = role.lower()
-        role_found = low in hay or all(tok in hay for tok in low.split())
-        if role_found:
+        folded_role = _fold(role)
+        folded_hay = _fold(haystack)
+        body_found = folded_role in folded_hay or all(
+            tok in folded_hay for tok in folded_role.split()
+        )
+        if role_haystack is not None:
+            role_hay = _fold(role_haystack)
+            requested_families = role_families(role)
+            title_families = role_families(role_haystack)
+            title_found = (
+                folded_role in role_hay
+                or all(tok in role_hay for tok in folded_role.split())
+                or bool(requested_families & title_families)
+            )
+            # Conflict = both sides resolve to a known family and share none
+            # (intersection would have set title_found). An unrecognised
+            # title or an unrecognised requested role never conflicts.
+            role_conflict = (
+                not title_found
+                and bool(requested_families)
+                and bool(title_families)
+            )
+            if role_conflict:
+                # Marker key (not a criterion) so callers can act on the
+                # conflict — e.g. exclude the candidate outright when the
+                # user asked for ONLY that métier, or withhold score boosts.
+                hits.add("role_conflict")
+            fraction = (
+                1.0
+                if title_found
+                else (_ROLE_BODY_CREDIT if body_found else 0.0)
+            )
+        else:
+            fraction = 1.0 if body_found else 0.0
+        if fraction > 0.0:
             hits.add("role")
-        dims.append(("role", weights.role, 1.0 if role_found else 0.0))
+        dims.append(("role", weights.role, fraction))
 
     over_cap = False
     if required_min_years is not None or required_max_years is not None:
@@ -637,4 +802,15 @@ def evidence_score(
     # cannot top the ranking, while staying visible rather than excluded.
     if over_cap:
         score *= _OVER_CAP_PENALTY
+    # A candidate whose job title names a DIFFERENT métier than the requested
+    # role (e.g. "Business Analyst" on a "développeur" query) is likewise
+    # demoted, not excluded.
+    if role_conflict:
+        score *= _ROLE_CONFLICT_PENALTY
+    # Requested technologies are HARD criteria: each missing one drags the
+    # score down exponentially (one of two missing halves it; none found
+    # collapses it), so a profile can never ride role/domain/seniority to a
+    # near-full match while lacking a required tech.
+    if skill_miss_fraction > 0.0:
+        score *= _SKILL_MISS_BASE ** skill_miss_fraction
     return score, hits

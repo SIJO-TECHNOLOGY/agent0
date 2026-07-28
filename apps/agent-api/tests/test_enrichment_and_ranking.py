@@ -333,6 +333,221 @@ async def test_rank_priority_demotes_coach_below_cib_developer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_role_exclusive_excludes_conflicting_metier() -> None:
+    # "uniquement des développeurs": a Business Analyst title is EXCLUDED
+    # from the results, not merely demoted.
+    state = GraphState(
+        original_query="java dev, je veux uniquement des développeurs",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "développeur", "role_exclusive": "true"},
+        ),
+        results=[
+            _result(
+                candidate_id="ba1",
+                data={"jobTitle": "Business Analyst", "skills": ["Java"]},
+            ),
+            _result(
+                candidate_id="dev1",
+                data={"jobTitle": "Développeur Java", "skills": ["Java"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    ids = [r.id for r in result.results]
+    assert "dev1" in ids
+    assert "ba1" not in ids
+
+
+@pytest.mark.asyncio
+async def test_role_exclusive_excludes_ba_abbreviated_title() -> None:
+    # The Stephane MALTESE case: the BoondManager title abbreviates the
+    # métier as "BA ..." — it must still be recognised and excluded.
+    state = GraphState(
+        original_query="développeur fullstack java, uniquement des développeurs",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "développeur fullstack", "role_exclusive": "true"},
+        ),
+        results=[
+            _result(
+                candidate_id="maltese",
+                data={
+                    "firstName": "Stephane",
+                    "lastName": "MALTESE",
+                    "jobTitle": "BA Finance de Marché en Banque d'investissements",
+                    "skills": ["marchés financiers", "java"],
+                },
+            ),
+            _result(
+                candidate_id="dev1",
+                data={"jobTitle": "Développeur Java", "skills": ["Java"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    ids = [r.id for r in result.results]
+    assert "dev1" in ids
+    assert "maltese" not in ids
+
+
+@pytest.mark.asyncio
+async def test_role_exclusive_never_reads_a_surname_as_a_metier() -> None:
+    # When no job title exists, result.title falls back to the person's
+    # NAME — the surname "Ba" must not register as Business Analyst and
+    # get the candidate wrongly excluded.
+    state = GraphState(
+        original_query="développeur java, uniquement des développeurs",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "développeur", "role_exclusive": "true"},
+        ),
+        results=[
+            SearchResult(
+                id="amadou",
+                type="candidate",
+                title="Amadou Ba",  # name fallback, no job title anywhere
+                score=0.5,
+                source_tool="searchCandidates",
+                data={"firstName": "Amadou", "lastName": "Ba", "skills": ["Java"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    assert [r.id for r in result.results] == ["amadou"]
+
+
+@pytest.mark.asyncio
+async def test_zero_skill_dotnet_profile_ranks_far_below_java_devs() -> None:
+    # The Rami Brahem case: a .NET fullstack in CIB with the right seniority
+    # but zero java/angular evidence used to reach ~90%; it must now sit far
+    # below a genuine java+angular developer.
+    state = GraphState(
+        original_query="développeur fullstack java angular en CIB, 6-16 ans",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java", "angular"],
+            constraints={
+                "role": "développeur fullstack",
+                "domain": "CIB",
+                "min_experience_years": "6",
+            },
+        ),
+        results=[
+            _result(
+                candidate_id="rami",
+                data={
+                    "firstName": "Rami",
+                    "lastName": "Brahem",
+                    "jobTitle": "Développeur Fullstack .NET",
+                    "skills": [".NET", "C#"],
+                    "summary": "Développeur .NET chez SGCIB, front office",
+                    "experienceMinYears": 8,
+                },
+            ),
+            _result(
+                candidate_id="javadev",
+                data={
+                    "jobTitle": "Développeur Fullstack Java",
+                    "skills": ["Java", "Angular"],
+                    "summary": "Développeur Java Angular chez SGCIB",
+                    "experienceMinYears": 7,
+                },
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    rami = next(r for r in result.results if r.id == "rami")
+    javadev = next(r for r in result.results if r.id == "javadev")
+    assert javadev.score > rami.score
+    assert rami.score < 0.5
+    assert rami.is_full_match is False
+    assert "java" in rami.unmet_criteria and "angular" in rami.unmet_criteria
+
+
+@pytest.mark.asyncio
+async def test_partial_skill_profile_earns_no_enrichment_boost() -> None:
+    # A profile missing one requested skill must not regain points from the
+    # technical-document tie-break (nor, in real mode, the semantic boost):
+    # with identical evidence, enriched and non-enriched partial profiles
+    # score the same.
+    def _partial(candidate_id: str, extra: dict) -> SearchResult:
+        return _result(
+            candidate_id=candidate_id,
+            data={
+                "jobTitle": "Développeur Angular",
+                "skills": ["Angular", "TypeScript"],
+                # Known experience on BOTH so neither takes the
+                # unverified-profile discount — isolates the tie-break.
+                "experienceMinYears": 5,
+                **extra,
+            },
+        )
+
+    state = GraphState(
+        original_query="développeur java angular",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java", "angular"],
+            constraints={"role": "développeur"},
+        ),
+        results=[
+            _partial("enriched", {"_enrichment_technical_document": {"summary": "profil angular"}}),
+            _partial("plain", {}),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    enriched = next(r for r in result.results if r.id == "enriched")
+    plain = next(r for r in result.results if r.id == "plain")
+    assert enriched.score == plain.score
+
+
+@pytest.mark.asyncio
+async def test_conflicting_metier_stays_visible_without_exclusive_flag() -> None:
+    # Without the exclusivity flag the BA keeps the visible-but-demoted
+    # behaviour: present, but strictly below the actual developer.
+    state = GraphState(
+        original_query="développeur java",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "développeur"},
+        ),
+        results=[
+            _result(
+                candidate_id="ba1",
+                data={"jobTitle": "Business Analyst", "skills": ["Java"]},
+            ),
+            _result(
+                candidate_id="dev1",
+                data={"jobTitle": "Développeur Java", "skills": ["Java"]},
+            ),
+        ],
+    )
+
+    result = await rank_candidates(state, _ctx(MockMcpClient()))
+
+    ids = [r.id for r in result.results]
+    assert ids.index("dev1") < ids.index("ba1")
+    dev = next(r for r in result.results if r.id == "dev1")
+    ba = next(r for r in result.results if r.id == "ba1")
+    assert dev.score > ba.score
+
+
+@pytest.mark.asyncio
 async def test_rank_promotes_candidates_with_matching_evidence() -> None:
     state = GraphState(
         original_query="dev java cib",
@@ -388,10 +603,11 @@ async def test_rank_scores_by_evidence_fraction_and_nulls_zero_evidence() -> Non
     result = await rank_candidates(state, _ctx(MockMcpClient()))
 
     by_id = {r.id: r.score for r in result.results}
-    # Full / half criteria coverage, then ×0.85: neither profile carries any
-    # corroborating data (no tech doc, no CV, no known experience figure).
+    # Full coverage ×0.85 (no corroborating data) for "2". Half coverage for
+    # "1" additionally takes the graduated hard-skill penalty (0.25 ** 0.5):
+    # 0.5 × 0.5 × 0.85 = 0.2125.
     assert by_id["2"] == 0.85
-    assert by_id["1"] == 0.425
+    assert by_id["1"] == 0.2125
     # C# developer has no evidence and is filtered out (zero-score removed when positives exist).
     assert "3" not in by_id
     # Best-evidenced first.
@@ -421,9 +637,9 @@ async def test_rank_flags_unverifiable_criteria_as_warning() -> None:
     assert "cib" in warn.message
     # 'java' WAS evidenced, so it must not be flagged as unverified.
     assert "java" not in warn.message
-    # Partial coverage never reads as a full-confidence match
-    # (0.5 coverage × 0.85 unverified-profile discount).
-    assert result.results[0].score == 0.425
+    # Partial coverage never reads as a full-confidence match: 0.5 coverage
+    # × 0.5 hard-skill penalty × 0.85 unverified-profile discount.
+    assert result.results[0].score == 0.2125
 
 
 @pytest.mark.asyncio

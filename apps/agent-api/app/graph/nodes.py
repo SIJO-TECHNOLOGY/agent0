@@ -2043,6 +2043,57 @@ def _domain_haystack(result: SearchResult) -> str:
     return f"{summary} {techdoc}".strip()
 
 
+# Job-title-like fields only — narrower than the domain surface (no
+# summary/description prose), because the ROLE dimension must reflect what the
+# candidate IS, not what their profile talks about.
+_ROLE_TITLE_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "jobTitle",
+    "headline",
+    "position",
+    "function",
+)
+
+
+def _role_haystack(result: SearchResult) -> str:
+    """Job-title surface for the role dimension of ``evidence_score``.
+
+    Collects the result title, Agent1's normalised title, title-like record
+    fields, and the technical-document title. May legitimately be empty —
+    the scorer then falls back to partial body-text credit and never applies
+    the role-conflict penalty on an unrecognised title.
+
+    ``result.title`` falls back to the person's name / email / id when no
+    job title exists (see ``_record_to_result``); those are excluded here so
+    they can never register as a métier — e.g. the surname "Ba" must not
+    read as Business Analyst.
+    """
+    parts: list[str] = []
+    title = (result.title or "").strip()
+    full_name = (candidate_full_name(result) or "").strip()
+    if (
+        title
+        and title.lower() != full_name.lower()
+        and "@" not in title
+        and not title.isdigit()
+    ):
+        parts.append(title)
+    norm_title = result.data.get(NORM_TITLE)
+    if isinstance(norm_title, str) and norm_title:
+        parts.append(norm_title)
+    flat = _flatten_for_domain(result.data)
+    for field in _ROLE_TITLE_FIELDS:
+        value = flat.get(field)
+        if isinstance(value, str):
+            parts.append(value)
+    techdoc = result.data.get(ENRICHMENT_TECH_DOC_KEY)
+    if isinstance(techdoc, dict):
+        td_title = techdoc.get("title")
+        if isinstance(td_title, str):
+            parts.append(td_title)
+    return " ".join(parts).lower()
+
+
 def _criteria_status(
     results: list[SearchResult],
     *,
@@ -2202,6 +2253,12 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     required_years = _int_or_none(intent.constraints.get("min_experience_years"))
     required_max_years = _int_or_none(intent.constraints.get("max_experience_years"))
     requested_name = (intent.constraints.get("name") or "").strip()
+    # "uniquement des développeurs" / "only developers": the LLM sets
+    # `role_exclusive`, and a candidate whose job title names a DIFFERENT
+    # métier is then excluded outright instead of merely demoted.
+    role_exclusive = str(
+        intent.constraints.get("role_exclusive") or ""
+    ).strip().lower() in ("true", "1", "yes", "oui")
     # The LLM may order the criteria by importance; the deterministic ranker
     # derives its weights from that ordering (off-vocabulary keys are dropped).
     priority = _ranking_priority(intent.constraints)
@@ -2210,9 +2267,12 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         return state
 
     # Collect semantic boosts asynchronously upfront when scorer is available.
+    # The role is part of the query terms so a profile whose text reads like
+    # the requested métier (e.g. "software engineer" for "développeur") gets
+    # semantic credit — not just skill/domain paraphrases.
     semantic_boosts: dict[str, float] = {}
-    if ctx.semantic_scorer is not None and (skills or domains):
-        query_terms = list(skills) + list(domains)
+    if ctx.semantic_scorer is not None and (skills or domains or role):
+        query_terms = list(skills) + list(domains) + ([role] if role else [])
         for result in state.results:
             if not result.source_tool.startswith("search"):
                 continue
@@ -2229,6 +2289,7 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
                 )
 
     re_ranked: list[SearchResult] = []
+    excluded_conflicts = 0
     for result in state.results:
         if not result.source_tool.startswith("search"):
             re_ranked.append(result)
@@ -2243,20 +2304,37 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             required_min_years=required_years,
             required_max_years=required_max_years,
             domain_haystack=_domain_haystack(result),
+            role_haystack=_role_haystack(result),
             requested_name=requested_name or None,
             candidate_name=candidate_full_name(result) if requested_name else None,
             priority=priority,
         )
+        role_conflict = "role_conflict" in hits
+        # The user asked for ONLY this métier: a title naming a different one
+        # is excluded outright (removed, not zero-scored, so the empty-results
+        # fallback can never resurface it).
+        if role_exclusive and role_conflict:
+            excluded_conflicts += 1
+            continue
+        # Boost eligibility: boosts only separate near-ties among profiles
+        # already evidencing EVERY requested technology and the right métier.
+        # Semantic similarity (e.g. .NET reading as "close to java") or a
+        # documented dossier must never refund a missing requested skill —
+        # that is how an angular-only profile used to reach ~95% on a
+        # "java angular" query.
+        boostable = not role_conflict and all(
+            f"skill:{s.lower()}" in hits for s in skills
+        )
         # Semantic similarity boost â€” additive, capped at 1.0. Applied before
         # the enrichment tie-break so the semantic signal is part of the base
         # score rather than a separate post-processing step.
-        if score > 0.0 and result.id in semantic_boosts:
+        if score > 0.0 and boostable and result.id in semantic_boosts:
             sem_boost = semantic_boosts[result.id] * ctx.semantic_boost_weight
             score = min(1.0, score + sem_boost)
         # Tiny tie-break for candidates enriched with a technical document or CV.
-        if score > 0.0 and ENRICHMENT_TECH_DOC_KEY in result.data:
+        if score > 0.0 and boostable and ENRICHMENT_TECH_DOC_KEY in result.data:
             score = min(1.0, score + 0.03)
-        if score > 0.0 and ENRICHMENT_RESUME_KEY in result.data:
+        if score > 0.0 and boostable and ENRICHMENT_RESUME_KEY in result.data:
             resume_text = _resume_haystack(result)
             if resume_text:
                 score = min(1.0, score + 0.02)
@@ -2329,6 +2407,8 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             "skills": list(skills),
             "domains": list(domains),
             "role": role,
+            "role_exclusive": role_exclusive,
+            "excluded_role_conflicts": excluded_conflicts,
             "required_years": required_years,
             "missing_criteria": list(missing),
             "visible_unverified_criteria": list(visible_only),
@@ -2892,6 +2972,7 @@ def _prerank_search_results(
             required_min_years=required_years,
             required_max_years=required_max_years,
             domain_haystack=_domain_haystack(result),
+            role_haystack=_role_haystack(result),
             requested_name=requested_name or None,
             candidate_name=candidate_full_name(result) if requested_name else None,
             priority=priority,

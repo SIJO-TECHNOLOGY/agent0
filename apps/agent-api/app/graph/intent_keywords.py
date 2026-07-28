@@ -31,6 +31,10 @@ SKILL_ALIASES: Final[dict[str, str]] = {
     "vue.js": "vue",
     "nextjs": "next.js",
     "nuxtjs": "nuxt.js",
+    # Related spellings that must still count now that skill matching is
+    # token-based (never substrings — "java" must not match "javascript").
+    "angularjs": "angular",
+    "javafx": "java",
     # Cloud / infra
     "k8s": "kubernetes",
     "kube": "kubernetes",

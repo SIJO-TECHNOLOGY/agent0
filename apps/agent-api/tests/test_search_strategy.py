@@ -17,6 +17,7 @@ from app.services.search_strategy import (
     evidence_score,
     infer_years_from_title,
     name_match_score,
+    role_families,
     safe_keywords,
 )
 
@@ -440,21 +441,37 @@ def test_evidence_score_partial_name_is_not_a_hit() -> None:
 
 
 def test_priority_ordering_is_generic_over_any_dimension() -> None:
-    # Two candidates: A evidences the skill only, B the domain only. Whichever
+    # Two candidates: A evidences the role only, B the domain only. Whichever
     # dimension the LLM ranks higher should win — proving the ordering is
-    # generic, not name-specific.
-    a_hay = "java engineer"  # skill yes, domain no
-    b_hay = "consultant at sgcib"  # domain yes, skill no
-    kw = dict(skills=("java",), domains=("cib",), role=None,
+    # generic, not name-specific. (Role/domain are used here because a
+    # candidate missing EVERY requested skill now takes the no-skill penalty,
+    # which rightly dominates any priority re-weighting.)
+    a_hay = "software developer"  # role yes, domain no
+    b_hay = "consultant at sgcib"  # domain yes, role no
+    kw = dict(skills=(), domains=("cib",), role="developer",
               candidate_min_years=None, required_min_years=None)
 
-    a_skill, _ = evidence_score(a_hay, **kw, priority=("skill", "domain"))
-    b_skill, _ = evidence_score(b_hay, **kw, priority=("skill", "domain"))
-    assert a_skill > b_skill  # skill ranked first -> skill candidate wins
+    a_role, _ = evidence_score(a_hay, **kw, priority=("role", "domain"))
+    b_role, _ = evidence_score(b_hay, **kw, priority=("role", "domain"))
+    assert a_role > b_role  # role ranked first -> role candidate wins
 
-    a_domain, _ = evidence_score(a_hay, **kw, priority=("domain", "skill"))
-    b_domain, _ = evidence_score(b_hay, **kw, priority=("domain", "skill"))
+    a_domain, _ = evidence_score(a_hay, **kw, priority=("domain", "role"))
+    b_domain, _ = evidence_score(b_hay, **kw, priority=("domain", "role"))
     assert b_domain > a_domain  # domain ranked first -> domain candidate wins
+
+
+def test_no_skill_penalty_dominates_priority_reweighting() -> None:
+    # Even when the LLM ranks domain above skill, a candidate with ZERO
+    # requested-skill evidence must not overtake one that has the skill.
+    kw = dict(skills=("java",), domains=("cib",), role=None,
+              candidate_min_years=None, required_min_years=None)
+    with_skill, _ = evidence_score(
+        "java engineer", **kw, priority=("domain", "skill")
+    )
+    zero_skill, _ = evidence_score(
+        "consultant at sgcib", **kw, priority=("domain", "skill")
+    )
+    assert with_skill > zero_skill
 
 
 def test_priority_lifts_exact_name_over_perfect_criteria() -> None:
@@ -684,3 +701,377 @@ def test_ladder_empty_when_no_keywords_field() -> None:
     # Schema without a keywords field -> nothing recall-able to build.
     passes = build_recall_passes(anchors, schema_fields={"page"})
     assert passes == []
+
+
+# ---------------------------------------------------------------------------
+# role_families — canonical métier detection on job titles
+# ---------------------------------------------------------------------------
+
+
+def test_role_families_accent_and_language_tolerant() -> None:
+    assert "developer" in role_families("Développeur Fullstack Java")
+    assert "developer" in role_families("fullstack developer")
+    assert "analyst" in role_families("Business Analyst")
+    assert "analyst" in role_families("Analyste métier AMOA")
+    assert "manager" in role_families("Chef de projet MOE")
+
+
+def test_role_families_recognises_ba_abbreviation_in_title() -> None:
+    # BoondManager titles commonly abbreviate Business Analyst as "BA"
+    # ("BA Finance de Marché ...") — that must register as analyst.
+    families = role_families("BA Finance de Marché en Banque d'investissements")
+    assert "analyst" in families
+    assert "developer" not in families
+
+
+def test_role_families_token_based_devops_is_not_developer() -> None:
+    families = role_families("Ingénieur DevOps")
+    assert "devops" in families
+    assert "developer" not in families
+
+
+def test_role_families_unknown_or_generic_title_maps_to_nothing() -> None:
+    # Generic ESN titles must never be classified (they can be anything),
+    # so they can never trigger the conflict penalty.
+    assert role_families("Consultant technique") == frozenset()
+    assert role_families("Architecte solutions") == frozenset()
+    assert role_families("") == frozenset()
+    assert role_families("Jean Dupont") == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# evidence_score — role scored on the job-title surface + conflict penalty
+# ---------------------------------------------------------------------------
+
+
+def test_role_title_match_earns_full_credit_via_family() -> None:
+    # Title says "Développeur Java" — same family as the requested
+    # "fullstack developer", so full role credit even though the exact
+    # words differ.
+    score, hits = evidence_score(
+        "java spring angular",
+        skills=(),
+        domains=(),
+        role="fullstack developer",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="développeur java",
+    )
+    assert "role" in hits
+    assert score == 1.0
+
+
+def test_role_only_in_body_earns_partial_credit() -> None:
+    # The CV merely *mentions* the role ("coordination avec les
+    # développeurs") and the title says nothing recognisable — partial
+    # credit only.
+    partial, hits = evidence_score(
+        "coordination avec les développeurs java angular",
+        skills=(),
+        domains=(),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="consultant",
+    )
+    full, _ = evidence_score(
+        "java angular",
+        skills=(),
+        domains=(),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="développeur fullstack",
+    )
+    assert "role" in hits  # present, just not title-confirmed
+    assert 0.0 < partial < full
+
+
+def test_conflicting_title_takes_strong_penalty() -> None:
+    # Same evidence, one title says Business Analyst, the other Développeur:
+    # the BA must score well below the developer on a developer query.
+    ba, ba_hits = evidence_score(
+        "java angular sgcib front office",
+        skills=("java", "angular"),
+        domains=("cib",),
+        role="développeur fullstack",
+        candidate_min_years=8,
+        required_min_years=5,
+        domain_haystack="business analyst sgcib front office",
+        role_haystack="business analyst",
+    )
+    dev, _ = evidence_score(
+        "java angular sgcib front office",
+        skills=("java", "angular"),
+        domains=("cib",),
+        role="développeur fullstack",
+        candidate_min_years=8,
+        required_min_years=5,
+        domain_haystack="développeur fullstack sgcib front office",
+        role_haystack="développeur fullstack",
+    )
+    assert "role" not in ba_hits
+    assert dev == 1.0
+    assert ba < dev * 0.5
+
+
+def test_ba_in_cib_no_longer_outranks_fullstack_dev_outside_cib() -> None:
+    # The original bug: a BA at SG CIB whose CV mentions Java/Angular used
+    # to outrank a genuine fullstack developer without the CIB domain.
+    ba_in_cib, _ = evidence_score(
+        "business analyst specifications java angular recette",
+        skills=("java", "angular"),
+        domains=("cib",),
+        role="développeur fullstack",
+        candidate_min_years=8,
+        required_min_years=5,
+        domain_haystack="business analyst sgcib front office",
+        role_haystack="business analyst",
+    )
+    dev_no_cib, _ = evidence_score(
+        "développeur fullstack java angular spring",
+        skills=("java", "angular"),
+        domains=("cib",),
+        role="développeur fullstack",
+        candidate_min_years=6,
+        required_min_years=5,
+        domain_haystack="développeur fullstack",
+        role_haystack="développeur fullstack",
+    )
+    assert dev_no_cib > ba_in_cib
+
+
+def test_hybrid_title_is_not_penalised() -> None:
+    # "Développeur / Business Analyst" shares the developer family with the
+    # request — full credit, no conflict.
+    score, hits = evidence_score(
+        "java angular",
+        skills=(),
+        domains=(),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="développeur / business analyst",
+    )
+    assert "role" in hits
+    assert score == 1.0
+
+
+def test_unrecognised_title_is_never_penalised() -> None:
+    # An empty or out-of-vocabulary title cannot conflict; with no body
+    # mention either, the role dimension simply scores 0 (no multiplier).
+    score, hits = evidence_score(
+        "java angular",
+        skills=("java",),
+        domains=(),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="",
+    )
+    assert "role" not in hits
+    # skill 0.4 evidenced, role 0.35 not: 0.4 / 0.75 — no conflict multiplier.
+    assert score == pytest.approx(0.4 / 0.75)
+
+
+def test_missing_role_costs_more_than_missing_domain() -> None:
+    # Matching hierarchy: the requested métier is an identity criterion and
+    # outweighs the business domain — missing the role must cost strictly
+    # more than missing the domain, all else equal.
+    missing_role, _ = evidence_score(
+        "java sgcib",
+        skills=("java",),
+        domains=("cib",),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        domain_haystack="java sgcib",
+        role_haystack="",
+    )
+    missing_domain, _ = evidence_score(
+        "java développeur",
+        skills=("java",),
+        domains=("cib",),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        domain_haystack="java développeur",
+        role_haystack="développeur",
+    )
+    assert missing_role < missing_domain
+
+
+def test_javascript_never_credits_java() -> None:
+    # The 95%-without-java case: "java" used to substring-match inside
+    # "javascript", crediting java to pure frontend profiles.
+    _, hits = evidence_score(
+        "développeur javascript typescript angular",
+        skills=("java", "angular"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:angular" in hits
+    assert "skill:java" not in hits
+
+
+def test_versioned_and_related_spellings_still_credit_the_skill() -> None:
+    # Token + numeric-suffix matching keeps legitimate variants working.
+    for hay in ("java8 spring", "java 11 backend", "javafx developer"):
+        _, hits = evidence_score(
+            hay,
+            skills=("java",),
+            domains=(),
+            role=None,
+            candidate_min_years=None,
+            required_min_years=None,
+        )
+        assert "skill:java" in hits, hay
+    # angularjs still counts as angular (alias, not substring).
+    _, hits = evidence_score(
+        "angularjs frontend",
+        skills=("angular",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:angular" in hits
+    # Symbolic terms keep substring semantics.
+    _, hits = evidence_score(
+        "c# .net core",
+        skills=("c#",),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skill:c#" in hits
+
+
+def test_zero_requested_skills_cannot_ride_other_criteria_high() -> None:
+    # The Rami case: a pure .NET profile matching role+domain+seniority but
+    # NONE of the requested technologies must be strongly demoted, never
+    # read as a near-full match.
+    dotnet, hits = evidence_score(
+        "développeur fullstack .net c# sgcib front office",
+        skills=("java", "angular"),
+        domains=("cib",),
+        role="développeur fullstack",
+        candidate_min_years=8,
+        required_min_years=5,
+        domain_haystack="développeur fullstack .net sgcib front office",
+        role_haystack="développeur fullstack .net",
+    )
+    java_dev, _ = evidence_score(
+        "développeur fullstack java angular sgcib",
+        skills=("java", "angular"),
+        domains=("cib",),
+        role="développeur fullstack",
+        candidate_min_years=8,
+        required_min_years=5,
+        domain_haystack="développeur fullstack sgcib",
+        role_haystack="développeur fullstack",
+    )
+    assert "skills_missing" in hits
+    assert java_dev == 1.0
+    assert dotnet < 0.35
+
+
+def test_missing_one_hard_skill_halves_the_score() -> None:
+    # Requested technologies are HARD criteria: one of two missing means
+    # pro-rated credit (0.5) times the graduated penalty (0.25 ** 0.5 = 0.5).
+    score, hits = evidence_score(
+        "java spring",
+        skills=("java", "angular"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "skills_missing" not in hits  # java IS evidenced
+    assert score == pytest.approx(0.25)
+
+
+def test_skill_penalty_is_graduated_with_requested_count() -> None:
+    # Missing 1 of 5 requested skills is a gentle drop; missing 1 of 2 is a
+    # strong one; missing all is a collapse — the penalty scales with the
+    # missing share, never all-or-nothing.
+    one_of_five, _ = evidence_score(
+        "java spring kafka docker",
+        skills=("java", "spring", "kafka", "docker", "angular"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    one_of_two, _ = evidence_score(
+        "java spring",
+        skills=("java", "angular"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert one_of_five > one_of_two
+    # 4/5 evidenced: 0.8 * 0.25**0.2 ≈ 0.606 — demoted but not nuked.
+    assert one_of_five == pytest.approx(0.8 * 0.25 ** 0.2)
+
+
+def test_missing_role_modifier_costs_nothing() -> None:
+    # "développeur java mais pas fullstack": the modifier is NOT a hard
+    # criterion — same métier family in the title earns full role credit.
+    score, hits = evidence_score(
+        "java spring backend",
+        skills=("java",),
+        domains=(),
+        role="développeur fullstack",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="développeur java",
+    )
+    assert "role" in hits
+    assert score == 1.0
+
+
+def test_role_conflict_marker_exposed_in_hits() -> None:
+    # Callers (ranking) must be able to see the conflict to act on it —
+    # e.g. exclude the candidate when the user asked for ONLY that métier.
+    _, hits = evidence_score(
+        "java angular",
+        skills=(),
+        domains=(),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="business analyst",
+    )
+    assert "role_conflict" in hits
+    assert "role" not in hits
+    # No conflict -> no marker.
+    _, clean_hits = evidence_score(
+        "java angular",
+        skills=(),
+        domains=(),
+        role="développeur",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="développeur java",
+    )
+    assert "role_conflict" not in clean_hits
+
+
+def test_role_without_role_haystack_keeps_historical_behaviour() -> None:
+    # Callers that pass no title surface (e.g. criteria-status messaging)
+    # keep the old whole-haystack semantics: full credit on body presence.
+    score, hits = evidence_score(
+        "coordination avec les developpeur java",
+        skills=(),
+        domains=(),
+        role="developpeur",
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert "role" in hits
+    assert score == 1.0
