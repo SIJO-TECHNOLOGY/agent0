@@ -870,14 +870,14 @@ def test_unrecognised_title_is_never_penalised() -> None:
         role_haystack="",
     )
     assert "role" not in hits
-    # skill 0.4 evidenced, role 0.3 not: 0.4 / 0.7 — no conflict multiplier.
-    assert score == pytest.approx(0.4 / 0.7)
+    # skill 0.4 evidenced, role 0.35 not: 0.4 / 0.75 — no conflict multiplier.
+    assert score == pytest.approx(0.4 / 0.75)
 
 
-def test_role_weight_matches_domain_weight() -> None:
-    # An explicitly requested métier is as structuring as a stated business
-    # context: missing the role must cost exactly as much as missing the
-    # domain, all else equal.
+def test_missing_role_costs_more_than_missing_domain() -> None:
+    # Matching hierarchy: the requested métier is an identity criterion and
+    # outweighs the business domain — missing the role must cost strictly
+    # more than missing the domain, all else equal.
     missing_role, _ = evidence_score(
         "java sgcib",
         skills=("java",),
@@ -898,7 +898,7 @@ def test_role_weight_matches_domain_weight() -> None:
         domain_haystack="java développeur",
         role_haystack="développeur",
     )
-    assert missing_role == pytest.approx(missing_domain)
+    assert missing_role < missing_domain
 
 
 def test_javascript_never_credits_java() -> None:
@@ -979,8 +979,9 @@ def test_zero_requested_skills_cannot_ride_other_criteria_high() -> None:
     assert dotnet < 0.35
 
 
-def test_partial_skill_coverage_takes_no_penalty() -> None:
-    # One of two requested skills present: pro-rated credit, no multiplier.
+def test_missing_one_hard_skill_halves_the_score() -> None:
+    # Requested technologies are HARD criteria: one of two missing means
+    # pro-rated credit (0.5) times the graduated penalty (0.25 ** 0.5 = 0.5).
     score, hits = evidence_score(
         "java spring",
         skills=("java", "angular"),
@@ -989,8 +990,49 @@ def test_partial_skill_coverage_takes_no_penalty() -> None:
         candidate_min_years=None,
         required_min_years=None,
     )
-    assert "skills_missing" not in hits
-    assert score == pytest.approx(0.5)
+    assert "skills_missing" not in hits  # java IS evidenced
+    assert score == pytest.approx(0.25)
+
+
+def test_skill_penalty_is_graduated_with_requested_count() -> None:
+    # Missing 1 of 5 requested skills is a gentle drop; missing 1 of 2 is a
+    # strong one; missing all is a collapse — the penalty scales with the
+    # missing share, never all-or-nothing.
+    one_of_five, _ = evidence_score(
+        "java spring kafka docker",
+        skills=("java", "spring", "kafka", "docker", "angular"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    one_of_two, _ = evidence_score(
+        "java spring",
+        skills=("java", "angular"),
+        domains=(),
+        role=None,
+        candidate_min_years=None,
+        required_min_years=None,
+    )
+    assert one_of_five > one_of_two
+    # 4/5 evidenced: 0.8 * 0.25**0.2 ≈ 0.606 — demoted but not nuked.
+    assert one_of_five == pytest.approx(0.8 * 0.25 ** 0.2)
+
+
+def test_missing_role_modifier_costs_nothing() -> None:
+    # "développeur java mais pas fullstack": the modifier is NOT a hard
+    # criterion — same métier family in the title earns full role credit.
+    score, hits = evidence_score(
+        "java spring backend",
+        skills=("java",),
+        domains=(),
+        role="développeur fullstack",
+        candidate_min_years=None,
+        required_min_years=None,
+        role_haystack="développeur java",
+    )
+    assert "role" in hits
+    assert score == 1.0
 
 
 def test_role_conflict_marker_exposed_in_hits() -> None:

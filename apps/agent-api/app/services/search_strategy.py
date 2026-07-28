@@ -415,16 +415,18 @@ def infer_years_from_title(title_haystack: str) -> int | None:
 class EvidenceWeights:
     """Relative importance of each criterion dimension.
 
-    The role dimension only exists when the query explicitly requested a
-    role, so it carries the same weight as the domain — a stated métier is
-    as structuring as a stated business context (missing it must cost more
-    than a mere modifier).
+    Ordering encodes the agreed matching hierarchy: requested métier and
+    technologies are the identity/hard criteria (role conflicts and missing
+    skills additionally take multiplicative penalties), the business domain
+    qualifies, and seniority — usually DERIVED from the query (graduation
+    window → experience bounds) — weighs least. ``name`` stays top-tier
+    because a named person is the strongest possible request.
     """
 
     skill: float = 0.4
+    role: float = 0.35
     domain: float = 0.3
-    seniority: float = 0.3
-    role: float = 0.3
+    seniority: float = 0.25
     name: float = 0.4
 
 
@@ -446,13 +448,14 @@ _ROLE_CONFLICT_PENALTY: Final[float] = 0.4
 # partial credit used when seniority is inferred from the title.
 _ROLE_BODY_CREDIT: Final[float] = 0.5
 
-# Multiplier applied when the query names concrete skills and the candidate
-# evidences NONE of them (e.g. a pure .NET profile on a "java angular"
-# query). Matching the surrounding criteria (role/domain/seniority) without
-# a single requested technology must never read as a near-full match.
-# Partial skill coverage (one of two skills) is already pro-rated and takes
-# no penalty.
-_NO_SKILL_PENALTY: Final[float] = 0.4
+# Base of the graduated hard-skill penalty. Requested technologies are HARD
+# criteria: the score is multiplied by ``_SKILL_MISS_BASE ** (missing /
+# requested)``, so missing one of two skills halves the score (0.25**0.5),
+# missing one of five costs ~×0.76, and evidencing none collapses it to
+# ×0.25 (e.g. a pure .NET profile on a "java angular" query). A soft
+# modifier miss (e.g. "développeur java" without the word "fullstack") is
+# NOT a skill — role families absorb it at no cost.
+_SKILL_MISS_BASE: Final[float] = 0.25
 
 # Canonical role families used by the role dimension. Keywords are matched
 # token-wise (never substrings, so "devops" can't read as "dev") against an
@@ -670,17 +673,17 @@ def evidence_score(
     dims: list[tuple[str, float, float]] = []
     hits: set[str] = set()
 
-    skills_missing = False
+    skill_miss_fraction = 0.0
     norm_skills = [s.lower() for s in skills if s and s.strip()]
     if norm_skills:
         found = [s for s in norm_skills if _term_present(s, hay)]
         for skill in found:
             hits.add(f"skill:{skill}")
         if not found:
-            skills_missing = True
-            # Marker key (not a criterion) — callers use it to withhold
-            # score boosts from a profile with zero requested-tech evidence.
+            # Marker key (not a criterion) — callers use it to spot a
+            # profile with zero requested-tech evidence.
             hits.add("skills_missing")
+        skill_miss_fraction = 1.0 - len(found) / len(norm_skills)
         dims.append(("skill", weights.skill, len(found) / len(norm_skills)))
 
     norm_domains = [d for d in domains if d and d.strip()]
@@ -804,9 +807,10 @@ def evidence_score(
     # demoted, not excluded.
     if role_conflict:
         score *= _ROLE_CONFLICT_PENALTY
-    # A candidate evidencing NONE of the requested technologies (e.g. a pure
-    # .NET profile on a "java angular" query) cannot ride role/domain/
-    # seniority to a near-full match.
-    if skills_missing:
-        score *= _NO_SKILL_PENALTY
+    # Requested technologies are HARD criteria: each missing one drags the
+    # score down exponentially (one of two missing halves it; none found
+    # collapses it), so a profile can never ride role/domain/seniority to a
+    # near-full match while lacking a required tech.
+    if skill_miss_fraction > 0.0:
+        score *= _SKILL_MISS_BASE ** skill_miss_fraction
     return score, hits

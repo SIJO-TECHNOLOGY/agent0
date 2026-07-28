@@ -603,10 +603,11 @@ async def test_rank_scores_by_evidence_fraction_and_nulls_zero_evidence() -> Non
     result = await rank_candidates(state, _ctx(MockMcpClient()))
 
     by_id = {r.id: r.score for r in result.results}
-    # Full / half criteria coverage, then ×0.85: neither profile carries any
-    # corroborating data (no tech doc, no CV, no known experience figure).
+    # Full coverage ×0.85 (no corroborating data) for "2". Half coverage for
+    # "1" additionally takes the graduated hard-skill penalty (0.25 ** 0.5):
+    # 0.5 × 0.5 × 0.85 = 0.2125.
     assert by_id["2"] == 0.85
-    assert by_id["1"] == 0.425
+    assert by_id["1"] == 0.2125
     # C# developer has no evidence and is filtered out (zero-score removed when positives exist).
     assert "3" not in by_id
     # Best-evidenced first.
@@ -636,9 +637,9 @@ async def test_rank_flags_unverifiable_criteria_as_warning() -> None:
     assert "cib" in warn.message
     # 'java' WAS evidenced, so it must not be flagged as unverified.
     assert "java" not in warn.message
-    # Partial coverage never reads as a full-confidence match
-    # (0.5 coverage × 0.85 unverified-profile discount).
-    assert result.results[0].score == 0.425
+    # Partial coverage never reads as a full-confidence match: 0.5 coverage
+    # × 0.5 hard-skill penalty × 0.85 unverified-profile discount.
+    assert result.results[0].score == 0.2125
 
 
 @pytest.mark.asyncio
