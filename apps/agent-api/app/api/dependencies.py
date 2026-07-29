@@ -6,6 +6,7 @@ from fastapi import Depends, Request
 
 from app.config import Settings, get_settings
 from app.mcp.client import McpClient
+from app.services.llm_planner import LlmPlanner
 from app.services.search_service import SearchService
 
 
@@ -45,6 +46,22 @@ def get_search_service(
     if isinstance(override, SearchService):
         return override
     llm_planner = getattr(request.app.state, "llm_planner", None)
+    return build_search_service(mcp_client, settings, llm_planner=llm_planner)
+
+
+def build_search_service(
+    mcp_client: McpClient,
+    settings: Settings,
+    *,
+    llm_planner: LlmPlanner | None = None,
+) -> SearchService:
+    """Single construction site for `SearchService` from settings.
+
+    Used by both the `Depends` chain (`get_search_service`) and the SSE
+    route, which resolves the MCP client itself to keep its stream-error
+    contract. Add new `SearchService` parameters here, never at the call
+    sites, so the JSON and streaming paths cannot diverge.
+    """
     semantic_scorer = None
     if settings.enable_semantic_scoring and settings.openai_api_key:
         from app.services.semantic_scorer import get_semantic_scorer

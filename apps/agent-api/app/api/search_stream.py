@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.dependencies import McpClientUnavailableError
+from app.api.dependencies import McpClientUnavailableError, build_search_service
 from app.config import Settings, get_settings
 from app.models.api import SearchRequest
 from app.services import conversation_memory as memory
@@ -262,18 +262,7 @@ def _build_service(
         return None
 
     llm_planner = getattr(request.app.state, "llm_planner", None)
-    return SearchService(
-        mcp_client=mcp_client,
-        max_replan_attempts=settings.max_replan_attempts,
-        mcp_max_retries=settings.mcp_max_retries,
-        llm_planner=llm_planner,
-        max_plan_steps=settings.llm_max_plan_steps,
-        use_llm_replan=settings.use_llm_replan,
-        replan_skip_score=settings.replan_skip_score,
-        min_match_score=settings.min_match_score,
-        agent_trace=settings.agent_trace != "off",
-        agent_trace_verbose=settings.agent_trace == "verbose",
-    )
+    return build_search_service(mcp_client, settings, llm_planner=llm_planner)
 
 
 async def _emit_mcp_unavailable(
