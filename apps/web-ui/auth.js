@@ -1,5 +1,14 @@
+import { InteractionRequiredAuthError, PublicClientApplication } from "@azure/msal-browser";
 import { DEV_MODE } from "./config.js";
 import { loginRequest, msalConfig } from "./msalConfig.js";
+
+// MSAL is bundled from npm (@azure/msal-browser): Microsoft retired the
+// alcdn.msauth.net CDN, so the library must ship with the app. The v3+
+// API requires an async initialize() before any other call — every
+// entry point that talks to MSAL awaits ensureInitialized() first.
+// getCurrentUser()/isAuthenticated() stay synchronous: the app always
+// awaits handleRedirect() during startup, so by the time they run the
+// client is initialized.
 
 // Empty identity: the UI falls back to the generic i18n labels
 // (auth.default_user / app.user_label) instead of a personal name.
@@ -10,19 +19,27 @@ const DEV_USER = {
 
 let activeAccount = null;
 let publicClientApplication = null;
+let initializePromise = null;
 
 function getMsalClient() {
   if (DEV_MODE) return null;
 
-  if (!window.msal) {
-    throw new Error("MSAL.js n'est pas disponible.");
-  }
-
   if (!publicClientApplication) {
-    publicClientApplication = new window.msal.PublicClientApplication(msalConfig);
+    publicClientApplication = new PublicClientApplication(msalConfig);
   }
 
   return publicClientApplication;
+}
+
+async function ensureInitialized() {
+  const client = getMsalClient();
+
+  if (!initializePromise) {
+    initializePromise = client.initialize();
+  }
+
+  await initializePromise;
+  return client;
 }
 
 function setActiveAccount(account) {
@@ -39,7 +56,7 @@ export async function handleRedirect() {
     return DEV_USER;
   }
 
-  const client = getMsalClient();
+  const client = await ensureInitialized();
   const response = await client.handleRedirectPromise();
 
   if (response?.account) {
@@ -62,18 +79,20 @@ export async function login() {
     return DEV_USER;
   }
 
-  await getMsalClient().loginRedirect(loginRequest);
+  const client = await ensureInitialized();
+  await client.loginRedirect(loginRequest);
   return null;
 }
 
-export function logout() {
+export async function logout() {
   if (DEV_MODE) {
     setActiveAccount(DEV_USER);
-    return Promise.resolve();
+    return;
   }
 
   const account = getCurrentUser();
-  return getMsalClient().logoutRedirect({ account });
+  const client = await ensureInitialized();
+  await client.logoutRedirect({ account });
 }
 
 export function getCurrentUser() {
@@ -97,16 +116,18 @@ export async function getAccessToken() {
     throw new Error("Utilisateur non authentifié.");
   }
 
+  const client = await ensureInitialized();
+
   try {
-    const response = await getMsalClient().acquireTokenSilent({
+    const response = await client.acquireTokenSilent({
       ...loginRequest,
       account,
     });
 
     return response.accessToken;
   } catch (error) {
-    if (error instanceof window.msal.InteractionRequiredAuthError) {
-      await getMsalClient().acquireTokenRedirect(loginRequest);
+    if (error instanceof InteractionRequiredAuthError) {
+      await client.acquireTokenRedirect(loginRequest);
       return null;
     }
 

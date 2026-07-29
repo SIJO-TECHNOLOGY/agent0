@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "@azure/msal-browser": "^5.17.3"
   }
 }
