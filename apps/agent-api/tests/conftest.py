@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -12,6 +13,20 @@ from app.config import get_settings
 from app.main import create_app
 from app.mcp.mock_client import MockMcpClient
 from app.models.api import McpDependencyStatus
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _test_env() -> None:
+    """Shield the suite from the developer's local .env.
+
+    A real .env with ENABLE_AUTH=true would 401 every unauthenticated
+    test request (auth behaviour has its own tests with explicit
+    settings). Env vars take precedence over .env in pydantic-settings,
+    and the cache is cleared in case get_settings() already ran at
+    import time.
+    """
+    os.environ["ENABLE_AUTH"] = "false"
+    get_settings.cache_clear()
 
 
 @pytest.fixture()

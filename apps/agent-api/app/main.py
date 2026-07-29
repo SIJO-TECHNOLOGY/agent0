@@ -249,12 +249,11 @@ def create_app() -> FastAPI:
     app.include_router(mcp_debug_router, dependencies=protected)
     app.include_router(chat_router, dependencies=protected)
 
+    # Origins come from CORS_ALLOWED_ORIGINS (comma-separated) so the
+    # deployed web-ui origin can be added without a code change.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5500",
-            "http://127.0.0.1:5500",
-        ],
+        allow_origins=get_settings().cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

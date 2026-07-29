@@ -37,6 +37,16 @@ class Settings(BaseSettings):
         ),
     )
 
+    cors_allowed_origins: str = Field(
+        default="http://localhost:5500,http://127.0.0.1:5500",
+        description=(
+            "Comma-separated list of origins allowed by CORS (env "
+            "CORS_ALLOWED_ORIGINS). Defaults cover local development; add "
+            "the deployed web-ui origin(s) in production, e.g. "
+            "'http://localhost:5500,https://assistant.sijo.fr'."
+        ),
+    )
+
     mcp_server_url: str = Field(default="http://localhost:8001/mcp")
     mcp_timeout_seconds: float = Field(default=15.0, ge=0.1)
     mcp_max_retries: int = Field(default=2, ge=0, le=5)
@@ -239,6 +249,16 @@ class Settings(BaseSettings):
             "Set empty to disable."
         ),
     )
+
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """`cors_allowed_origins` split into a clean list of origins."""
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache(maxsize=1)
