@@ -251,7 +251,7 @@ async def unavailable_stream_client() -> AsyncIterator[AsyncClient]:
 
 @pytest_asyncio.fixture()
 async def deterministic_stream_client() -> AsyncIterator[AsyncClient]:
-    # No LLM planner â€” exercises deterministic graph's emission points.
+    # No LLM planner — exercises deterministic graph's emission points.
     app = _make_app(
         planner=None,
         mcp_tools=[],  # default MockMcpClient catalogue overridden to empty
@@ -412,7 +412,7 @@ async def test_stream_llm_path_emits_full_event_sequence(
     ):
         assert required in types, f"missing {required!r} in {types}"
 
-    # tools_discovered carries just (name, input_schema_keys) â€” no raw schema.
+    # tools_discovered carries just (name, input_schema_keys) — no raw schema.
     tools_event = next(e for e in events if e["type"] == "tools_discovered")
     for tool in tools_event["data"]["tools"]:
         assert set(tool.keys()) == {"name", "input_schema_keys"}
@@ -801,7 +801,7 @@ async def test_message_says_no_candidates_only_when_search_actually_ran(
 
 
 _UNMAPPABLE_SEARCH_RECORDS = [
-    # Record has no `id`, no `attributes.id`, no candidateId â€” exactly
+    # Record has no `id`, no `attributes.id`, no candidateId — exactly
     # the failure mode the production bug exhibited.
     {
         "type": "candidate",
@@ -902,8 +902,8 @@ async def test_normal_stream_does_not_include_result_preview(
         )
     # Defence in depth: raw MCP record VALUES must not appear in the
     # observability events. The final_response event legitimately
-    # contains candidate values (full_name, location, etc.) â€” those are
-    # the public contract â€” so we scope this check to the observability
+    # contains candidate values (full_name, location, etc.) — those are
+    # the public contract — so we scope this check to the observability
     # surface only.
     observability_text = repr(
         [
@@ -914,7 +914,7 @@ async def test_normal_stream_does_not_include_result_preview(
         ]
     )
     # Key names like "firstName" appear inside result_shape.nested_keys
-    # by design â€” they are schema-level structural metadata, not values.
+    # by design — they are schema-level structural metadata, not values.
     for value in ("Sarah", "Martin", "Paris", "France"):
         assert value not in observability_text, (
             f"raw MCP value {value!r} must not surface in observability events"
@@ -975,7 +975,7 @@ _wrapper_calls: list[tuple[str, dict]] = []
 async def _real_shape_search_handler(
     inputs: dict[str, object],
 ) -> dict[str, object]:
-    """Returns the production envelope: NOT a list â€” a wrapper dict."""
+    """Returns the production envelope: NOT a list — a wrapper dict."""
     _wrapper_calls.append(("searchCandidates", dict(inputs)))
     return _REAL_SHAPE_SEARCH_PAYLOAD
 

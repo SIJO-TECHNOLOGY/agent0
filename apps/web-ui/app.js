@@ -408,7 +408,7 @@ function renderConversationList() {
     remove.type = "button";
     remove.className = "delete-conversation";
     remove.setAttribute("aria-label", t("conversations.delete_aria", { title: title.textContent }));
-    remove.textContent = "Ã—";
+    remove.textContent = "×";
     remove.addEventListener("click", (event) => {
       event.stopPropagation();
       removeConversation(conversation.id);
@@ -1162,7 +1162,7 @@ function renderThinking() {
     if (!step) return;
     step.li.classList.remove("active");
     step.li.classList.add("done");
-    step.icon.textContent = "âœ“";
+    step.icon.textContent = "✓";
   }
 
   return {
@@ -1184,7 +1184,7 @@ function renderThinking() {
 
       li.append(icon, stepText);
       // Optional dynamic detail (the agent's actual reasoning) under the
-      // localized step label â€” secondary, muted.
+      // localized step label — secondary, muted.
       if (detail) {
         const stepDetail = document.createElement("span");
         stepDetail.className = "step-detail";
@@ -1207,7 +1207,7 @@ function renderThinking() {
 function clip(text, max = 160) {
   if (!text) return "";
   const flat = String(text).replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}â€¦` : flat;
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
 function planSearchReason(data) {
@@ -1584,7 +1584,7 @@ function renderExperiences(experiences, limit = 3) {
     const item = document.createElement("li");
 
     const main = document.createElement("strong");
-    main.textContent = [experience.title, experience.company].filter(Boolean).join(" Â· ") || t("candidate.sections.experience_item_fallback");
+    main.textContent = [experience.title, experience.company].filter(Boolean).join(" · ") || t("candidate.sections.experience_item_fallback");
     item.appendChild(main);
 
     if (experience.period) {
@@ -1719,8 +1719,8 @@ function createSkillElements(skills, highlights = []) {
 function isAvailableSoon(candidate) {
   const availability = String(candidate.availability || "").toLowerCase();
   if (!availability) return false;
-  if (availability.includes("prÃ©avis") || availability.includes("preavis")) return false;
-  return availability.includes("disponible") || availability.includes("immÃ©diat") || availability.includes("immediat");
+  if (availability.includes("préavis") || availability.includes("preavis")) return false;
+  return availability.includes("disponible") || availability.includes("immédiat") || availability.includes("immediat");
 }
 
 function emptyFragment() {
@@ -1737,7 +1737,7 @@ function formatExperience(years) {
 }
 
 // Experience display value: prefer the numeric years, otherwise fall back to
-// the BoondManager experience-level band label (e.g. "10 Ã  15 ans"), which is
+// the BoondManager experience-level band label (e.g. "10 à 15 ans"), which is
 // often the only experience signal a profile carries.
 function experienceDisplay(candidate) {
   const years = candidate.experience_years;
