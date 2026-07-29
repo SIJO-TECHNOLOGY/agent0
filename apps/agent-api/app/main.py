@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -22,6 +22,12 @@ from app.api import (
     ready_router,
     search_router,
     search_stream_router,
+)
+from app.api.auth import (
+    AuthenticationError,
+    AuthorizationError,
+    require_auth,
+    validate_auth_settings,
 )
 from app.api.dependencies import McpClientUnavailableError
 from app.config import get_settings
@@ -127,6 +133,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.log_level, verbose=settings.agent_trace == "verbose"
     )
 
+    # Fail fast on ENABLE_AUTH=true without tenant/client ids — silently
+    # starting an unauthenticated instance the operator believes is
+    # protected would be worse than not starting.
+    validate_auth_settings(settings)
+
     # The factory itself may raise McpClientNotImplementedError on a
     # configuration error (e.g. unsupported transport). That is a real
     # fail-fast case, not a connectivity blip, so we deliberately do not
@@ -224,16 +235,19 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Health and readiness stay unauthenticated (probes); everything
+    # else requires a valid Entra ID token when ENABLE_AUTH=true.
+    protected = [Depends(require_auth)]
     app.include_router(health_router)
     app.include_router(ready_router)
-    app.include_router(search_router)
-    app.include_router(search_stream_router)
-    app.include_router(mcp_tools_router)
+    app.include_router(search_router, dependencies=protected)
+    app.include_router(search_stream_router, dependencies=protected)
+    app.include_router(mcp_tools_router, dependencies=protected)
     # Debug router is always registered but its handler returns 404
     # when ENABLE_MCP_DEBUG_ENDPOINTS is false so its existence stays
     # invisible in production.
-    app.include_router(mcp_debug_router)
-    app.include_router(chat_router)
+    app.include_router(mcp_debug_router, dependencies=protected)
+    app.include_router(chat_router, dependencies=protected)
 
     app.add_middleware(
         CORSMiddleware,
@@ -259,6 +273,31 @@ def create_app() -> FastAPI:
         )
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
+            content=jsonable_encoder(envelope),
+        )
+
+    @app.exception_handler(AuthenticationError)
+    async def _authentication_handler(
+        _: Request, exc: AuthenticationError
+    ) -> JSONResponse:
+        envelope = ErrorEnvelope(
+            error=ErrorPayload(code=exc.code, message=exc.message)
+        )
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content=jsonable_encoder(envelope),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(AuthorizationError)
+    async def _authorization_handler(
+        _: Request, exc: AuthorizationError
+    ) -> JSONResponse:
+        envelope = ErrorEnvelope(
+            error=ErrorPayload(code=exc.code, message=exc.message)
+        )
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
             content=jsonable_encoder(envelope),
         )
 

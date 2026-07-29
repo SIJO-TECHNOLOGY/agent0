@@ -107,6 +107,31 @@ When the flag is off or no LLM key is configured, Agent1 stays purely
 deterministic. Any LLM/parse error is non-fatal: the deterministic result is
 kept. See [LangGraph Agent Design → Agent1](./docs/langgraph-agent-design.md).
 
+## Authentication (Microsoft Entra ID SSO)
+
+When `ENABLE_AUTH=true`, every `/api/*` route except `/api/health` and
+`/api/ready` requires a valid Entra ID access token
+(`Authorization: Bearer`). Tokens are validated against the tenant's
+JWKS keys (signature, expiry), audience (`api://<client-id>` or the bare
+client id), and issuer (this tenant, v1.0 or v2.0). Optionally, the
+signed-in account must use an address ending in
+`@AUTH_ALLOWED_EMAIL_DOMAIN` (default `sijo.fr`) — this also rejects
+guest accounts that a single-tenant registration still admits.
+
+```bash
+ENABLE_AUTH=true
+ENTRA_TENANT_ID=...              # Directory (tenant) ID
+ENTRA_CLIENT_ID=...              # Application (client) ID
+AUTH_ALLOWED_EMAIL_DOMAIN=sijo.fr
+```
+
+Startup fails fast when auth is enabled without the tenant/client ids.
+The app registration must be single-tenant and expose the
+`access_as_user` API scope; the web UI requests
+`api://<client-id>/access_as_user` via MSAL and sends the resulting
+token on every call. Off by default so local development and tests run
+unauthenticated.
+
 ## Diagnostic Scripts
 
 `scripts/fetch_candidate.py` fetches a candidate's raw data — detail, technical
