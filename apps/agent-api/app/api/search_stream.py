@@ -1,4 +1,4 @@
-﻿"""POST /api/search/stream â€” Server-Sent Events progress channel.
+﻿"""POST /api/search/stream — Server-Sent Events progress channel.
 
 This is the *external* transport between the frontend UI and the Agent
 API. It is unrelated to the Streamable HTTP transport the Agent API
@@ -80,7 +80,7 @@ async def _drive_workflow(
                 }
             },
         )
-    except Exception:  # noqa: BLE001 â€” never leak provider stack traces
+    except Exception:  # noqa: BLE001 — never leak provider stack traces
         logger.exception("search_stream.unexpected_error")
         await emitter.emit(
             "search_failed",
@@ -249,7 +249,7 @@ def _build_service(
     """Build a SearchService from app.state without going through the
     Depends chain that would 503 on a missing MCP client.
 
-    Returns ``None`` if the MCP client isn't bound â€” the route then
+    Returns ``None`` if the MCP client isn't bound — the route then
     emits a ``search_failed`` SSE event instead of returning a JSON 503,
     which is what the stream contract requires.
     """
