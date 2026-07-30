@@ -427,9 +427,27 @@ async def delete_all_conversations(
 
 
 @router.get("/api/candidates/{candidate_id}")
-async def get_candidate(candidate_id: str) -> dict[str, object]:
+async def get_candidate(
+    candidate_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
+) -> dict[str, object]:
     candidate = _CANDIDATES.get(candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return candidate
+    if candidate is not None:
+        return candidate
+    # The in-process cache is empty after a restart: fall back to the
+    # cards persisted in the user's conversations, most recent first.
+    for conversation in await store.list_conversations(user.oid):
+        for message in reversed(
+            await store.get_messages(user.oid, conversation.id)
+        ):
+            ui = message.ui or {}
+            candidates = ui.get("candidates")
+            if not isinstance(candidates, list):
+                continue
+            for card in candidates:
+                if isinstance(card, dict) and str(card.get("id")) == candidate_id:
+                    _CANDIDATES[candidate_id] = card
+                    return card
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 

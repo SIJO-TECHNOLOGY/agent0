@@ -101,6 +101,27 @@ async def test_delete_conversation_really_deletes(client: AsyncClient) -> None:
     assert again.status_code == 404
 
 
+async def test_candidate_detail_survives_restart(client: AsyncClient) -> None:
+    from app.api import chat as chat_module
+
+    response = await client.post("/api/chat", json={"message": "dev java"})
+    detail = await client.get(
+        f"/api/conversations/{response.json()['conversation_id']}"
+    )
+    cards = detail.json()["messages"][1]["ui"]["candidates"]
+    candidate_id = str(cards[0]["id"])
+
+    # Simulate a restart: the in-process candidate cache is gone.
+    chat_module._CANDIDATES.clear()
+
+    fetched = await client.get(f"/api/candidates/{candidate_id}")
+    assert fetched.status_code == 200
+    assert str(fetched.json()["id"]) == candidate_id
+
+    missing = await client.get("/api/candidates/unknown-id")
+    assert missing.status_code == 404
+
+
 async def test_delete_all_conversations(client: AsyncClient) -> None:
     await client.post("/api/chat", json={"message": "dev java"})
     await client.post("/api/conversations", json={})
