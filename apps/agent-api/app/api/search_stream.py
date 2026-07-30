@@ -32,6 +32,7 @@ from app.config import Settings, get_settings
 from app.models.api import SearchRequest
 from app.services import conversation_memory as memory
 from app.session import memory as session_memory
+from app.session.rehydrate import ensure_session_hydrated
 from app.services.event_emitter import QueueEventEmitter
 from app.services.search_service import SearchService
 from app.storage import ConversationStore
@@ -366,6 +367,11 @@ async def search_stream(
     user = get_current_user(request)
     store = getattr(request.app.state, "conversation_store", None)
     user_message = payload.query
+
+    # After a restart the process has no session for this conversation:
+    # rebuild it from the durable store so "more"/filter follow-ups
+    # keep working exactly where the user left off.
+    await ensure_session_hydrated(store, user.oid, conversation_id)
 
     operation = session_memory.resolve_turn(conversation_id, payload.query)
     session_memory.append_message(conversation_id, role="user", content=payload.query)

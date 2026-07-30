@@ -22,6 +22,7 @@ from app.models.api import (
     SessionResetResponse,
 )
 from app.session import memory as session_memory
+from app.session.rehydrate import ensure_session_hydrated
 from app.services import conversation_memory as memory
 from app.services.search_service import SearchService
 from app.storage import ConversationStore, StoredConversation
@@ -227,6 +228,7 @@ async def chat(
     message = _query_from_payload(payload)
     conversation_id = _session_id_from_payload(payload)
     debug_enabled = debug or payload.debug
+    await ensure_session_hydrated(store, user.oid, conversation_id)
     operation = session_memory.resolve_turn(conversation_id, message)
 
     if operation.action == "more" and memory.has_pool(conversation_id):
