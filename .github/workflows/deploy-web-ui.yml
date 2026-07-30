@@ -29,13 +29,18 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # VITE_DEV_MODE=false: production requires the Microsoft login.
+      # The Entra ids are public identifiers (visible in every login
+      # redirect), not secrets — app registration "SIJO Assistant".
       - name: Build image in ACR
         run: >
           az acr build
           --registry ${{ vars.ACR_NAME }}
           --image agent0/web-ui:${{ github.sha }}
           --build-arg VITE_API_URL=""
-          --build-arg VITE_DEV_MODE="true"
+          --build-arg VITE_DEV_MODE="false"
+          --build-arg VITE_ENTRA_CLIENT_ID="8e0457b6-d8ad-4740-8dfe-279cb6d28fee"
+          --build-arg VITE_ENTRA_TENANT_ID="a530aa95-72eb-4c6a-8df5-f31643367aa5"
           apps/web-ui
 
       - name: Deploy to Container Apps
