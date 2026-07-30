@@ -7,12 +7,14 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.dependencies import get_search_service
+from app.api.auth import AuthenticatedUser, get_current_user
+from app.api.dependencies import get_conversation_store, get_search_service
 from app.models.api import (
     ChatRequest,
     ChatResponse,
     ConversationCreateRequest,
     ConversationDetail,
+    ConversationRenameRequest,
     ConversationSummary,
     SearchRequest,
     SearchResponse,
@@ -22,10 +24,10 @@ from app.models.api import (
 from app.session import memory as session_memory
 from app.services import conversation_memory as memory
 from app.services.search_service import SearchService
+from app.storage import ConversationStore, StoredConversation
 
 router = APIRouter(tags=["chat"])
 
-_CONVERSATIONS: dict[str, ConversationDetail] = {}
 _CANDIDATES: dict[str, dict[str, object]] = {}
 
 _PAGE_SIZE = memory.PAGE_SIZE
@@ -181,45 +183,37 @@ def _response_from_memory_operation(
     )
 
 
-def _upsert_conversation(conversation_id: str, title: str) -> None:
-    now = _now()
-    existing = _CONVERSATIONS.get(conversation_id)
-    if existing:
-        _CONVERSATIONS[conversation_id] = existing.model_copy(update={"updated_at": now})
-        return
-    _CONVERSATIONS[conversation_id] = ConversationDetail(
-        id=conversation_id,
-        title=title or "Nouvelle conversation",
-        created_at=now,
-        updated_at=now,
-        messages=[],
+def _summary(conversation: StoredConversation) -> ConversationSummary:
+    return ConversationSummary(
+        id=conversation.id,
+        title=conversation.title,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
     )
 
 
-def _record_turn(
-    conversation_id: str, *, user_message: str, assistant_message: str
+async def _persist_turn(
+    store: ConversationStore,
+    user: AuthenticatedUser,
+    conversation_id: str,
+    *,
+    user_message: str,
+    assistant_message: str,
+    assistant_ui: dict[str, object] | None = None,
 ) -> None:
-    """Append a user/assistant turn to the conversation's in-session history."""
-    now = _now()
-    existing = _CONVERSATIONS.get(conversation_id)
-    if existing is None:
-        existing = ConversationDetail(
-            id=conversation_id,
-            title=user_message[:80] or "Nouvelle conversation",
-            created_at=now,
-            updated_at=now,
-            messages=[],
-        )
-    turns = [
-        *existing.messages,
-        {"role": "user", "content": user_message, "at": now},
-        {"role": "assistant", "content": assistant_message, "at": now},
-    ]
-    _CONVERSATIONS[conversation_id] = existing.model_copy(
-        update={"messages": turns, "updated_at": now}
-    )
+    """Record one exchange both in session memory and in the durable store."""
     session_memory.append_message(conversation_id, role="user", content=user_message)
-    session_memory.append_message(conversation_id, role="assistant", content=assistant_message)
+    session_memory.append_message(
+        conversation_id, role="assistant", content=assistant_message
+    )
+    await store.record_turn(
+        user.oid,
+        conversation_id,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        assistant_ui=assistant_ui,
+        context=session_memory.context_snapshot(conversation_id),
+    )
 
 
 @router.post("/api/chat", response_model=ChatResponse)
@@ -227,6 +221,8 @@ async def chat(
     payload: ChatRequest,
     debug: bool = Query(default=False),
     service: SearchService = Depends(get_search_service),
+    user: AuthenticatedUser = Depends(get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
 ) -> ChatResponse:
     message = _query_from_payload(payload)
     conversation_id = _session_id_from_payload(payload)
@@ -238,7 +234,11 @@ async def chat(
             service=service, effective_query=operation.effective_query, operation=operation
         ) if debug_enabled else {}
         response = _serve_page(conversation_id, debug=debug_payload)
-        _record_turn(conversation_id, user_message=message, assistant_message=response.message)
+        await _persist_turn(
+            store, user, conversation_id,
+            user_message=message, assistant_message=response.message,
+            assistant_ui=response.ui,
+        )
         return response
 
     if operation.action in {"filter", "sort"} and operation.candidates is not None:
@@ -248,7 +248,11 @@ async def chat(
         response = _response_from_memory_operation(
             conversation_id, operation, debug=debug_payload
         )
-        _record_turn(conversation_id, user_message=message, assistant_message=response.message)
+        await _persist_turn(
+            store, user, conversation_id,
+            user_message=message, assistant_message=response.message,
+            assistant_ui=response.ui,
+        )
         return response
 
     if debug_enabled:
@@ -287,7 +291,11 @@ async def chat(
         response = _chat_response_from_search(
             conversation_id=conversation_id, search=search, debug=debug_payload
         )
-        _record_turn(conversation_id, user_message=message, assistant_message=search.message)
+        await _persist_turn(
+            store, user, conversation_id,
+            user_message=message, assistant_message=search.message,
+            assistant_ui=response.ui,
+        )
         return response
 
     full = [candidate.model_dump() for candidate in getattr(search.ui, "candidates", [])]
@@ -296,12 +304,20 @@ async def chat(
         response = _chat_response_from_search(
             conversation_id=conversation_id, search=search, debug=debug_payload
         )
-        _record_turn(conversation_id, user_message=message, assistant_message=search.message)
+        await _persist_turn(
+            store, user, conversation_id,
+            user_message=message, assistant_message=search.message,
+            assistant_ui=response.ui,
+        )
         return response
 
     memory.store_results(conversation_id, full)
     response = _serve_page(conversation_id, debug=debug_payload)
-    _record_turn(conversation_id, user_message=message, assistant_message=response.message)
+    await _persist_turn(
+        store, user, conversation_id,
+        user_message=message, assistant_message=response.message,
+        assistant_ui=response.ui,
+    )
     return response
 
 
@@ -315,13 +331,11 @@ async def reset_chat_session(payload: SessionResetRequest) -> SessionResetRespon
 
 
 @router.get("/api/conversations", response_model=list[ConversationSummary])
-async def list_conversations() -> list[ConversationSummary]:
-    return [
-        ConversationSummary(**conversation.model_dump(exclude={"messages"}))
-        for conversation in sorted(
-            _CONVERSATIONS.values(), key=lambda item: item.updated_at, reverse=True
-        )
-    ]
+async def list_conversations(
+    user: AuthenticatedUser = Depends(get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
+) -> list[ConversationSummary]:
+    return [_summary(c) for c in await store.list_conversations(user.oid)]
 
 
 @router.post(
@@ -331,26 +345,83 @@ async def list_conversations() -> list[ConversationSummary]:
 )
 async def create_conversation(
     payload: ConversationCreateRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
 ) -> ConversationSummary:
-    conversation_id = _conversation_id(None)
-    _upsert_conversation(conversation_id, payload.title)
-    session_memory.get_or_create(conversation_id)
-    conversation = _CONVERSATIONS[conversation_id]
-    return ConversationSummary(**conversation.model_dump(exclude={"messages"}))
+    conversation = await store.create_conversation(user.oid, title=payload.title)
+    session_memory.get_or_create(conversation.id)
+    return _summary(conversation)
 
 
 @router.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
-async def get_conversation(conversation_id: str) -> ConversationDetail:
-    conversation = _CONVERSATIONS.get(conversation_id)
+async def get_conversation(
+    conversation_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
+) -> ConversationDetail:
+    conversation = await store.get_conversation(user.oid, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return conversation
+    messages = await store.get_messages(user.oid, conversation_id)
+    return ConversationDetail(
+        id=conversation.id,
+        title=conversation.title,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+        messages=[
+            {
+                "role": message.role,
+                "content": message.content,
+                "at": message.created_at,
+                **({"ui": message.ui} if message.ui else {}),
+            }
+            for message in messages
+        ],
+    )
 
 
-@router.delete("/api/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_conversation(conversation_id: str) -> None:
-    _CONVERSATIONS.pop(conversation_id, None)
+@router.patch(
+    "/api/conversations/{conversation_id}", response_model=ConversationSummary
+)
+async def rename_conversation(
+    conversation_id: str,
+    payload: ConversationRenameRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
+) -> ConversationSummary:
+    conversation = await store.rename_conversation(
+        user.oid, conversation_id, payload.title
+    )
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return _summary(conversation)
+
+
+@router.delete(
+    "/api/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_conversation(
+    conversation_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
+) -> None:
+    deleted = await store.delete_conversation(user.oid, conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     memory.reset(conversation_id)
+    session_memory.reset(conversation_id)
+
+
+@router.delete("/api/conversations", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_all_conversations(
+    user: AuthenticatedUser = Depends(get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
+) -> None:
+    conversations = await store.list_conversations(user.oid)
+    await store.delete_all_conversations(user.oid)
+    for conversation in conversations:
+        memory.reset(conversation.id)
+        session_memory.reset(conversation.id)
 
 
 @router.get("/api/candidates/{candidate_id}")

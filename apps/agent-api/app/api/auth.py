@@ -66,10 +66,21 @@ class AuthorizationError(Exception):
 
 @dataclass(frozen=True)
 class AuthenticatedUser:
-    """Sanitized identity extracted from a validated token."""
+    """Sanitized identity extracted from a validated token.
+
+    ``oid`` is the Entra account's immutable object id — the key used
+    to partition per-user data (it survives username changes, unlike
+    the email address).
+    """
 
     username: str
     name: str | None = None
+    oid: str = ""
+
+
+# Identity used when ENABLE_AUTH=false (local development, tests):
+# everything is stored under one deterministic user.
+DEV_USER = AuthenticatedUser(username="dev", name=None, oid="dev")
 
 
 def validate_auth_settings(settings: Settings) -> None:
@@ -181,6 +192,23 @@ def require_auth(
     claims = _decode(token.strip(), settings)
     username = _check_domain(claims, settings)
     name = claims.get("name")
-    return AuthenticatedUser(
-        username=username, name=str(name) if name else None
+    user = AuthenticatedUser(
+        username=username,
+        name=str(name) if name else None,
+        oid=str(claims.get("oid") or username),
     )
+    # Expose the identity to route handlers (get_current_user): the
+    # router-level dependency's return value is not otherwise reachable.
+    request.state.current_user = user
+    return user
+
+
+def get_current_user(request: Request) -> AuthenticatedUser:
+    """Identity for the current request.
+
+    `require_auth` stores the validated user on request.state; when
+    auth is disabled it never does, and everything belongs to the
+    deterministic DEV_USER.
+    """
+    user = getattr(request.state, "current_user", None)
+    return user if isinstance(user, AuthenticatedUser) else DEV_USER

@@ -197,6 +197,22 @@ class ConversationCreateRequest(BaseModel):
     title: str = "Nouvelle conversation"
 
 
+class ConversationRenameRequest(BaseModel):
+    """Rename a conversation (sets a user-chosen, persistent title)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("title must be non-empty")
+        return stripped[:120]
+
+
 class ConversationSummary(BaseModel):
     """Conversation list item consumed by the frontend sidebar."""
 

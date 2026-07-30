@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.main import create_app
 from app.mcp.mock_client import MockMcpClient
 from app.models.api import McpDependencyStatus
+from app.storage.sqlite_store import SqliteConversationStore
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -46,6 +47,10 @@ async def client(mock_mcp_client: MockMcpClient) -> AsyncIterator[AsyncClient]:
         transport=settings.mcp_transport,
         error=None,
     )
+    store = SqliteConversationStore(":memory:")
+    await store.initialize()
+    app.state.conversation_store = store
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+    await store.close()

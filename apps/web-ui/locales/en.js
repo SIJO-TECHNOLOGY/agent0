@@ -64,6 +64,8 @@ export default {
     loading_one: "Loading...",
     open_fallback: "Conversation",
     delete_aria: "Delete {title}",
+    rename_aria: "Rename {title}",
+    rename_prompt: "New conversation name:",
   },
   stream: {
     step_labels: {

@@ -8,6 +8,18 @@ from app.config import Settings, get_settings
 from app.mcp.client import McpClient
 from app.services.llm_planner import LlmPlanner
 from app.services.search_service import SearchService
+from app.storage import ConversationStore
+
+
+def get_conversation_store(request: Request) -> ConversationStore:
+    """Return the ConversationStore bound during lifespan startup."""
+    store = getattr(request.app.state, "conversation_store", None)
+    if store is None:
+        raise RuntimeError(
+            "app.state.conversation_store is not set; lifespan startup may "
+            "have failed or been bypassed."
+        )
+    return store
 
 
 class McpClientUnavailableError(RuntimeError):

@@ -665,6 +665,19 @@ export async function deleteConversation(conversationId) {
   });
 }
 
+export async function deleteAllConversations() {
+  return request(buildEndpoint("conversations"), {
+    method: "DELETE",
+  });
+}
+
+export async function renameConversation(conversationId, title) {
+  return request(buildEndpoint("conversation_detail", { id: conversationId }), {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
 export async function resetChatSession(sessionId) {
   if (!sessionId) return null;
   return request(buildEndpoint("chat_session_reset"), {
