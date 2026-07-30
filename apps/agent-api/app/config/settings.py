@@ -37,6 +37,16 @@ class Settings(BaseSettings):
         ),
     )
 
+    cors_allowed_origins: str = Field(
+        default="http://localhost:5500,http://127.0.0.1:5500",
+        description=(
+            "Comma-separated list of origins allowed by CORS (env "
+            "CORS_ALLOWED_ORIGINS). Defaults cover local development; add "
+            "the deployed web-ui origin(s) in production, e.g. "
+            "'http://localhost:5500,https://assistant.sijo.fr'."
+        ),
+    )
+
     mcp_server_url: str = Field(default="http://localhost:8001/mcp")
     mcp_timeout_seconds: float = Field(default=15.0, ge=0.1)
     mcp_max_retries: int = Field(default=2, ge=0, le=5)
@@ -186,6 +196,43 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Microsoft Entra ID SSO (bearer-token validation) ---------------------
+    enable_auth: bool = Field(
+        default=False,
+        description=(
+            "When true, every /api/* route except /api/health and /api/ready "
+            "requires a valid Microsoft Entra ID access token issued for this "
+            "API (Authorization: Bearer). Startup fails fast if "
+            "entra_tenant_id or entra_client_id is missing. Off by default so "
+            "local development and tests run unauthenticated."
+        ),
+    )
+    entra_tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Directory (tenant) ID of the Entra ID app registration. "
+            "Required when enable_auth=true. Determines both the JWKS "
+            "signing-key endpoint and the accepted token issuers."
+        ),
+    )
+    entra_client_id: str | None = Field(
+        default=None,
+        description=(
+            "Application (client) ID of the Entra ID app registration. "
+            "Required when enable_auth=true. Tokens are accepted with "
+            "audience 'api://<client-id>' or the bare client id."
+        ),
+    )
+    auth_allowed_email_domain: str | None = Field(
+        default="sijo.fr",
+        description=(
+            "When set, the signed-in account's preferred_username/upn claim "
+            "must end with '@<domain>' or the request is rejected with 403. "
+            "Covers guest accounts that a single-tenant registration still "
+            "admits. None disables the domain check."
+        ),
+    )
+
     llm_planner_role: str = Field(
         default=(
             "You are an expert technical recruiter and CV search, matching, "
@@ -202,6 +249,16 @@ class Settings(BaseSettings):
             "Set empty to disable."
         ),
     )
+
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """`cors_allowed_origins` split into a clean list of origins."""
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache(maxsize=1)
