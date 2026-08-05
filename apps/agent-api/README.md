@@ -132,6 +132,28 @@ The app registration must be single-tenant and expose the
 token on every call. Off by default so local development and tests run
 unauthenticated.
 
+## Conversation Persistence
+
+Each user's conversations (titles, messages, candidate cards, search
+context) are stored durably, scoped by the Entra account's immutable
+`oid` claim (user `dev` when auth is disabled). Backends, selected with
+`CONVERSATION_STORE`:
+
+- `sqlite` (default) — local file (`SQLITE_DB_PATH`), used for
+  development and tests.
+- `azure_table` — Azure Table Storage for production: serverless,
+  in-tenant, no replica constraint. Configure either
+  `AZURE_STORAGE_CONNECTION_STRING`, or `AZURE_STORAGE_ACCOUNT_URL`
+  plus a managed identity holding the "Storage Table Data Contributor"
+  role. Tables `agent0conversations` / `agent0messages` are created on
+  startup.
+
+Conversations are auto-titled from their first message; `PATCH
+/api/conversations/{id}` sets a user-chosen title that is never
+overwritten. `DELETE /api/conversations/{id}` (and the bulk `DELETE
+/api/conversations`) permanently remove rows — there is no soft
+delete.
+
 ## Diagnostic Scripts
 
 `scripts/fetch_candidate.py` fetches a candidate's raw data — detail, technical

@@ -196,6 +196,41 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Conversation persistence --------------------------------------------
+    conversation_store: str = Field(
+        default="sqlite",
+        description=(
+            "Backend for per-user conversation history: 'sqlite' (local "
+            "file, dev/tests) or 'azure_table' (Azure Table Storage, "
+            "production)."
+        ),
+    )
+    sqlite_db_path: str = Field(
+        default="data/conversations.db",
+        description=(
+            "SQLite database file path (conversation_store=sqlite). "
+            "Relative paths resolve against the working directory; parent "
+            "directories are created automatically. ':memory:' for tests."
+        ),
+    )
+    azure_storage_connection_string: str | None = Field(
+        default=None,
+        description=(
+            "Azure Storage connection string (conversation_store="
+            "azure_table). Alternative to account URL + managed identity."
+        ),
+    )
+    azure_storage_account_url: str | None = Field(
+        default=None,
+        description=(
+            "Azure Table endpoint, e.g. https://<account>.table.core."
+            "windows.net (conversation_store=azure_table). Authenticates "
+            "with DefaultAzureCredential (managed identity in Container "
+            "Apps); the identity needs the 'Storage Table Data "
+            "Contributor' role."
+        ),
+    )
+
     # --- Microsoft Entra ID SSO (bearer-token validation) ---------------------
     enable_auth: bool = Field(
         default=False,

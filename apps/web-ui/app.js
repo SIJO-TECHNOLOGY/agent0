@@ -1,9 +1,11 @@
 ﻿import {
   ApiError,
   createConversation,
+  deleteAllConversations,
   deleteConversation,
   getConversation,
   getConversations,
+  renameConversation,
   resetChatSession,
   sendClarification,
   streamSearch,
@@ -404,6 +406,16 @@ function renderConversationList() {
     textCol.append(title, date);
     item.append(icon, textCol);
 
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "rename-conversation";
+    rename.setAttribute("aria-label", t("conversations.rename_aria", { title: title.textContent }));
+    rename.textContent = "✎";
+    rename.addEventListener("click", (event) => {
+      event.stopPropagation();
+      promptRenameConversation(conversation);
+    });
+
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "delete-conversation";
@@ -414,7 +426,7 @@ function renderConversationList() {
       removeConversation(conversation.id);
     });
 
-    row.append(item, remove);
+    row.append(item, rename, remove);
     elements.conversationList.appendChild(row);
   });
 }
@@ -468,10 +480,7 @@ async function clearAllConversations() {
   showInputError("");
 
   try {
-    const ids = state.conversations.map((conversation) => conversation.id);
-    for (const id of ids) {
-      await deleteConversation(id);
-    }
+    await deleteAllConversations();
     state.conversations = [];
     state.currentConversationId = null;
     clearMessages();
@@ -512,7 +521,14 @@ async function openConversation(conversationId) {
 
     if (conversation.messages?.length) {
       conversation.messages.forEach((message) => {
-        renderMessage(normalizeRole(message.role), message.content);
+        const role = normalizeRole(message.role);
+        // Assistant turns persist their UI payload (candidate cards…):
+        // replay them exactly as the live stream rendered them.
+        if (role === "assistant" && message.ui && typeof message.ui === "object") {
+          renderStreamFinalResponse({ message: message.content, ui: message.ui });
+        } else {
+          renderMessage(role, message.content);
+        }
       });
       setUiState("active");
     } else {
@@ -560,6 +576,30 @@ async function newChat() {
     showInputError(getErrorMessage(error));
   } finally {
     setLoading(false);
+  }
+}
+
+async function promptRenameConversation(conversation) {
+  if (state.isLoading) return;
+
+  const current = conversation.title || t("conversations.untitled");
+  const input = window.prompt(t("conversations.rename_prompt"), current);
+  if (input === null) return;
+  const title = input.trim();
+  if (!title || title === current) return;
+
+  try {
+    const updated = await renameConversation(conversation.id, title);
+    state.conversations = state.conversations.map((item) =>
+      item.id === updated.id ? { ...item, ...updated } : item,
+    );
+    if (state.currentConversationId === updated.id) {
+      elements.conversationTitle.textContent = updated.title;
+    }
+    renderConversationList();
+  } catch (error) {
+    console.error(error);
+    showInputError(getErrorMessage(error));
   }
 }
 

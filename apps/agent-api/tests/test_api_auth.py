@@ -24,6 +24,7 @@ from app.config import Settings, get_settings
 from app.main import create_app
 from app.mcp.mock_client import MockMcpClient
 from app.models.api import McpDependencyStatus
+from app.storage.sqlite_store import SqliteConversationStore
 
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
 CLIENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -98,9 +99,13 @@ async def auth_client(fake_jwks) -> AsyncIterator[AsyncClient]:
         transport=settings.mcp_transport,
         error=None,
     )
+    store = SqliteConversationStore(":memory:")
+    await store.initialize()
+    app.state.conversation_store = store
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+    await store.close()
     app.dependency_overrides.clear()
 
 

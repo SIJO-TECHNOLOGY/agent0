@@ -64,6 +64,8 @@ export default {
     loading_one: "Chargement...",
     open_fallback: "Conversation",
     delete_aria: "Supprimer {title}",
+    rename_aria: "Renommer {title}",
+    rename_prompt: "Nouveau nom de la conversation :",
   },
   stream: {
     step_labels: {

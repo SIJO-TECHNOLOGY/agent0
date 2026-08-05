@@ -459,7 +459,8 @@ button {
   font-size: var(--fs-xs);
 }
 
-.delete-conversation {
+.delete-conversation,
+.rename-conversation {
   width: 26px;
   height: 26px;
   border: none;
@@ -471,13 +472,20 @@ button {
 }
 
 .conversation-row:hover .delete-conversation,
-.delete-conversation:focus-visible {
+.delete-conversation:focus-visible,
+.conversation-row:hover .rename-conversation,
+.rename-conversation:focus-visible {
   opacity: 1;
 }
 
 .delete-conversation:hover {
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+.rename-conversation:hover {
+  background: var(--surface-hover, rgba(99, 102, 241, 0.12));
+  color: var(--accent, #6366f1);
 }
 
 .sidebar-status {

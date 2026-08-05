@@ -31,3 +31,6 @@ target/
 .gradle/
 out/
 *.class
+
+# Local conversation store (sqlite)
+apps/agent-api/data/

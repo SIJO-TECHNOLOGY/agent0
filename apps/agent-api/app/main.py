@@ -33,6 +33,7 @@ from app.api.dependencies import McpClientUnavailableError
 from app.config import get_settings
 from app.mcp.factory import create_mcp_client
 from app.models.api import ErrorEnvelope, ErrorPayload, McpDependencyStatus
+from app.storage.factory import create_conversation_store
 from app.services.llm_backends import LlmBackendError, build_chat_fn
 from app.services.llm_planner import StructuredLlmPlanner
 
@@ -182,6 +183,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         error=error,
     )
 
+    # Durable per-user conversation history. Config errors and an
+    # unreachable backend both fail startup: silently serving without
+    # persistence would defeat the feature's purpose.
+    conversation_store = create_conversation_store(settings)
+    await conversation_store.initialize()
+    app.state.conversation_store = conversation_store
+
     # Build the LLM planner when configured. Fail fast on misconfig so
     # we never silently fall back to the deterministic planner when the
     # operator asked for LLM planning.
@@ -219,9 +227,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await _close_client(bound)
             except Exception:  # noqa: BLE001
                 logger.exception("mcp.close_failed")
+        store = getattr(app.state, "conversation_store", None)
+        if store is not None:
+            try:
+                await store.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("conversation_store.close_failed")
         app.state.mcp_client = None
         app.state.mcp_status = None
         app.state.llm_planner = None
+        app.state.conversation_store = None
 
 
 def create_app() -> FastAPI:

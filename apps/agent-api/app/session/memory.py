@@ -80,6 +80,20 @@ def context_payload(session_id: str) -> dict[str, object]:
     return get_or_create(session_id).public_context()
 
 
+def context_snapshot(session_id: str) -> dict[str, object]:
+    """Search-session state persisted with each stored turn.
+
+    Enough to rehydrate follow-ups ("more", filters) after a restart:
+    the current search (query, provider page, seen ids) and the active
+    filters.
+    """
+    session = get_or_create(session_id)
+    return {
+        "currentSearch": dict(session.current_search),
+        "lastFilters": dict(session.last_filters),
+    }
+
+
 def save_search_results(
     session_id: str,
     *,

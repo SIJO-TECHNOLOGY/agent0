@@ -26,13 +26,16 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
+from app.api.auth import get_current_user
 from app.api.dependencies import McpClientUnavailableError, build_search_service
 from app.config import Settings, get_settings
 from app.models.api import SearchRequest
 from app.services import conversation_memory as memory
 from app.session import memory as session_memory
+from app.session.rehydrate import ensure_session_hydrated
 from app.services.event_emitter import QueueEventEmitter
 from app.services.search_service import SearchService
+from app.storage import ConversationStore
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +102,35 @@ async def _drive_workflow(
         emitter.close()
 
 
+async def _persist_final_response(
+    store: ConversationStore | None,
+    user_id: str,
+    conversation_id: str,
+    *,
+    user_message: str,
+    data: dict[str, object],
+) -> None:
+    """Durably record the turn shown to the user.
+
+    Persistence must never break the stream: failures are logged and
+    the SSE contract continues unaffected.
+    """
+    if store is None:
+        return
+    ui = data.get("ui")
+    try:
+        await store.record_turn(
+            user_id,
+            conversation_id,
+            user_message=user_message,
+            assistant_message=str(data.get("message") or ""),
+            assistant_ui=ui if isinstance(ui, dict) else None,
+            context=session_memory.context_snapshot(conversation_id),
+        )
+    except Exception:  # noqa: BLE001 — history loss < broken stream
+        logger.exception("search_stream.persist_failed")
+
+
 def _inject_conversation_context(
     event_type: str,
     data: dict[str, object],
@@ -159,6 +191,9 @@ async def _stream(
     debug_mode: bool = False,
     search_page: int = 1,
     exclude_ids: set[str] | None = None,
+    store: ConversationStore | None = None,
+    user_id: str = "dev",
+    user_message: str = "",
 ) -> AsyncIterator[str]:
     emitter = QueueEventEmitter()
     task = asyncio.create_task(
@@ -182,6 +217,11 @@ async def _stream(
                 event_type, data, conversation_id,
                 search_page=search_page, exclude_ids=exclude_ids,
             )
+            if event_type == "final_response":
+                await _persist_final_response(
+                    store, user_id, conversation_id,
+                    user_message=user_message, data=data,
+                )
             yield _format_sse(event_type, data)
     finally:
         if not task.done():
@@ -195,6 +235,10 @@ async def _stream(
 async def _memory_operation_stream(
     conversation_id: str,
     operation: session_memory.SessionOperation,
+    *,
+    store: ConversationStore | None = None,
+    user_id: str = "dev",
+    user_message: str = "",
 ) -> AsyncIterator[str]:
     """Serve filter/sort follow-ups from session candidates without MCP."""
     yield _format_sse(
@@ -221,6 +265,14 @@ async def _memory_operation_stream(
         if candidates else "Aucun candidat ne correspond à ces critères."
     )
     session_memory.append_message(conversation_id, role="assistant", content=message)
+    await _persist_final_response(
+        store, user_id, conversation_id,
+        user_message=user_message,
+        data={
+            "message": message,
+            "ui": {"type": "candidate_cards", "candidates": candidates},
+        },
+    )
     yield _format_sse(
         "final_response",
         {
@@ -309,12 +361,27 @@ async def search_stream(
     }
     conversation_id = payload.sessionId or payload.conversation_id or memory.new_conversation_id()
 
+    # Identity and store for durable per-user history. The store may be
+    # absent only when lifespan was bypassed (tests) — persistence then
+    # simply no-ops.
+    user = get_current_user(request)
+    store = getattr(request.app.state, "conversation_store", None)
+    user_message = payload.query
+
+    # After a restart the process has no session for this conversation:
+    # rebuild it from the durable store so "more"/filter follow-ups
+    # keep working exactly where the user left off.
+    await ensure_session_hydrated(store, user.oid, conversation_id)
+
     operation = session_memory.resolve_turn(conversation_id, payload.query)
     session_memory.append_message(conversation_id, role="user", content=payload.query)
 
     if operation.action in {"filter", "sort"} and operation.candidates is not None:
         return StreamingResponse(
-            _memory_operation_stream(conversation_id, operation),
+            _memory_operation_stream(
+                conversation_id, operation,
+                store=store, user_id=user.oid, user_message=user_message,
+            ),
             media_type="text/event-stream",
             headers=headers,
         )
@@ -359,6 +426,7 @@ async def search_stream(
             service, payload, request,
             conversation_id=conversation_id, debug_mode=debug_mode,
             search_page=search_page, exclude_ids=exclude_ids,
+            store=store, user_id=user.oid, user_message=user_message,
         ),
         media_type="text/event-stream",
         headers=headers,
