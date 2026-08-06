@@ -10,6 +10,7 @@ from fastapi import FastAPI
 import app.main as main_module
 from app.config.settings import Settings
 from app.main import lifespan
+from app.mcp.caching_client import CachingMcpClient
 from app.mcp.client import McpTransientError
 from app.mcp.mock_client import MockMcpClient
 
@@ -43,7 +44,8 @@ async def test_lifespan_binds_mcp_client_on_startup(
     app = FastAPI()
 
     async with lifespan(app):
-        assert isinstance(app.state.mcp_client, MockMcpClient)
+        assert isinstance(app.state.mcp_client, CachingMcpClient)
+        assert isinstance(app.state.mcp_client.inner, MockMcpClient)
         assert app.state.mcp_status.status == "mock"
         assert app.state.mcp_status.error is None
 

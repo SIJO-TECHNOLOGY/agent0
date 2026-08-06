@@ -52,6 +52,47 @@ class Settings(BaseSettings):
     mcp_max_retries: int = Field(default=2, ge=0, le=5)
     mcp_transport: str = Field(default="streamable_http")
 
+    # --- MCP result caching (ADR-013) --------------------------------------
+    mcp_cache_enabled: bool = Field(
+        default=True,
+        description=(
+            "Wrap the MCP client in an in-process TTL cache for semi-stable "
+            "results (dictionary, CV text, technical documents, tool "
+            "catalogue). Volatile data (search, detail, administrative) is "
+            "never cached. False disables all MCP caching."
+        ),
+    )
+    mcp_dictionary_cache_ttl_seconds: float = Field(
+        default=21600.0, ge=0.0,
+        description=(
+            "TTL for cached getDictionary results (default 6h). The "
+            "dictionary is quasi-static reference data fetched up to three "
+            "times per search without this cache. 0 disables."
+        ),
+    )
+    mcp_candidate_doc_cache_ttl_seconds: float = Field(
+        default=21600.0, ge=0.0,
+        description=(
+            "TTL for cached getCandidateCV / getCandidateTechnicalDocument "
+            "results per candidate (default 6h). Bounds how long a freshly "
+            "uploaded CV replacement can go unnoticed. 0 disables."
+        ),
+    )
+    mcp_tools_cache_ttl_seconds: float = Field(
+        default=300.0, ge=0.0,
+        description=(
+            "TTL for the cached MCP tool catalogue (default 5 min); "
+            "discover_tools runs once per search. 0 disables."
+        ),
+    )
+    mcp_cache_max_entries: int = Field(
+        default=512, ge=1,
+        description=(
+            "Upper bound on cached MCP entries; least-recently-used entries "
+            "are evicted beyond this."
+        ),
+    )
+
     max_replan_attempts: int = Field(default=1, ge=0, le=3)
     use_llm_replan: bool = Field(
         default=True,

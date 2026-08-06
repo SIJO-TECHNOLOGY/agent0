@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.config.settings import Settings
+from app.mcp.caching_client import CachingMcpClient
 from app.mcp.factory import McpClientNotImplementedError, create_mcp_client
 from app.mcp.mock_client import MockMcpClient
 from app.mcp.remote_client import RemoteMcpClient
@@ -21,13 +22,14 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**base)  # type: ignore[arg-type]
 
 
-def test_factory_returns_mock_when_use_mock_mcp_true() -> None:
+def test_factory_returns_cached_mock_when_use_mock_mcp_true() -> None:
     client = create_mcp_client(_settings(use_mock_mcp=True))
 
-    assert isinstance(client, MockMcpClient)
+    assert isinstance(client, CachingMcpClient)
+    assert isinstance(client.inner, MockMcpClient)
 
 
-def test_factory_returns_remote_client_when_use_mock_mcp_false() -> None:
+def test_factory_returns_cached_remote_client_when_use_mock_mcp_false() -> None:
     client = create_mcp_client(
         _settings(
             use_mock_mcp=False,
@@ -37,9 +39,23 @@ def test_factory_returns_remote_client_when_use_mock_mcp_false() -> None:
         )
     )
 
-    assert isinstance(client, RemoteMcpClient)
-    assert client.url == "http://remote.test:9000/mcp"
-    assert client._timeout_seconds == 7.5  # type: ignore[attr-defined]
+    assert isinstance(client, CachingMcpClient)
+    inner = client.inner
+    assert isinstance(inner, RemoteMcpClient)
+    assert inner.url == "http://remote.test:9000/mcp"
+    assert inner._timeout_seconds == 7.5  # type: ignore[attr-defined]
+
+
+def test_factory_returns_bare_clients_when_cache_disabled() -> None:
+    mock = create_mcp_client(
+        _settings(use_mock_mcp=True, mcp_cache_enabled=False)
+    )
+    remote = create_mcp_client(
+        _settings(use_mock_mcp=False, mcp_cache_enabled=False)
+    )
+
+    assert isinstance(mock, MockMcpClient)
+    assert isinstance(remote, RemoteMcpClient)
 
 
 def test_factory_raises_when_use_mock_mcp_false_without_url() -> None:
