@@ -17,3 +17,4 @@ Use this folder to record meaningful technical decisions as the project evolves.
 - [ADR-010 - LLM-Driven Bounded Replan](./adr-010-llm-driven-bounded-replan.md) - records the bounded ReAct/control-loop decision for LLM observe-then-replan.
 - [ADR-011 - Agent1: Candidate Data Normalization](./adr-011-agent1-candidate-data-normalization.md) - records the deterministic-first data-quality layer with optional, conflict-only LLM reconciliation.
 - [ADR-012 - Reflection Decides Clarify-or-Retry](./adr-012-clarify-or-retry.md) - the post-ranking reflection may ask the user to clarify (unresolved parameter) instead of accepting or retrying.
+- [ADR-014 - Semantic CV Retrieval (RAG) As An Additive Recall Channel](./adr-014-cv-semantic-retrieval.md) - a vector index over CVs adds semantically similar candidates the keyword search missed; strictly additive, volatile data stays live via MCP.
