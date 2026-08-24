@@ -243,17 +243,22 @@ class Settings(BaseSettings):
         ),
     )
     rag_top_k: int = Field(
-        default=30, ge=1, le=200,
+        default=10, ge=1, le=200,
         description=(
             "Maximum candidates the vector channel may ADD to a search "
-            "(candidates already found by keyword search don't count)."
+            "(candidates already found by keyword search don't count). "
+            "Kept small on purpose: vector hits compete with keyword hits "
+            "for the bounded enrichment budget, so the channel should only "
+            "put forward candidates it is confident about."
         ),
     )
     rag_min_score: float = Field(
-        default=0.30, ge=0.0, le=1.0,
+        default=0.45, ge=0.0, le=1.0,
         description=(
-            "Cosine-similarity floor for a vector hit to be added. Below "
-            "this the match is noise; raising it trades recall for precision."
+            "Cosine-similarity floor for a vector hit to be added. Measured "
+            "on the live base: clearly related profiles score ~0.5+, while "
+            "barely related ones still reach ~0.4 — 0.45 keeps the channel "
+            "precise. Lowering it trades precision for recall."
         ),
     )
     rag_catch_up_enabled: bool = Field(
