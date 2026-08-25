@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Final
 
 from app.config.settings import Settings
+from app.mcp.caching_client import CachingMcpClient
 from app.mcp.client import McpClient
 from app.mcp.mock_client import MockMcpClient
 from app.mcp.remote_client import RemoteMcpClient
@@ -37,7 +38,7 @@ def create_mcp_client(settings: Settings) -> McpClient:
     misconfiguration is caught at startup, not at the first request.
     """
     if settings.use_mock_mcp:
-        return MockMcpClient()
+        return _maybe_wrap_with_cache(MockMcpClient(), settings)
 
     if not settings.mcp_server_url:
         raise McpClientNotImplementedError(
@@ -53,7 +54,23 @@ def create_mcp_client(settings: Settings) -> McpClient:
             f"Supported transports: {supported}."
         )
 
-    return RemoteMcpClient(
-        url=settings.mcp_server_url,
-        timeout_seconds=settings.mcp_timeout_seconds,
+    return _maybe_wrap_with_cache(
+        RemoteMcpClient(
+            url=settings.mcp_server_url,
+            timeout_seconds=settings.mcp_timeout_seconds,
+        ),
+        settings,
+    )
+
+
+def _maybe_wrap_with_cache(client: McpClient, settings: Settings) -> McpClient:
+    """Wrap the client in the TTL cache unless caching is disabled (ADR-013)."""
+    if not settings.mcp_cache_enabled:
+        return client
+    return CachingMcpClient(
+        client,
+        dictionary_ttl_seconds=settings.mcp_dictionary_cache_ttl_seconds,
+        candidate_doc_ttl_seconds=settings.mcp_candidate_doc_cache_ttl_seconds,
+        tools_ttl_seconds=settings.mcp_tools_cache_ttl_seconds,
+        max_entries=settings.mcp_cache_max_entries,
     )
