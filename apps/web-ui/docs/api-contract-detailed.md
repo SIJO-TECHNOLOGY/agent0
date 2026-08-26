@@ -228,6 +228,7 @@ above the cards when present.
 | `summary` | string \| null | Candidate summary. |
 | `boond_url` | string \| null | Opens BoondManager in a new tab when present. |
 | `state_label` | string \| null | Candidate state label, displayed in the card metadata. |
+| `state_id` | string \| null | Stable BoondManager state id backing `state_label`; used by the display-only state filter in the results toolbar. |
 | `contract_preferences` | string[] | Optional contract preferences. |
 | `salary_expectation` | string \| null | Optional salary expectation. |
 | `tjm` | string \| null | Optional daily rate. |

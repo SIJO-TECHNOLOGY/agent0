@@ -118,6 +118,17 @@ export default {
     sort_aria: "Sort candidates",
     sort_default: "Received order",
     sort_score: "Score descending",
+    states_group_aria: "Filter by state",
+    states_group_label: "States:",
+  },
+  filters: {
+    states_label: "Boond states",
+    check_all: "Check all",
+    uncheck_all: "Uncheck all",
+    states_loading: "Loading states…",
+    states_error: "Could not load the state list.",
+    states_empty: "No state available.",
+    states_hint: "Selected states filter the next search.",
   },
   candidate: {
     no_name: "Unnamed candidate",
@@ -143,6 +154,7 @@ export default {
       tjm: "Day rate",
       mobility: "Mobility",
       match: "Match",
+      state: "State",
     },
     sections: {
       summary: "Summary",

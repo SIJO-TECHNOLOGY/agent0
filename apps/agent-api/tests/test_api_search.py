@@ -29,6 +29,7 @@ REQUIRED_CANDIDATE_KEYS = {
     "strengths",
     "watch_points",
     "state_label",
+    "state_id",
     "source",
     "last_update",
     "technical_summary",

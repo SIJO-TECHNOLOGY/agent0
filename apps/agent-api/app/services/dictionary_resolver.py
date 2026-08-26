@@ -14,6 +14,7 @@ massages dictionary entries the MCP server already returned.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable
 from typing import Final
 
@@ -346,6 +347,116 @@ def dictionary_candidate_state_entries(
                 if isinstance(value, list):
                     out.extend(e for e in value if isinstance(e, dict))
     return out
+
+
+def _fold_text(text: str) -> str:
+    """Lowercase + strip accents so 'Qualifié' matches 'qualifie'."""
+    normalized = unicodedata.normalize("NFKD", text.lower())
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def resolve_candidate_state_ids(
+    entries: Iterable[object], wanted_labels: Iterable[str]
+) -> tuple[list[object], list[str]]:
+    """Map candidate state labels to dictionary ids (accent/case-insensitive).
+
+    Returns ``(matched_ids, unresolved_labels)``. Never invents an id — a
+    label with no dictionary match lands in ``unresolved_labels`` so the
+    caller can warn honestly instead of silently dropping the filter.
+    """
+    wanted: dict[str, str] = {}
+    for label in wanted_labels:
+        if isinstance(label, str) and label.strip():
+            wanted.setdefault(_fold_text(label.strip()), label.strip())
+    if not wanted:
+        return [], []
+    matched: list[object] = []
+    seen: set[object] = set()
+    found_keys: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        label = _label_of(entry)
+        if label is None:
+            continue
+        key = _fold_text(label.strip())
+        if key not in wanted:
+            continue
+        entry_id = entry_id_of(entry)
+        if entry_id is not None and entry_id not in seen:
+            seen.add(entry_id)
+            matched.append(entry_id)
+            found_keys.add(key)
+    unresolved = [
+        original for key, original in wanted.items() if key not in found_keys
+    ]
+    return matched, unresolved
+
+
+# Cue words that mark a single-word state label as a *pipeline state* mention
+# rather than ordinary vocabulary ("dev qualifié" ≠ state "Qualifié", but
+# "en Qualifié" / "statut Qualifié" is one).
+_STATE_CUE_WORDS: Final[str] = r"(?:en|au|aux|etat|etats|statut|statuts|status)"
+
+
+def detect_candidate_state_labels(
+    entries: Iterable[object], text: str
+) -> list[str]:
+    """Conservative detection of candidate state labels mentioned in a query.
+
+    Multi-word labels (e.g. "A jouer", "Import à traiter") are distinctive
+    enough to match on word boundaries alone; single-word labels ("Vivier",
+    "Qualifié") require a state cue word right before them so ordinary uses
+    of the word ("dev qualifié") never trigger the filter. Matching is
+    accent- and case-insensitive. Returns the original dictionary labels.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+    folded_text = _fold_text(text)
+    matched: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        label = _label_of(entry)
+        if label is None:
+            continue
+        folded_label = _fold_text(label.strip())
+        if not folded_label:
+            continue
+        escaped = re.escape(folded_label)
+        if " " in folded_label:
+            pattern = rf"(?<![\w]){escaped}(?![\w])"
+        else:
+            pattern = rf"\b{_STATE_CUE_WORDS}\s+{escaped}(?![\w])"
+        if re.search(pattern, folded_text) and label not in matched:
+            matched.append(label)
+    return matched
+
+
+def candidate_state_options(
+    raw_records: Iterable[object],
+) -> list[dict[str, object]]:
+    """Selectable candidate states: dictionary entries minus excluded ones.
+
+    Filters out "Ne plus contacter" / "A SUPPRIMER"-style states (the UI
+    must not offer them as search filters) and normalizes each entry to a
+    flat ``{"id": ..., "label": ...}`` dict.
+    """
+    entries = dictionary_candidate_state_entries(raw_records)
+    excluded = {str(sid) for sid in resolve_excluded_state_ids(entries)}
+    options: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        entry_id = entry_id_of(entry)
+        label = _label_of(entry)
+        if entry_id is None or label is None:
+            continue
+        key = str(entry_id)
+        if key in excluded or key in seen:
+            continue
+        seen.add(key)
+        options.append({"id": entry_id, "label": label})
+    return options
 
 
 def resolve_label_for_id(entries: Iterable[object], target_id: object) -> str | None:

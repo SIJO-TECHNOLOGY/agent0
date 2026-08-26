@@ -3,6 +3,7 @@
   createConversation,
   deleteAllConversations,
   deleteConversation,
+  fetchCandidateStates,
   getConversation,
   getConversations,
   renameConversation,
@@ -43,6 +44,10 @@ const state = {
   renderedResults: [],
   drawerTrigger: null,
   conversationQuery: "",
+  // Pre-query BoondManager state filter (checkbox popover next to the input).
+  candidateStates: null,
+  candidateStatesLoading: false,
+  stateFilterSelection: new Set(),
 };
 
 function generateSessionId() {
@@ -99,6 +104,14 @@ const elements = {
   drawerBoondBtn: document.getElementById("drawerBoondBtn"),
   langSwitcher: document.getElementById("langSwitcher"),
   srStatus: document.getElementById("srStatus"),
+  stateFilter: document.getElementById("stateFilter"),
+  stateFilterBtn: document.getElementById("stateFilterBtn"),
+  stateFilterPanel: document.getElementById("stateFilterPanel"),
+  stateFilterOptions: document.getElementById("stateFilterOptions"),
+  stateFilterCount: document.getElementById("stateFilterCount"),
+  stateFilterAll: document.getElementById("stateFilterAll"),
+  stateFilterNone: document.getElementById("stateFilterNone"),
+  stateFilterStatus: document.getElementById("stateFilterStatus"),
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -180,6 +193,28 @@ function bindEvents() {
   elements.newChatBtn.addEventListener("click", newChat);
   elements.sendBtn.addEventListener("click", send);
 
+  if (elements.stateFilterBtn) {
+    elements.stateFilterBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleStateFilterPanel();
+    });
+  }
+  if (elements.stateFilterAll) {
+    elements.stateFilterAll.addEventListener("click", () => setAllStateFilter(true));
+  }
+  if (elements.stateFilterNone) {
+    elements.stateFilterNone.addEventListener("click", () => setAllStateFilter(false));
+  }
+  document.addEventListener("click", (event) => {
+    if (
+      elements.stateFilterPanel
+      && !elements.stateFilterPanel.hidden
+      && !elements.stateFilter?.contains(event.target)
+    ) {
+      closeStateFilterPanel();
+    }
+  });
+
   if (elements.searchBtn) {
     elements.searchBtn.addEventListener("click", toggleConversationSearch);
   }
@@ -236,6 +271,10 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeCandidateDrawer();
+      if (elements.stateFilterPanel && !elements.stateFilterPanel.hidden) {
+        closeStateFilterPanel();
+        elements.stateFilterBtn?.focus();
+      }
       if (elements.settingsMenu && !elements.settingsMenu.hidden) {
         closeMenu(elements.settingsMenu, elements.settingsBtn);
         elements.settingsBtn?.focus();
@@ -282,6 +321,93 @@ function handleLanguageChange() {
   state.renderedResults.forEach(({ wrapper, candidates, ui, viewState }) => {
     populateCandidateResults(wrapper, candidates, ui, viewState);
   });
+}
+
+function toggleStateFilterPanel() {
+  if (!elements.stateFilterPanel) return;
+  if (elements.stateFilterPanel.hidden) {
+    elements.stateFilterPanel.hidden = false;
+    elements.stateFilterBtn?.setAttribute("aria-expanded", "true");
+    ensureCandidateStatesLoaded();
+  } else {
+    closeStateFilterPanel();
+  }
+}
+
+function closeStateFilterPanel() {
+  if (!elements.stateFilterPanel) return;
+  elements.stateFilterPanel.hidden = true;
+  elements.stateFilterBtn?.setAttribute("aria-expanded", "false");
+}
+
+async function ensureCandidateStatesLoaded() {
+  if (state.candidateStates || state.candidateStatesLoading) return;
+  state.candidateStatesLoading = true;
+  setStateFilterStatus(t("filters.states_loading"));
+  try {
+    const states = await fetchCandidateStates();
+    state.candidateStates = states;
+    setStateFilterStatus(states.length ? "" : t("filters.states_empty"));
+    renderStateFilterOptions();
+  } catch (error) {
+    console.error(error);
+    setStateFilterStatus(t("filters.states_error"));
+  } finally {
+    state.candidateStatesLoading = false;
+  }
+}
+
+function setStateFilterStatus(message) {
+  if (!elements.stateFilterStatus) return;
+  elements.stateFilterStatus.textContent = message;
+  elements.stateFilterStatus.hidden = !message;
+}
+
+function renderStateFilterOptions() {
+  if (!elements.stateFilterOptions) return;
+  elements.stateFilterOptions.innerHTML = "";
+  (state.candidateStates || []).forEach((option) => {
+    const label = document.createElement("label");
+    label.className = "state-filter-option";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = option.id;
+    input.checked = state.stateFilterSelection.has(option.id);
+    input.addEventListener("change", () => {
+      if (input.checked) state.stateFilterSelection.add(option.id);
+      else state.stateFilterSelection.delete(option.id);
+      updateStateFilterCount();
+    });
+
+    const text = document.createElement("span");
+    text.textContent = option.label;
+
+    label.append(input, text);
+    elements.stateFilterOptions.appendChild(label);
+  });
+  updateStateFilterCount();
+}
+
+function setAllStateFilter(checked) {
+  if (!state.candidateStates) return;
+  state.stateFilterSelection = checked
+    ? new Set(state.candidateStates.map((option) => option.id))
+    : new Set();
+  renderStateFilterOptions();
+}
+
+function updateStateFilterCount() {
+  if (!elements.stateFilterCount) return;
+  const count = state.stateFilterSelection.size;
+  elements.stateFilterCount.textContent = String(count);
+  elements.stateFilterCount.hidden = count === 0;
+  elements.stateFilter?.classList.toggle("active", count > 0);
+}
+
+function buildSearchFilters() {
+  const selected = [...state.stateFilterSelection];
+  return selected.length ? { candidate_states: selected } : {};
 }
 
 function applyFeatureVisibility() {
@@ -913,7 +1039,7 @@ function renderCandidateCards(candidates, ui = {}) {
   wrapper.className = "candidate-results";
 
   // Preserve filter/sort state across re-renders (e.g. language switch).
-  const viewState = { strictOnly: false, availableOnly: false, sortMode: "default" };
+  const viewState = { strictOnly: false, availableOnly: false, sortMode: "default", states: [] };
   populateCandidateResults(wrapper, candidates, ui, viewState);
 
   // Register for re-render on language change (toolbar + cards are built with
@@ -936,16 +1062,22 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
   const strictInput = toolbar.querySelector("[data-strict-only]");
   const availableInput = toolbar.querySelector("[data-available-only]");
   const sortSelect = toolbar.querySelector("[data-sort]");
+  const stateInputs = [...toolbar.querySelectorAll("[data-state-filter]")];
 
   // Restore prior view state so a re-render does not reset the user's choices.
   if (strictInput) strictInput.checked = viewState.strictOnly;
   if (availableInput) availableInput.checked = viewState.availableOnly;
   if (sortSelect) sortSelect.value = viewState.sortMode;
+  const restoredStates = Array.isArray(viewState.states) ? viewState.states : [];
+  stateInputs.forEach((input) => {
+    input.checked = restoredStates.includes(input.value);
+  });
 
   const renderList = () => {
     viewState.strictOnly = Boolean(strictInput?.checked);
     viewState.availableOnly = Boolean(availableInput?.checked);
     viewState.sortMode = sortSelect?.value || "default";
+    viewState.states = stateInputs.filter((input) => input.checked).map((input) => input.value);
 
     list.innerHTML = "";
 
@@ -955,6 +1087,11 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
     }
     if (viewState.availableOnly) {
       visibleCandidates = visibleCandidates.filter(isAvailableSoon);
+    }
+    if (viewState.states.length) {
+      visibleCandidates = visibleCandidates.filter((candidate) =>
+        viewState.states.includes(candidateStateValue(candidate)),
+      );
     }
 
     if (viewState.sortMode === "score") {
@@ -1007,6 +1144,9 @@ function renderCandidateCard(candidate) {
     createMetaItem(t("candidate.meta.contract"), formatList(candidate.contract_preferences)),
     createMetaItem(t("candidate.meta.availability"), candidate.availability || t("candidate.fallback_availability")),
   );
+  if (candidate.state_label) {
+    meta.appendChild(createMetaItem(t("candidate.meta.state"), candidate.state_label));
+  }
 
   const summary = document.createElement("p");
   summary.className = "candidate-summary";
@@ -1345,6 +1485,7 @@ async function runSearchStream(text, thinking) {
     {
       signal: state.abortController.signal,
       conversationId: ensureSessionId(),
+      filters: buildSearchFilters(),
     },
   );
 
@@ -1535,6 +1676,39 @@ function renderCandidateResultsToolbar(ui, candidates) {
     controls.appendChild(label);
   }
 
+  // One checkbox per BoondManager state present in the received results
+  // (display-only filtering — no new backend query).
+  const stateOptions = collectResultStateOptions(candidates);
+  if (stateOptions.length) {
+    const group = document.createElement("div");
+    group.className = "result-state-filters";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", t("results.states_group_aria"));
+
+    const groupLabel = document.createElement("span");
+    groupLabel.className = "result-state-filters-label";
+    groupLabel.textContent = t("results.states_group_label");
+    group.appendChild(groupLabel);
+
+    stateOptions.forEach((option) => {
+      const label = document.createElement("label");
+      label.className = "availability-toggle state-toggle";
+
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = option.value;
+      input.dataset.stateFilter = "true";
+
+      const text = document.createElement("span");
+      text.textContent = option.label;
+
+      label.append(input, text);
+      group.appendChild(label);
+    });
+
+    controls.appendChild(group);
+  }
+
   if (candidates.some((candidate) => candidate.match_score !== null && candidate.match_score !== undefined)) {
     const sort = document.createElement("select");
     sort.dataset.sort = "true";
@@ -1554,6 +1728,26 @@ function renderCandidateResultsToolbar(ui, candidates) {
 
   toolbar.append(copy, controls);
   return toolbar;
+}
+
+function candidateStateValue(candidate) {
+  const id = candidate?.state_id;
+  if (id !== undefined && id !== null && String(id).trim() !== "") {
+    return String(id).trim();
+  }
+  return candidate?.state_label || "";
+}
+
+function collectResultStateOptions(candidates) {
+  const seen = new Map();
+  candidates.forEach((candidate) => {
+    const value = candidateStateValue(candidate);
+    if (!value || seen.has(value)) return;
+    seen.set(value, candidate.state_label || value);
+  });
+  return [...seen.entries()]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
 }
 
 function renderHighlightTags(highlights) {

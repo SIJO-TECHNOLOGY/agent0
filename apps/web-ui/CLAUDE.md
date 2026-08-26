@@ -138,6 +138,7 @@ For `candidate_cards`, the frontend may render optional fields:
 - `candidate.tjm`
 - `candidate.mobility`
 - `candidate.state_label`
+- `candidate.state_id`
 - `candidate.source`
 - `candidate.last_update`
 - `candidate.ai_evaluation` or `candidate.match_explanation`
