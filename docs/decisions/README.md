@@ -18,3 +18,4 @@ Use this folder to record meaningful technical decisions as the project evolves.
 - [ADR-011 - Agent1: Candidate Data Normalization](./adr-011-agent1-candidate-data-normalization.md) - records the deterministic-first data-quality layer with optional, conflict-only LLM reconciliation.
 - [ADR-012 - Reflection Decides Clarify-or-Retry](./adr-012-clarify-or-retry.md) - the post-ranking reflection may ask the user to clarify (unresolved parameter) instead of accepting or retrying.
 - [ADR-013 - TTL Caching Of Semi-Stable MCP Results](./adr-013-mcp-result-caching.md) - in-process TTL cache for the dictionary, CV text, and technical documents; volatile candidate data is never cached.
+- [ADR-014 - Candidate Pipeline-State Filtering](./adr-014-candidate-state-filtering.md) - checkbox-driven and NL state filters resolved by the Agent API (never the LLM), applied to every search pass, plus a display-only post-filter; excluded states are never surfaced.

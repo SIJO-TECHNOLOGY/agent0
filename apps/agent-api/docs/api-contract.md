@@ -6,6 +6,7 @@
 POST /api/search
 POST /api/search/stream
 POST /api/chat
+GET  /api/candidate-states
 ```
 
 `/api/search` executes a natural-language search workflow through the Agent API
@@ -23,7 +24,7 @@ The frontend never consumes raw MCP or BoondManager payloads by default.
 ```json
 {
   "query": "Find Java candidates in Paris",
-  "filters": {}
+  "filters": { "candidate_states": ["7", "8"] }
 }
 ```
 
@@ -31,6 +32,13 @@ The frontend never consumes raw MCP or BoondManager payloads by default.
 | --- | --- | --- | --- |
 | `query` | string | yes | Natural-language candidate search request. |
 | `filters` | object | no | Optional structured filters from the UI. Defaults to an empty object. |
+
+Supported filter keys:
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `candidate_states` | array of state ids | Candidate pipeline states selected in the UI (ids from `GET /api/candidate-states`). Multiple states are additive (union) and applied server-side on every search pass (`candidateStates`). See ADR-014. |
+| `search_page` | integer | Session-driven provider page for "show me other profiles" follow-ups. |
 
 ## Chat Request
 
@@ -105,6 +113,8 @@ BoondManager MCP server results.
 | `match_score` | number \| null | Relevance score when available. |
 | `summary` | string \| null | Short MCP-grounded summary. |
 | `boond_url` | string \| null | External link when the MCP result provides one. |
+| `state_label` | string \| null | Candidate pipeline-state label resolved from the dictionary (all cards, not just the enriched slice). |
+| `state_id` | string \| null | Stable pipeline-state id backing `state_label`; used by the frontend's display-only state filter. |
 
 ## Normalization Rules
 
@@ -124,6 +134,26 @@ BoondManager MCP server results.
 - Unknown filter keys may be accepted for forward compatibility, but must not be blindly passed to MCP tools.
 - Validation failures return structured `4xx` responses.
 - Successful search responses are deterministic in shape, even when no candidates are found.
+
+## Candidate States Endpoint
+
+`GET /api/candidate-states` returns the candidate pipeline states the UI may
+offer as search filters, sourced from the BoondManager dictionary through MCP
+(`getDictionary`, TTL-cached per ADR-013):
+
+```json
+{
+  "states": [
+    { "id": "7", "label": "Vivier" },
+    { "id": "8", "label": "A jouer" }
+  ]
+}
+```
+
+Excluded states ("Ne plus contacter", "A SUPPRIMER", "Proposition refusé") are
+filtered out server-side and never offered; candidates in those states are also
+removed from search results entirely. When the dictionary cannot be fetched the
+endpoint returns the standard `mcp_client_unavailable` 503 envelope.
 
 ## Error Response Shape
 

@@ -210,7 +210,8 @@ controls:
 - sort by `match_score` when scores are present
 - show only available profiles when `availability` is present
 - filter by BoondManager state when `state_label` / `state_id` are present
-  (one checkbox per state found in the received results)
+  (a compact "États" dropdown with one checkbox per state found in the
+  received results)
 
 These controls do not build BoondManager queries and do not replace backend
 filtering. They only rearrange or hide already received candidates in the UI.
@@ -223,7 +224,9 @@ GET /api/candidate-states
 
 Returns the selectable BoondManager candidate pipeline states used by the
 pre-query state filter next to the search input. Excluded states
-("Ne plus contacter", "A SUPPRIMER") are already filtered out by the backend.
+("Ne plus contacter", "A SUPPRIMER", "Proposition refusé") are already
+filtered out by the backend, and candidates in those states never appear
+in search results at all.
 
 ```json
 {
