@@ -127,7 +127,6 @@ async function devRequest(path, options = {}) {
         { id: "7", label: "Vivier" },
         { id: "8", label: "A jouer" },
         { id: "9", label: "Converti en Ressource" },
-        { id: "10", label: "Proposition refusé" },
       ],
     };
   }

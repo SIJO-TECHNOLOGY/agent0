@@ -28,6 +28,7 @@ async def _dict_handler(_inputs: dict[str, object]):
                         {"id": 2, "label": "Qualifié"},
                         {"id": 7, "label": "Vivier"},
                         {"id": 8, "label": "A jouer"},
+                        {"id": 10, "label": "Proposition refusé"},
                         {"id": 11, "label": "Ne plus contacter"},
                         {"id": 12, "label": "A SUPPRIMER"},
                     ]
@@ -66,6 +67,7 @@ async def test_candidate_states_returns_options_without_excluded_states() -> Non
     assert "Vivier" in labels and "A jouer" in labels and "Qualifié" in labels
     assert "Ne plus contacter" not in labels
     assert "A SUPPRIMER" not in labels
+    assert "Proposition refusé" not in labels
     assert all(
         set(state.keys()) == {"id", "label"} and isinstance(state["id"], str)
         for state in body["states"]

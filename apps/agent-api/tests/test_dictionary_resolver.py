@@ -138,6 +138,7 @@ _STATE_ENTRIES = [
     {"id": 2, "label": "Qualifié"},
     {"id": 7, "label": "Vivier"},
     {"id": 8, "label": "A jouer"},
+    {"id": 10, "label": "Proposition refusé"},
     {"id": 11, "label": "Ne plus contacter"},
     {"id": 12, "label": "A SUPPRIMER"},
 ]
@@ -197,3 +198,6 @@ def test_candidate_state_options_excludes_forbidden_states() -> None:
     assert "Vivier" in labels and "A jouer" in labels
     assert "Ne plus contacter" not in labels
     assert "A SUPPRIMER" not in labels
+    # Not offered as a filter option, but candidates in this state are
+    # still searchable/visible.
+    assert "Proposition refusé" not in labels
