@@ -2,7 +2,17 @@
 
 ## Status
 
-Accepted (2026-08-06)
+**Built and measured, not adopted** (2026-08-26). Superseded in
+practice by its own evaluation — see [Evaluation](#evaluation) and
+[Revised decision](#revised-decision). The implementation is complete
+and tested on branch `feature/agent-api-cv-rag` (PR #25); it is off by
+default and merges nothing into the search path unless
+`ENABLE_CV_RAG=true`.
+
+Originally recorded as Accepted (2026-08-06), before the channel had
+been measured against the live base. That original reasoning is kept
+below unedited, because the gap between it and the measured outcome is
+the useful part of this record.
 
 ## Context
 
@@ -19,6 +29,13 @@ Two structural limits follow:
    whose *summary* shows weak evidence never gets their CV read.
 
 The base is ~26k candidates (measured by paginating the live API).
+
+> **Premise 1 turned out to be false.** `searchCandidates` defaults to
+> `keywordsType=resumeTd` — *resume + technical document* — so
+> BoondManager already full-text searches CV content. The vocabulary
+> problem is real but much narrower than stated here: it is pure
+> synonymy, not unreachable text. This was discovered while evaluating
+> the channel, not while designing it.
 
 ## Decision
 
@@ -73,9 +90,13 @@ channel entirely. Misconfiguration with the flag *on* fails startup
 
 ## Consequences
 
-- Recall becomes vocabulary-robust and is no longer bounded by keyword
-  luck; the 12-candidate enrichment budget is now spent on a pool that
-  includes semantic matches.
+*Written as projections, before measurement. The first bullet is the one
+the evaluation disproved.*
+
+- ~~Recall becomes vocabulary-robust and is no longer bounded by keyword
+  luck~~; the 12-candidate enrichment budget is now spent on a pool that
+  includes semantic matches. **Measured: the displayed page did not
+  change on 7 of 8 queries.**
 - New runtime dependency (numpy), ~53 MB RSS for the loaded index, and
   one embedding API call per search (the query embedding).
 - The index ages: a candidate updated in BoondManager keeps their old
@@ -88,3 +109,85 @@ channel entirely. Misconfiguration with the flag *on* fails startup
 - The stored summary is a second copy of a *slice* of candidate data —
   kept deliberately minimal (card fields only) and treated as a seed
   that live enrichment overwrites.
+
+## Evaluation
+
+The channel was measured before adoption, against the live MCP server
+and real BoondManager data.
+
+### Indexing the whole base
+
+| | |
+| --- | --- |
+| Candidates indexed | **24 313** |
+| Not indexable (no CV, no technical document) | 1 520 (~6%) |
+| Failures | **0** |
+| Duration | ~3 h at 8 concurrent |
+| Index size | 107 MB on disk, ~50 MB resident |
+
+The bulk script proved resumable and incremental in practice: the run
+was interrupted and restarted, and content-hash gating skipped the
+already-indexed candidates without re-embedding them.
+
+### A/B measurement
+
+Two instances of the same build, differing only by `ENABLE_CV_RAG`,
+over 8 queries spanning keyword-friendly ("développeur Java Spring
+senior"), business-language ("quelqu'un qui a fait de la migration vers
+le cloud"), and deliberately-poor-coverage ("développeur mobile iOS
+Swift") cases:
+
+| Measure | Result |
+| --- | --- |
+| Queries where the displayed page was **identical** | **7 / 8** |
+| Profiles added across all queries | 1 |
+| Profiles evicted across all queries | 1 |
+| Mean latency | 45 s with, 44 s without |
+
+The single exchange was a wash on inspection: the evicted profile listed
+`Swift` among finance/Drupal skills; the added one carried `Android`,
+`Android Studio`, `App Store`. The same query produced 0 exchanges on an
+earlier run, placing that lone data point inside the LLM planner's
+run-to-run variance.
+
+An earlier round with a partial index (~300 candidates) and a
+permissive floor (`min_score=0.30`, `top_k=30`) *did* visibly dilute
+results — weak hits competed for the bounded enrichment budget. That
+motivated the tightening to `0.45` / `10`, after measuring the live
+score distribution (clearly related ~0.5+, barely related ~0.4). The
+7/8 result above is with the tightened defaults and the full index.
+
+### What the design got right
+
+The additive-only guarantee held under test. On the query where the
+index had only noise to offer, both result lists were **identical**:
+vector hits entered with score 0, failed to earn evidence, and were
+dropped before display. The channel could not degrade results even when
+its own suggestions were poor.
+
+### Why the benefit did not materialise
+
+Because premise 1 was wrong. With `keywordsType=resumeTd`, BoondManager
+already searches CV text; combined with the 5-pass relaxation ladder and
+evidence scoring, the existing path already reaches the profiles this
+channel was built to surface. What remained was pure synonymy, and the
+measurement shows the existing machinery covers enough of it that the
+displayed page does not change.
+
+## Revised decision
+
+**Do not merge.** The cost — a numpy dependency, ~50 MB per replica, a
+107 MB derived index, an ingestion pipeline, and re-indexing on any
+embedding-model change — buys no measured benefit.
+
+Keep the branch. The channel is one environment variable away from
+being live, so the trigger for revisiting is concrete rather than
+speculative: **a real candidate, known to be in BoondManager, that
+agent0 does not return.** One such case is worth more evidence than this
+whole synthetic benchmark, and would also tell us which part of recall
+actually failed.
+
+Anyone reconsidering semantic retrieval here should start from the
+`resumeTd` finding rather than re-deriving it: the question is not
+"can we read CV text" — we already do — but "which specific synonym
+gaps survive the ladder".
