@@ -119,7 +119,7 @@ export default {
     sort_default: "Ordre reçu",
     sort_score: "Score décroissant",
     states_group_aria: "Filtrer par état",
-    states_group_label: "États :",
+    states_button: "États",
   },
   filters: {
     states_label: "États Boond",

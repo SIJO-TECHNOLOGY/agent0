@@ -1661,17 +1661,19 @@ button.footer-pill:hover {
   font-size: var(--fs-sm);
 }
 
-.result-state-filters {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+/* Results-toolbar variant: the "États" dropdown opens BELOW its button,
+   right-aligned (the pre-query popover opens above the search input). */
+.result-state-filter .state-filter-panel {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  min-width: 220px;
 }
 
-.result-state-filters-label {
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
+.state-filter-icon {
+  display: inline-flex;
+  align-items: center;
 }
 
 .input-wrap {

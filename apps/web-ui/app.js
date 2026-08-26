@@ -1063,6 +1063,8 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
   const availableInput = toolbar.querySelector("[data-available-only]");
   const sortSelect = toolbar.querySelector("[data-sort]");
   const stateInputs = [...toolbar.querySelectorAll("[data-state-filter]")];
+  const stateCountBadge = toolbar.querySelector("[data-state-count]");
+  const stateFilterBox = toolbar.querySelector(".result-state-filter");
 
   // Restore prior view state so a re-render does not reset the user's choices.
   if (strictInput) strictInput.checked = viewState.strictOnly;
@@ -1078,6 +1080,12 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
     viewState.availableOnly = Boolean(availableInput?.checked);
     viewState.sortMode = sortSelect?.value || "default";
     viewState.states = stateInputs.filter((input) => input.checked).map((input) => input.value);
+
+    if (stateCountBadge) {
+      stateCountBadge.textContent = String(viewState.states.length);
+      stateCountBadge.hidden = viewState.states.length === 0;
+    }
+    stateFilterBox?.classList.toggle("active", viewState.states.length > 0);
 
     list.innerHTML = "";
 
@@ -1676,23 +1684,42 @@ function renderCandidateResultsToolbar(ui, candidates) {
     controls.appendChild(label);
   }
 
-  // One checkbox per BoondManager state present in the received results
-  // (display-only filtering — no new backend query).
+  // Compact "États" dropdown: one checkbox per BoondManager state present
+  // in the received results (display-only filtering — no new backend query).
   const stateOptions = collectResultStateOptions(candidates);
   if (stateOptions.length) {
-    const group = document.createElement("div");
-    group.className = "result-state-filters";
-    group.setAttribute("role", "group");
-    group.setAttribute("aria-label", t("results.states_group_aria"));
+    const container = document.createElement("div");
+    container.className = "state-filter result-state-filter";
 
-    const groupLabel = document.createElement("span");
-    groupLabel.className = "result-state-filters-label";
-    groupLabel.textContent = t("results.states_group_label");
-    group.appendChild(groupLabel);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "state-filter-btn";
+    btn.setAttribute("aria-haspopup", "true");
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-label", t("results.states_group_aria"));
+
+    const icon = document.createElement("span");
+    icon.className = "state-filter-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>';
+
+    const btnText = document.createElement("span");
+    btnText.textContent = t("results.states_button");
+
+    const count = document.createElement("span");
+    count.className = "state-filter-count";
+    count.dataset.stateCount = "true";
+    count.hidden = true;
+
+    btn.append(icon, btnText, count);
+
+    const panel = document.createElement("div");
+    panel.className = "state-filter-panel";
+    panel.hidden = true;
 
     stateOptions.forEach((option) => {
       const label = document.createElement("label");
-      label.className = "availability-toggle state-toggle";
+      label.className = "state-filter-option";
 
       const input = document.createElement("input");
       input.type = "checkbox";
@@ -1703,10 +1730,31 @@ function renderCandidateResultsToolbar(ui, candidates) {
       text.textContent = option.label;
 
       label.append(input, text);
-      group.appendChild(label);
+      panel.appendChild(label);
     });
 
-    controls.appendChild(group);
+    const closePanel = () => {
+      panel.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+    };
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      btn.setAttribute("aria-expanded", String(willOpen));
+    });
+    const onDocClick = (event) => {
+      // Self-cleaning: drop the listener once this result block is gone.
+      if (!document.body.contains(container)) {
+        document.removeEventListener("click", onDocClick);
+        return;
+      }
+      if (!panel.hidden && !container.contains(event.target)) closePanel();
+    };
+    document.addEventListener("click", onDocClick);
+
+    container.append(btn, panel);
+    controls.appendChild(container);
   }
 
   if (candidates.some((candidate) => candidate.match_score !== null && candidate.match_score !== undefined)) {

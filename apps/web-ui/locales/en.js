@@ -119,7 +119,7 @@ export default {
     sort_default: "Received order",
     sort_score: "Score descending",
     states_group_aria: "Filter by state",
-    states_group_label: "States:",
+    states_button: "States",
   },
   filters: {
     states_label: "Boond states",
