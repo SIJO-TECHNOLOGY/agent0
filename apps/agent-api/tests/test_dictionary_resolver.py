@@ -198,6 +198,12 @@ def test_candidate_state_options_excludes_forbidden_states() -> None:
     assert "Vivier" in labels and "A jouer" in labels
     assert "Ne plus contacter" not in labels
     assert "A SUPPRIMER" not in labels
-    # Not offered as a filter option, but candidates in this state are
-    # still searchable/visible.
     assert "Proposition refusé" not in labels
+
+
+def test_proposition_refuse_is_a_fully_excluded_state() -> None:
+    from app.services.dictionary_resolver import resolve_excluded_state_ids
+
+    # Same treatment as "Ne plus contacter" / "A SUPPRIMER": candidates in
+    # this state are removed from search results entirely.
+    assert 10 in resolve_excluded_state_ids(_STATE_ENTRIES)

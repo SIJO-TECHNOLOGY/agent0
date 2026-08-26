@@ -306,6 +306,7 @@ _EXCLUDED_STATE_KEYWORDS: Final[tuple[str, ...]] = (
     "à supprimer",
     "a supprimer",
     "supprimer",
+    "proposition refus",
     "blacklist",
     "exclu",
     "do not contact",
@@ -433,23 +434,15 @@ def detect_candidate_state_labels(
     return matched
 
 
-# States hidden from the FILTER OPTIONS list only (unlike
-# ``_EXCLUDED_STATE_KEYWORDS``, candidates in these states are NOT removed
-# from search results — they are just not offered as checkboxes).
-_UNSELECTABLE_STATE_KEYWORDS: Final[tuple[str, ...]] = (
-    "proposition refus",
-)
-
-
 def candidate_state_options(
     raw_records: Iterable[object],
 ) -> list[dict[str, object]]:
     """Selectable candidate states: dictionary entries minus excluded ones.
 
-    Filters out "Ne plus contacter" / "A SUPPRIMER"-style states plus the
-    unselectable ones ("Proposition refusé") — the UI must not offer them
-    as search filters — and normalizes each entry to a flat
-    ``{"id": ..., "label": ...}`` dict.
+    Filters out the excluded states ("Ne plus contacter", "A SUPPRIMER",
+    "Proposition refusé", …) — the UI must not offer them as search
+    filters — and normalizes each entry to a flat ``{"id": ..., "label":
+    ...}`` dict.
     """
     entries = dictionary_candidate_state_entries(raw_records)
     excluded = {str(sid) for sid in resolve_excluded_state_ids(entries)}
@@ -462,8 +455,6 @@ def candidate_state_options(
             continue
         key = str(entry_id)
         if key in excluded or key in seen:
-            continue
-        if any(kw in _fold_text(label) for kw in _UNSELECTABLE_STATE_KEYWORDS):
             continue
         seen.add(key)
         options.append({"id": entry_id, "label": label})
