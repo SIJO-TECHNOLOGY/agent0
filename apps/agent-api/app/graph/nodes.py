@@ -69,6 +69,8 @@ from app.services.llm_planner import (
     PlannerConstraints,
 )
 from app.models.warnings import Warning
+from app.rag.indexer import CandidatePayload
+from app.rag.service import RagService
 from app.services.semantic_scorer import SemanticScorer
 from app.agents.agent1.normalizer import (
     normalize_candidates as _agent1_normalize,
@@ -110,6 +112,9 @@ class NodeContext:
     semantic_boost_weight: float = 0.15
     agent1_reconciler: Agent1Reconciler | None = None
     allow_clarification: bool = True
+    # Semantic CV retrieval (ADR-014). None => the vector recall channel is
+    # simply absent; the keyword ladder behaves exactly as before.
+    rag_service: RagService | None = None
 
 
 def _replace(state: GraphState, **changes: object) -> GraphState:
@@ -1769,6 +1774,15 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
                 update={"data": {**data, **update}}
             )
 
+    # Index catch-up (ADR-014): the CV and technical document for these
+    # candidates were just downloaded, so indexing them costs embeddings
+    # only — no second round of MCP calls. This is what fills the index in
+    # as the tool gets used, on top of the bulk indexing script.
+    # Runs after state resolution so the payloads it reads are final; the
+    # state keys it adds are internal (leading underscore) and are stripped
+    # from the indexed summary anyway.
+    await _catch_up_vector_index(ctx, enriched_results[:enrichment_limit])
+
     new_calls = tool_calls[len(state.tool_calls):]
     logger.info(
         "graph.enrich_candidates",
@@ -1786,6 +1800,49 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     )
 
     return _replace(state, results=enriched_results, tool_calls=tool_calls)
+
+
+async def _catch_up_vector_index(
+    ctx: NodeContext, results: list[SearchResult]
+) -> int:
+    """Index just-enriched candidates that the vector index doesn't have yet.
+
+    Reuses the enrichment payloads already in ``result.data`` rather than
+    re-reading the CV through MCP. Never raises: a failed catch-up leaves
+    the index slightly staler, nothing more.
+    """
+    service = ctx.rag_service
+    if service is None or not results:
+        return 0
+
+    payloads: list[CandidatePayload] = []
+    for result in results:
+        if not result.id or result.id == "unknown":
+            continue
+        data = result.data
+        tech_doc = data.get(ENRICHMENT_TECH_DOC_KEY)
+        resume = data.get(ENRICHMENT_RESUME_KEY)
+        summary = {
+            key: value
+            for key, value in data.items()
+            if not (isinstance(key, str) and key.startswith("_"))
+        }
+        summary.setdefault("id", result.id)
+        if result.title:
+            summary.setdefault("title", result.title)
+        payloads.append(
+            CandidatePayload(
+                summary=summary,
+                technical_document=tech_doc if isinstance(tech_doc, dict) else None,
+                cv=resume if isinstance(resume, dict) else None,
+            )
+        )
+
+    try:
+        return await service.catch_up(payloads)
+    except Exception:  # noqa: BLE001 — index upkeep must not fail a search
+        logger.exception("graph.vector_catch_up_failed")
+        return 0
 
 
 def _reconcile_input_from_result(result: SearchResult) -> ReconcileInput:
@@ -3217,6 +3274,78 @@ def _prerank_search_results(
     results[:] = annotated
 
 
+async def _augment_with_vector_recall(
+    ctx: NodeContext,
+    *,
+    intent: InterpretedIntent | None,
+    anchors: object,
+    results: list[SearchResult],
+) -> int:
+    """Add semantically similar candidates the keyword ladder missed.
+
+    The vector channel is strictly ADDITIVE (ADR-014): it appends
+    candidates absent from ``results`` and never removes or reorders what
+    the keyword ladder found, so an empty or broken index degrades to
+    today's behaviour exactly.
+
+    Two deliberate abstentions:
+
+    - a **named-person** query is an exact-match lookup, not a semantic
+      question; running it through embeddings would return look-alikes
+      for someone we were asked to find by name;
+    - a query with **no skill / domain / role anchor** has nothing
+      meaningful to embed, so any hit would be noise.
+
+    Vector hits are emitted with the ``searchCandidates`` source tool so
+    they dedupe, pre-rank, enrich, and score exactly like keyword hits —
+    the channel changes recall, not the downstream contract.
+    """
+    service = ctx.rag_service
+    if service is None or intent is None:
+        return 0
+    if getattr(anchors, "name", None):
+        return 0
+    if not (
+        getattr(anchors, "skills", ())
+        or getattr(anchors, "domains", ())
+        or getattr(anchors, "role", None)
+    ):
+        return 0
+
+    existing = {result.id for result in results if result.id}
+    try:
+        hits = await service.search(
+            entities=[str(e) for e in intent.entities],
+            objective=intent.objective,
+            role=getattr(anchors, "role", None),
+            exclude=existing,
+        )
+    except Exception:  # noqa: BLE001 — additive channel, never fatal
+        logger.exception("graph.vector_recall_failed")
+        return 0
+    if not hits:
+        return 0
+
+    for hit in hits:
+        record = dict(hit.summary)
+        record.setdefault("id", hit.candidate_id)
+        result = _record_to_result(record, SEARCH_CANDIDATES_TOOL)
+        # Internal marker: stripped from candidate cards by the mapper's
+        # underscore filter, but visible in traces and debug mode.
+        result.data["_rag_score"] = round(hit.score, 4)
+        results.append(result)
+
+    logger.info(
+        "graph.vector_recall",
+        extra={
+            "added": len(hits),
+            "index_size": service.size,
+            "top_score": round(hits[0].score, 4),
+        },
+    )
+    return len(hits)
+
+
 async def _execute_search_ladder(
     ctx: NodeContext,
     *,
@@ -3351,7 +3480,14 @@ async def _execute_search_ladder(
     # ladder — surface that honestly instead of silently returning look-alikes.
     name_missed = bool(anchors.name) and matched_label != "name"
 
-    if used_relaxed is not None:
+    # Second recall channel: semantically similar candidates the keyword
+    # ladder never returned (ADR-014). Additive only — it appends
+    # candidates, never removes or reorders what keywords found.
+    vector_added = await _augment_with_vector_recall(
+        ctx, intent=intent, anchors=anchors, results=results
+    )
+
+    if used_relaxed is not None or vector_added:
         # Found candidates — pre-rank summaries so the best (by visible
         # evidence), not the first N, are the ones enriched downstream.
         _prerank_search_results(

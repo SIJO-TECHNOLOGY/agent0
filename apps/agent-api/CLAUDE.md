@@ -146,7 +146,7 @@ Rules:
 - **Do not use** `typeOf` from `/information` or search results for contract display — that field is the resource type (`setting.typeOf.resource`), not the desired contract type.
 - Resolution priority in `nodes.py._raw_contract_type`: admin enrichment → detail enrichment → search summary.
 
-**Candidate pipeline-state filtering (ADR-014):**
+**Candidate pipeline-state filtering (ADR-015):**
 
 - Dictionary: `setting.state.candidate` (ids vary per BoondManager instance — never hardcode them).
 - Constraint keys: `candidate_state_ids` (csv ids from `filters.candidate_states`, UI checkboxes) and `candidate_states` (csv labels declared by the LLM planner, prompt rule 13). The Agent API resolves labels to ids (`resolve_candidate_state_ids`, accent/case-insensitive, never invents an id) and injects `candidateStates` into EVERY search pass, including relaxed ladder passes.

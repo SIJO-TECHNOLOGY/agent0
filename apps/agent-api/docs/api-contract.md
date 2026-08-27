@@ -37,7 +37,7 @@ Supported filter keys:
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `candidate_states` | array of state ids | Candidate pipeline states selected in the UI (ids from `GET /api/candidate-states`). Multiple states are additive (union) and applied server-side on every search pass (`candidateStates`). See ADR-014. |
+| `candidate_states` | array of state ids | Candidate pipeline states selected in the UI (ids from `GET /api/candidate-states`). Multiple states are additive (union) and applied server-side on every search pass (`candidateStates`). See ADR-015. |
 | `search_page` | integer | Session-driven provider page for "show me other profiles" follow-ups. |
 
 ## Chat Request

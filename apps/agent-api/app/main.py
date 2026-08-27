@@ -33,6 +33,7 @@ from app.api.auth import (
 from app.api.dependencies import McpClientUnavailableError
 from app.config import get_settings
 from app.mcp.factory import create_mcp_client
+from app.rag.factory import create_rag_service
 from app.models.api import ErrorEnvelope, ErrorPayload, McpDependencyStatus
 from app.storage.factory import create_conversation_store
 from app.services.llm_backends import LlmBackendError, build_chat_fn
@@ -219,6 +220,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         app.state.llm_planner = None
 
+    # Semantic CV retrieval (ADR-014). Misconfiguration fails startup —
+    # an operator who switched it on must not get a silently keyword-only
+    # search. An *empty* index is not misconfiguration: the vector channel
+    # simply contributes nothing until the indexing script has run.
+    app.state.rag_service = None
+    if settings.enable_cv_rag:
+        rag_service = create_rag_service(settings, mcp_client=client)
+        loaded = await rag_service.startup()
+        app.state.rag_service = rag_service
+        logger.info(
+            "rag.ready",
+            extra={
+                "store": settings.rag_store,
+                "model": settings.rag_embedding_model,
+                "dims": settings.rag_embedding_dims,
+                "indexed": loaded,
+            },
+        )
+        if loaded == 0:
+            logger.warning("rag.index_empty_run_indexing_script")
+
     try:
         yield
     finally:
@@ -234,10 +256,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await store.close()
             except Exception:  # noqa: BLE001
                 logger.exception("conversation_store.close_failed")
+        rag = getattr(app.state, "rag_service", None)
+        if rag is not None:
+            await rag.close()
         app.state.mcp_client = None
         app.state.mcp_status = None
         app.state.llm_planner = None
         app.state.conversation_store = None
+        app.state.rag_service = None
 
 
 def create_app() -> FastAPI:
