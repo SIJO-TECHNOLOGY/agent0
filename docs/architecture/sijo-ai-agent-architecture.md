@@ -65,6 +65,34 @@ sequenceDiagram
     UI-->>User: Display results and reasoning
 ```
 
+The diagram above shows every MCP call reaching BoondManager. In
+practice a TTL cache sits at the Agent API's MCP client boundary, so
+calls for semi-stable data (the reference dictionary, CV text,
+technical documents) are served locally on repeat — see
+[Caching And Persistence](#caching-and-persistence).
+
+## Cost Profile Of One Search
+
+Concrete orders of magnitude matter here, because the expensive part of
+the system is not the LLM — it is the fan-out of MCP calls:
+
+| Step | Calls |
+| --- | --- |
+| Tool discovery | 1 MCP call (cached, 5 min) |
+| Planning | 1 LLM call |
+| Recall ladder | 1-5 `searchCandidates` passes + 1 title pass |
+| Dictionary resolution | up to 3 `getDictionary` calls (cached, 6 h) |
+| Enrichment | up to 4 MCP calls x 12 candidates |
+| Agent1 reconciliation | 0-1 LLM call (off by default) |
+| Reflection | 0-1 LLM call (skipped when results are strong) |
+| Bounded replan | replays the block above, at most once |
+
+Roughly **55-60 MCP calls and 1-3 LLM calls** for a full uncached
+search. Two deliberate consequences follow: enrichment is capped at one
+UI page's worth of candidates (12) to bound latency, and follow-up
+turns ("more", "filter", "sort") are answered from session memory
+without any external call at all.
+
 ## Agent Control Loop
 
 The Agent API is migrating from a single-shot plan-and-execute workflow to a bounded ReAct-style control loop:
@@ -74,6 +102,76 @@ plan -> act through MCP -> observe sanitized results -> reflect -> replan or sto
 ```
 
 This is not an open-ended autonomous ReAct loop. The LLM owns planning and bounded replan decisions, while LangGraph owns validation, state transitions, loop caps, and MCP-only execution. The transition is tracked in [Architectural Paradigm Shift: From Single-Shot Planning to Bounded ReAct Control Loop](../architecture-transitions/bounded-react-control-loop/README.md).
+
+## Caching And Persistence
+
+Three storage layers coexist in the Agent API and are easy to confuse.
+They differ in lifetime, scope, and what losing them costs.
+
+```mermaid
+flowchart LR
+    Graph["LangGraph workflow"] --> Cache["MCP TTL cache<br/>process memory"]
+    Cache -->|"miss"| Client["MCP client"]
+    Cache -.->|"hit: no network"| Graph
+    Client --> MCPS["MCP Server"]
+    Graph --> Conv["Conversation store<br/>SQLite / Azure Table"]
+```
+
+| Layer | Backing | Lifetime | Losing it costs |
+| --- | --- | --- | --- |
+| Conversation history | SQLite (dev) or Azure Table (prod) | Permanent, scoped per user | Real user data — it is the one durable store |
+| MCP result cache | Process memory. **Not a database.** | TTL-bounded, cleared on restart | Latency only; the next call refetches |
+| CV vector index | SQLite or Azure Table | Permanent but derived | Re-indexing time only — see [Semantic Retrieval](#semantic-retrieval-evaluated-not-adopted) |
+
+### MCP result cache
+
+Decorator around the MCP client ([ADR-013](../decisions/adr-013-mcp-result-caching.md)),
+so no graph node knows it exists. What it caches, and what it
+deliberately does not:
+
+- **Cached** — `getDictionary` (quasi-static reference data, fetched up
+  to three times per request), `getCandidateCV` and
+  `getCandidateTechnicalDocument` per candidate id (each CV call makes
+  BoondManager download and re-extract a PDF), and the tool catalogue.
+- **Never cached** — `searchCandidates`, `getCandidateDetail`,
+  `getCandidateAdministrative`. These carry availability, pipeline
+  state, and rates: serving them stale could surface a candidate who
+  has already been placed.
+
+Errors and empty results always pass through uncached, so a failed call
+is retried normally and a candidate who uploads a CV becomes visible on
+the next search rather than after a full TTL window.
+
+The cache is **per process**: replicas each warm their own and a restart
+clears it. A shared cache (Redis, or Azure Table through the existing
+storage factory) is the natural next step if replica count grows, and is
+deliberately out of scope today.
+
+### Semantic Retrieval (shipped disabled)
+
+A vector index over candidate CVs runs as a second recall channel
+alongside `searchCandidates`, appending semantically similar candidates
+the keyword ladder missed
+([ADR-014](../decisions/adr-014-cv-semantic-retrieval.md)). It is
+**disabled by default** (`ENABLE_CV_RAG=false`) and contributes nothing
+until switched on.
+
+It ships disabled because the evaluation did not justify enabling it.
+A/B measurement over the fully indexed base — 24 313 candidates,
+indexed with zero failures — found **no measurable benefit**: 7 of 8
+queries returned identical results with and without it.
+
+The reason is worth recording, because it constrains future retrieval
+work: `searchCandidates` defaults to `keywordsType=resumeTd` — resume
+plus technical document — so BoondManager **already full-text searches
+CV content**. The premise that CV text was unreachable was wrong.
+Combined with the recall ladder and evidence scoring, the existing path
+already reaches the profiles a vector channel would surface.
+
+Enabling it is not just a flag: it needs a populated index (hours of
+MCP traffic), an Azure Table store with the matching role, and enough
+startup headroom to load the index into memory. ADR-014 lists the
+prerequisites and the concrete trigger that should precede them.
 
 ## Component Responsibilities
 
@@ -102,14 +200,16 @@ Responsibilities:
 - Connect to an LLM for intent understanding, planning, bounded reflection, and summarization.
 - Select the appropriate MCP tools.
 - Execute tool calls through the MCP server.
+- Cache semi-stable MCP results, and refuse to cache volatile ones.
+- Persist per-user conversation history and rehydrate a session after a restart.
 - Aggregate, rank, deduplicate, and summarize results.
 - Return both structured data and a concise explanation.
 
 Non-goals:
 
 - No direct BoondManager API integration.
-- No long-term storage unless needed for later audit or session features.
 - No hidden data transformation that should belong to the MCP normalization layer.
+- No caching of data whose staleness could mislead a recruiter.
 
 ### MCP Server
 
@@ -161,24 +261,32 @@ Each tool should define:
 ```text
 .
 ├── docs/
-│   └── architecture/
-│       └── sijo-ai-agent-architecture.md
-├── frontend/
-│   ├── index.html
-│   ├── styles.css
-│   └── app.js
-├── agent-backend/
-│   ├── README.md
-│   ├── src/
-│   └── tests/
-├── mcp-server/
-│   ├── README.md
-│   ├── src/
-│   └── tests/
-└── README.md
+│   ├── architecture/        # this document
+│   ├── decisions/           # ADRs
+│   ├── milestones/
+│   └── mcp-tools/
+├── apps/
+│   ├── web-ui/              # static frontend, Vite + MSAL (Entra SSO)
+│   ├── agent-api/           # FastAPI + LangGraph — all reasoning
+│   │   ├── app/
+│   │   │   ├── api/         # thin routers
+│   │   │   ├── graph/       # LangGraph nodes and workflows
+│   │   │   ├── agents/      # Agent1 data normalisation
+│   │   │   ├── mcp/         # MCP client + TTL caching decorator
+│   │   │   ├── services/    # search orchestration, ranking, mapping
+│   │   │   ├── storage/     # conversation persistence
+│   │   │   ├── session/     # in-process session memory, rehydration
+│   │   │   ├── models/
+│   │   │   └── config/
+│   │   ├── scripts/
+│   │   └── tests/
+│   └── mcp-boondmanager/    # Spring Boot MCP server, deterministic
+└── infra/azure/             # Bicep: three Container Apps
 ```
 
-This structure keeps the UI, agent orchestration, and MCP server independent while making their responsibilities clear to both humans and AI coding agents.
+Each app deploys as its own Azure Container App. The structure keeps the
+UI, agent orchestration, and MCP server independent while making their
+responsibilities clear to both humans and AI coding agents.
 
 ## MVP Roadmap
 
@@ -271,6 +379,10 @@ The global architecture is the system context for the Agent API implementation. 
 - [ADR-008 - MCP Result Envelope Normalization Boundary](../decisions/adr-008-mcp-result-envelope-normalization-boundary.md) places envelope normalization at the MCP client boundary so wrapper shapes like `{"candidates": [...], "meta": {...}}` reach the workflow as a clean record list.
 - [ADR-009 - Agent API Milestone 1 Boundary And Evidence Verification](../decisions/adr-009-agent-api-milestone-1-boundary.md) draws the line between Agent API orchestration delivery (done) and criterion-evidence verification (deferred to a later milestone).
 - [ADR-010 - LLM-Driven Bounded Replan](../decisions/adr-010-llm-driven-bounded-replan.md) records the shift from single-shot LLM planning to bounded observe-then-replan in the LLM workflow.
+- [ADR-011 - Agent1 Candidate Data Normalization](../decisions/adr-011-agent1-candidate-data-normalization.md) adds a deterministic-first data-quality pass with optional, conflict-only LLM reconciliation.
+- [ADR-012 - Reflection Decides Clarify-or-Retry](../decisions/adr-012-clarify-or-retry.md) lets the post-ranking reflection ask the user to clarify instead of replanning on an unresolved parameter.
+- [ADR-013 - TTL Caching Of Semi-Stable MCP Results](../decisions/adr-013-mcp-result-caching.md) places a TTL cache at the MCP client boundary and fixes which tools may never be cached.
+- [ADR-014 - Semantic CV Retrieval](../decisions/adr-014-cv-semantic-retrieval.md) records the vector recall channel: strictly additive, shipped disabled by default, and why keyword recall already covers what it was built for.
 - [Architectural Paradigm Shift: From Single-Shot Planning to Bounded ReAct Control Loop](../architecture-transitions/bounded-react-control-loop/README.md) drives the cross-document transition from the old control-loop model to the new bounded ReAct model.
 - [Milestone 001 - Agent API MCP Fuzzy Search](../milestones/milestone-001-agent-api-mcp-fuzzy-search.md) certifies the orchestration milestone with reproducible verification evidence.
 - [Milestone 002 - Bounded ReAct Control Loop](../milestones/milestone-002-bounded-react-control-loop.md) will certify the LLM observe-then-replan behavior with reproducible evidence.

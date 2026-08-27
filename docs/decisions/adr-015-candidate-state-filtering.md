@@ -1,4 +1,4 @@
-# ADR-014: Candidate pipeline-state filtering (pre-query and post-query)
+# ADR-015: Candidate pipeline-state filtering (pre-query and post-query)
 
 ## Status
 

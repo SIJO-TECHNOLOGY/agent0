@@ -96,6 +96,44 @@ Key invariants:
   everything is already displayed, it answers that no further candidates are
   available for this search.
 
+## What Runs Before The Graph
+
+A `/api/chat` turn does not always reach LangGraph. Two steps come
+first, and the second one is why follow-up turns feel instant:
+
+1. **Session rehydration** (`app/session/rehydrate.py`) — when the
+   process does not know the `conversation_id` (typically after a
+   restart or on another replica), messages, the current search
+   context, and the persisted candidate cards are replayed from the
+   conversation store into `SESSION_STORE`.
+2. **Turn resolution in memory** (`app/session/memory.py`) — "more",
+   "filter", "sort" turns are answered from the candidate pool already
+   held in memory. **No MCP call, no LLM call.** Only a genuinely new
+   search falls through to `SearchService` and the graph below.
+
+## MCP Result Caching
+
+The MCP client the graph calls is wrapped in `CachingMcpClient`
+(`app/mcp/caching_client.py`, [ADR-013](../../../docs/decisions/adr-013-mcp-result-caching.md)).
+No node knows about it — `_fetch_dictionary`'s three call sites simply
+stop reaching the network after the first one.
+
+| Tool | Cached | Key | Why |
+| --- | --- | --- | --- |
+| `getDictionary` | 6 h | tool + inputs | Quasi-static reference data, fetched up to 3x per request |
+| `getCandidateCV` | 6 h | candidate id | Each call makes BoondManager download + re-extract a PDF |
+| `getCandidateTechnicalDocument` | 6 h | candidate id | Semi-stable |
+| `discover_tools()` | 5 min | fixed | Once per search |
+| `searchCandidates` | **never** | — | Recall must reflect the live base |
+| `getCandidateDetail` | **never** | — | Carries availability and pipeline state |
+| `getCandidateAdministrative` | **never** | — | Carries salary / daily rate |
+
+Invariants worth preserving when touching this: errors propagate
+uncached (graceful degradation per ADR-003 is unchanged), empty results
+are not cached (a freshly uploaded CV appears on the next search), and
+entries are deep-copied on read and write so a node mutating
+`result.data` cannot poison the cache.
+
 ## Deterministic Workflow (fallback)
 
 ```mermaid

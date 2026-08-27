@@ -12,7 +12,9 @@ apps/agent-api/
 │   │   └── agent1/          # candidate data-normalisation (Agent1)
 │   ├── graph/
 │   ├── services/
-│   ├── mcp/
+│   ├── mcp/                 # client, TTL caching decorator, factory
+│   ├── storage/             # conversation persistence (sqlite / azure table)
+│   ├── session/             # in-process session memory + rehydration
 │   ├── models/
 │   ├── config/
 │   ├── skill_patterns.py    # shared, dependency-free skill regex table
@@ -34,7 +36,9 @@ apps/agent-api/
 | `app/agents/agent1` | Agent1 candidate data-normalisation node. `normalizer.py`: deterministic heuristics that reconcile experience, skills, languages, and title and flag conflicts. `reconciler.py`: optional, off-by-default LLM pass that judges coherence on the *conflicting* candidates only (grounded, batched, confidence-gated, fail-safe). |
 | `app/graph` | LangGraph state, graph construction, node definitions, and transition logic. |
 | `app/services` | Application services that coordinate graph execution and response assembly. |
-| `app/mcp` | MCP client integration, tool discovery, tool execution, and MCP error mapping. |
+| `app/mcp` | MCP client integration, tool discovery, tool execution, and MCP error mapping. `caching_client.py` decorates whichever client the factory builds with a bounded TTL cache for semi-stable results (ADR-013); volatile tools pass straight through. |
+| `app/storage` | Durable per-user conversation history behind a `ConversationStore` protocol, with SQLite (dev/tests) and Azure Table (prod) backends chosen by settings. |
+| `app/session` | In-process session state: the candidate pool that answers "more" / "filter" / "sort" without an external call, and rehydration of that state from the conversation store after a restart. |
 | `app/models` | Pydantic schemas for API contracts, graph state, tool calls, warnings, and errors. |
 | `app/config` | Runtime settings, environment loading, and dependency configuration. |
 | `app/skill_patterns.py` | Dependency-free `KNOWN_SKILL_PATTERNS` table shared by `candidate_mapper` and Agent1; kept outside `app.services` to avoid a circular import. |

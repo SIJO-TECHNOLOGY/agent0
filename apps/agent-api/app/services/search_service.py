@@ -26,6 +26,7 @@ from app.services.event_emitter import (
     EventEmitter,
     NoopEventEmitter,
 )
+from app.rag.service import RagService
 from app.services.llm_planner import LlmPlanner
 from app.services.semantic_scorer import SemanticScorer
 
@@ -52,6 +53,7 @@ class SearchService:
         semantic_boost_weight: float = 0.15,
         agent1_reconciler: Agent1Reconciler | None = None,
         allow_clarification: bool = True,
+        rag_service: RagService | None = None,
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
@@ -67,6 +69,7 @@ class SearchService:
         self._semantic_boost_weight = semantic_boost_weight
         self._agent1_reconciler = agent1_reconciler
         self._allow_clarification = allow_clarification
+        self._rag_service = rag_service
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -90,6 +93,7 @@ class SearchService:
             semantic_boost_weight=self._semantic_boost_weight,
             agent1_reconciler=self._agent1_reconciler,
             allow_clarification=self._allow_clarification,
+            rag_service=self._rag_service,
         )
 
     async def search(

@@ -314,7 +314,10 @@ def _build_service(
         return None
 
     llm_planner = getattr(request.app.state, "llm_planner", None)
-    return build_search_service(mcp_client, settings, llm_planner=llm_planner)
+    rag_service = getattr(request.app.state, "rag_service", None)
+    return build_search_service(
+        mcp_client, settings, llm_planner=llm_planner, rag_service=rag_service
+    )
 
 
 async def _emit_mcp_unavailable(

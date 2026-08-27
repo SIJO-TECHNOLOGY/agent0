@@ -64,6 +64,33 @@ The cache lives at the MCP-client boundary, so no graph node changed:
 `_fetch_dictionary`'s three call sites now hit the cache after the
 first call transparently.
 
+## Measured Outcome
+
+Verified against the real MCP server and live BoondManager data, by
+running two instances of the same build that differed only by
+`MCP_CACHE_ENABLED`:
+
+| Repeated call | Without cache | With cache |
+| --- | --- | --- |
+| `getDictionary` | 0.58 / 0.67 / 0.66 / 0.69 s | 0.81 s, then 0.005 / 0.005 s |
+| `getCandidateCV` | 0.84 / 0.86 / 0.86 s | 1.06 s, then 0.004 / 0.023 s |
+
+End-to-end, the same query run twice:
+
+| | Search 1 | Search 2 |
+| --- | --- | --- |
+| Without cache | 42.2 s | 40.8 s |
+| With cache | 38.3 s | **23.0 s** (-44%) |
+
+Results were identical: same 12 candidates, same order, same card
+contents field by field.
+
+The volatile tools showed no speedup, as intended —
+`getCandidateDetail` 0.57 / 0.53 / 0.57 s and
+`getCandidateAdministrative` 0.58 / 0.73 / 0.54 s across repeats. That
+is the check that matters most: it demonstrates the cache is not
+quietly serving stale availability or rates.
+
 ## Consequences
 
 - A full search drops from ~55–60 MCP calls to roughly the volatile
