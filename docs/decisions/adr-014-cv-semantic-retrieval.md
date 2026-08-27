@@ -2,12 +2,16 @@
 
 ## Status
 
-**Built and measured, not adopted** (2026-08-26). Superseded in
-practice by its own evaluation — see [Evaluation](#evaluation) and
-[Revised decision](#revised-decision). The implementation is complete
-and tested on branch `feature/agent-api-cv-rag` (PR #25); it is off by
-default and merges nothing into the search path unless
-`ENABLE_CV_RAG=true`.
+**Merged, shipped disabled** (2026-08-26). The channel is in `main` but
+`ENABLE_CV_RAG` defaults to `false`, so it contributes nothing to search
+until an operator turns it on.
+
+This is deliberately *not* "adopted": the A/B evaluation found no
+measurable benefit (see [Evaluation](#evaluation)). It is merged so the
+code stays on the maintained path — reviewed, covered by the test
+suite, and moving with refactors — rather than rotting on a branch that
+would need re-validation before it could ever be used. See
+[Disposition](#disposition).
 
 Originally recorded as Accepted (2026-08-06), before the channel had
 been measured against the live base. That original reasoning is kept
@@ -174,18 +178,41 @@ channel was built to surface. What remained was pure synonymy, and the
 measurement shows the existing machinery covers enough of it that the
 displayed page does not change.
 
-## Revised decision
+## Disposition
 
-**Do not merge.** The cost — a numpy dependency, ~50 MB per replica, a
-107 MB derived index, an ingestion pipeline, and re-indexing on any
-embedding-model change — buys no measured benefit.
+**Merge, ship disabled.** `ENABLE_CV_RAG=false` is the default, so the
+channel is inert until switched on: no index load, no query embedding,
+no change to any result.
 
-Keep the branch. The channel is one environment variable away from
-being live, so the trigger for revisiting is concrete rather than
+The evaluation argues against *enabling* it, not against *keeping* it.
+Merging costs little and buys two things a dormant branch cannot: the
+code stays reviewed and covered by the test suite, and it keeps moving
+with refactors instead of drifting until it needs full re-validation.
+
+What is paid unconditionally, even while disabled:
+
+- **numpy** becomes a runtime dependency (~15 MB, imported at startup
+  through `app.rag`). Making it a lazy or optional import is the obvious
+  follow-up if that ever matters.
+- Nothing else. No index is loaded, no embedding call is made, and the
+  vector channel is never consulted.
+
+What is needed before enabling it in production (none of it done):
+
+1. Populate the index — `scripts/index_candidates.py`, ~3 h for the
+   full base at 8 concurrent, hours of MCP traffic.
+2. An Azure Table store plus the `Storage Table Data Contributor` role,
+   and the `RAG_*` variables on `agent0-api`. See
+   `infra/azure/README.md`.
+3. Watch cold-start: the index loads fully into memory at startup.
+   `agent0-api` runs `minReplicas: 1` today, so this is bearable — it
+   would not be under scale-to-zero.
+
+The trigger for actually turning it on should stay concrete rather than
 speculative: **a real candidate, known to be in BoondManager, that
-agent0 does not return.** One such case is worth more evidence than this
-whole synthetic benchmark, and would also tell us which part of recall
-actually failed.
+agent0 does not return.** One such case carries more weight than the
+whole synthetic benchmark, and would also show which part of recall
+failed.
 
 Anyone reconsidering semantic retrieval here should start from the
 `resumeTd` finding rather than re-deriving it: the question is not

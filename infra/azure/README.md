@@ -1,86 +1,149 @@
-# Déploiement Azure — agent0
+# Infrastructure Azure — agent0
 
-Première version déployée sur **Azure Container Apps**, mise à jour en continu par **GitHub Actions** à chaque push sur `main`.
+> **L'infrastructure est gérée depuis le portail Azure, pas par de
+> l'infrastructure-as-code.** Ce document est la source de vérité : il
+> décrit ce qui tourne réellement, vérifié via `az` le 2026-08-26.
+> Le déploiement de code, lui, est automatisé (voir [Déploiement](#déploiement)).
 
-## Architecture
+Un template Bicep (`main.bicep`) et son script (`provision.ps1`) ont
+existé ici et ont été supprimés : ils décrivaient un environnement
+**différent** de celui en production — un autre environnement Container
+Apps, un autre registre, un autre modèle d'identité. Les exécuter aurait
+tenté de déplacer les applications. Le détail est dans la PR qui les a
+retirés. Ne les réintroduisez pas sans les valider par
+`az deployment group what-if` contre `rg-agent0`.
+
+## Topologie
 
 ```text
 Internet
    │
-   ▼
-agent0-web   (nginx : front Vite + proxy /api/*)   ← ingress PUBLIC
+   ▼  agent0.sijo.fr
+agent0-web   nginx : front Vite + proxy /api/*        ingress PUBLIC
    │
-   ▼
-agent0-api   (FastAPI + LangGraph)                 ← ingress interne
+   ▼  AGENT_API_UPSTREAM
+agent0-api   FastAPI + LangGraph                      ingress INTERNE
    │
-   ▼
-agent0-mcp   (Spring Boot MCP server)              ← ingress interne
+   ▼  MCP_SERVER_URL = http://agent0-mcp/mcp
+agent0-mcp   Spring Boot, serveur MCP                 ingress INTERNE
    │
    ▼
 BoondManager API
 ```
 
-- Le front appelle `/api/*` sur sa propre origine ; nginx proxifie vers `agent0-api` en interne → pas de CORS, pas d'URL d'API à configurer côté front.
-- `agent0-api` et `agent0-mcp` ne sont **pas accessibles depuis Internet** (ingress interne à l'environnement Container Apps).
-- Les images sont stockées dans un **Azure Container Registry** (ACR) ; les apps les tirent via une identité managée (pas de mot de passe).
-- GitHub Actions s'authentifie via **OIDC** (federated credentials) : aucun secret Azure longue durée dans GitHub.
-- `minReplicas: 0` partout → coût quasi nul au repos (scale-to-zero, démarrage à froid de quelques secondes au premier appel).
+Le front appelle `/api/*` sur sa propre origine et nginx proxifie vers
+`agent0-api` : pas de CORS à configurer, et l'API n'est jamais exposée
+directement sur Internet.
 
-## Valeurs par défaut de la v1 (volontairement sûres)
+## Inventaire réel — groupe `rg-agent0` (France Central)
 
-| Réglage | Valeur | Effet |
+### Ressources utilisées
+
+| Ressource | Type | Rôle |
 |---|---|---|
-| `USE_MOCK_MCP` | `true` | agent-api sert des résultats mock, ne touche pas BoondManager |
-| `USE_LLM_PLANNER` | `false` | planificateur déterministe, pas de clé LLM requise |
-| `VITE_DEV_MODE` | `true` | connexion Microsoft (MSAL) contournée dans le front |
+| `agent0-web` | Container App | Front + proxy. Ingress public, domaine `agent0.sijo.fr` |
+| `agent0-api` | Container App | Agent API. Ingress interne, port 8000 |
+| `agent0-mcp` | Container App | Serveur MCP. Ingress interne |
+| `env-agent0` | Managed Environment | Environnement des trois applications |
+| `agent0acr` | Container Registry | Images `agent0/agent-api`, `agent0/mcp-boondmanager`, `agent0/web-ui` |
+| `agent0store2026` | Storage Account | Tables `agent0conversations`, `agent0messages` |
+| `log-agent0` | Log Analytics | Logs des applications |
 
-Rien de sensible n'est exposé tant que ces valeurs ne sont pas changées (voir « Passer en mode réel »).
+### Ressources orphelines
 
-## Mise en route (une seule fois)
+Elles existent dans le groupe mais **rien ne s'en sert** (vérifié) :
 
-1. Installer l'[Azure CLI](https://aka.ms/installazurecli) puis se connecter :
+| Ressource | Constat |
+|---|---|
+| `cae-agent0` | Managed Environment vide — aucune application |
+| `cragent04d6lwwwnnnk64` | Registry contenant d'anciennes images, non référencé |
+| `id-agent0` | Identité user-assigned — aucune application ne l'utilise |
 
-   ```powershell
-   az login
-   ```
+Vestiges d'un déploiement antérieur. Leur suppression est possible mais
+n'a pas été faite : à décider et à exécuter délibérément.
 
-2. (Optionnel mais recommandé) Installer [GitHub CLI](https://cli.github.com/) et `gh auth login` — le script pourra alors configurer les secrets GitHub tout seul.
+### Hors périmètre
 
-3. Depuis la racine du repo :
+L'application `home` (domaine `home.sijo.fr`) partage le groupe de
+ressources mais n'appartient pas à agent0.
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File infra\azure\provision.ps1
-   ```
+## Configuration des applications
 
-   Le script : crée le groupe de ressources `rg-agent0` (France Central), l'ACR, l'environnement Container Apps, construit les 3 images dans le cloud (`az acr build`, pas besoin de Docker en local), déploie les 3 apps, crée l'application Entra pour GitHub Actions et pousse les secrets/variables dans le repo. Il affiche l'URL publique du front à la fin.
+### `agent0-api`
 
-4. C'est tout. Chaque push sur `main` qui touche `apps/agent-api/**`, `apps/mcp-boondmanager/**` ou `apps/web-ui/**` reconstruit et redéploie **uniquement** l'app concernée (workflows `.github/workflows/deploy-*.yml`). On peut aussi lancer un déploiement à la main : onglet *Actions* → workflow → *Run workflow*.
+Identité **SystemAssigned**. Réplicas **1 → 10**. 0,5 vCPU, 1 Gio de
+mémoire, 2 Gio de stockage éphémère.
 
-## Secrets / variables GitHub utilisés par le CI/CD
-
-| Nom | Type | Rôle |
+| Variable | Valeur | Note |
 |---|---|---|
-| `AZURE_CLIENT_ID` | secret | app Entra `github-agent0-deploy` (OIDC) |
-| `AZURE_TENANT_ID` | secret | tenant Azure |
-| `AZURE_SUBSCRIPTION_ID` | secret | abonnement cible |
-| `AZURE_RESOURCE_GROUP` | variable | `rg-agent0` |
-| `ACR_NAME` | variable | nom du registre (généré, ex. `cragent0abc123`) |
+| `USE_MOCK_MCP` | `false` | données réelles |
+| `MCP_SERVER_URL` | `http://agent0-mcp/mcp` | nom interne, pas le FQDN |
+| `USE_LLM_PLANNER` | `true` | |
+| `LLM_PROVIDER` / `LLM_MODEL` | `openai` / `gpt-5.2` | |
+| `LLM_API_KEY` | secret `llm-key` | |
+| `CONVERSATION_STORE` | `azure_table` | historique durable |
+| `AZURE_STORAGE_ACCOUNT_URL` | `https://agent0store2026.table.core.windows.net` | |
 
-## Passer en mode réel (BoondManager + LLM)
+**Non défini, donc à la valeur par défaut du code :**
 
-Quand tu veux brancher les vraies données :
+- `ENABLE_AUTH` → `false`. Les routes `/api/*` ne vérifient aucun jeton
+  Entra. Le risque est contenu par l'ingress interne, mais la
+  vérification d'identité repose entièrement sur le front. Le code de
+  validation existe et est testé : l'activer demande `ENABLE_AUTH`,
+  `ENTRA_TENANT_ID` et `ENTRA_CLIENT_ID`. Voir [Écarts connus](#écarts-connus).
+- `MCP_CACHE_*` → le cache MCP est **actif** (activé par défaut,
+  ADR-013). Aucune variable n'est nécessaire pour en bénéficier.
+
+### `agent0-mcp`
+
+Identité SystemAssigned. Réplicas **1 → 1**.
+Variables : `BOONDMANAGER_BASE_URL`, `BOONDMANAGER_JWT_CLIENT`.
+
+### `agent0-web`
+
+Identité SystemAssigned. Réplicas **0 → 10** (scale-to-zero).
+Variable : `AGENT_API_UPSTREAM`. Domaine `agent0.sijo.fr` avec
+certificat managé.
+
+## Identités et rôles
+
+Les trois applications utilisent une identité **SystemAssigned**.
+L'identité de `agent0-api` (`c994fbb6-074d-42b6-8c70-cf95c842d578`)
+porte deux attributions :
+
+| Rôle | Portée |
+|---|---|
+| `AcrPull` | `agent0acr` |
+| `Storage Table Data Contributor` | `agent0store2026` |
+
+C'est ce second rôle qui permet la persistance des conversations sans
+aucun secret de connexion. Les tables sont créées automatiquement par
+l'application au démarrage.
+
+Note : le rôle sur les données n'est attribué qu'à l'application. Un
+compte utilisateur, même propriétaire de l'abonnement, ne peut pas lire
+le contenu des tables sans se donner explicitement le rôle — c'est le
+comportement souhaitable.
+
+## Déploiement
+
+**Automatique.** Chaque push sur `main` touchant `apps/agent-api/**`,
+`apps/mcp-boondmanager/**` ou `apps/web-ui/**` déclenche le workflow
+correspondant dans `.github/workflows/`. Le workflow construit l'image
+dans l'ACR (`az acr build`) puis met à jour l'application
+(`az containerapp update --image`).
+
+**Important : le déploiement ne touche que l'image.** Ni les variables
+d'environnement, ni les secrets, ni le scaling ne sont modifiés. Un
+déploiement ne peut donc pas casser la configuration.
+
+**Manuel**, depuis un poste avec `az login` :
 
 ```powershell
-# Secrets du MCP server
-az containerapp secret set -n agent0-mcp -g rg-agent0 --secrets boond-jwt-client=<JWT_CLIENT>
-az containerapp update -n agent0-mcp -g rg-agent0 --set-env-vars BOONDMANAGER_BASE_URL=<URL_API_BOOND>
-
-# Agent API : désactiver le mock, activer le LLM
-az containerapp secret set -n agent0-api -g rg-agent0 --secrets llm-api-key=<CLE_API>
-az containerapp update -n agent0-api -g rg-agent0 --set-env-vars USE_MOCK_MCP=false USE_LLM_PLANNER=true
+powershell -ExecutionPolicy Bypass -File infra\azure\deploy-app.ps1
 ```
 
-Pour activer la vraie connexion Microsoft dans le front : configurer `apps/web-ui/msalConfig.js` (clientId/tenantId + redirectUri = URL publique du front), passer `--build-arg VITE_DEV_MODE="false"` dans `.github/workflows/deploy-web-ui.yml`, et pousser sur `main`.
+Ce script suit exactement le même principe (image seulement).
 
 ## Exploitation courante
 
@@ -88,15 +151,63 @@ Pour activer la vraie connexion Microsoft dans le front : configurer `apps/web-u
 # Logs en direct
 az containerapp logs show -n agent0-api -g rg-agent0 --follow
 
-# État / URL publique
-az containerapp show -n agent0-web -g rg-agent0 --query properties.configuration.ingress.fqdn -o tsv
+# Configuration effective d'une application
+az containerapp show -n agent0-api -g rg-agent0 `
+  --query "properties.template.containers[0].env" -o table
+
+# Modifier une variable (crée une nouvelle révision)
+az containerapp update -n agent0-api -g rg-agent0 --set-env-vars CLE=valeur
+
+# Modifier un secret
+az containerapp secret set -n agent0-api -g rg-agent0 --secrets llm-key=<valeur>
+
+# Historique des révisions et retour arrière
+az containerapp revision list -n agent0-api -g rg-agent0 -o table
+az containerapp revision activate -n agent0-api -g rg-agent0 --revision <nom>
 
 # Revenir à une image précédente (tag = SHA du commit)
-az containerapp update -n agent0-api -g rg-agent0 --image <ACR>.azurecr.io/agent0/agent-api:<sha>
+az containerapp update -n agent0-api -g rg-agent0 `
+  --image agent0acr.azurecr.io/agent0/agent-api:<sha>
 ```
+
+Toute modification de configuration crée une **nouvelle révision**
+Container Apps : une erreur se rattrape en réactivant la précédente.
+
+## Écarts connus
+
+À traiter quand vous le jugerez utile — aucun n'est bloquant aujourd'hui.
+
+1. **`ENABLE_AUTH` non défini** sur `agent0-api`. L'API accepte toute
+   requête venant de l'environnement Container Apps. Atténué par
+   l'ingress interne, mais c'est une défense en profondeur qui manque
+   alors que le code existe.
+2. **Ressources orphelines** (`cae-agent0`, `cragent04d6lwwwnnnk64`,
+   `id-agent0`) — coût faible mais bruit permanent dans le groupe.
+3. **Modèle divergent du dépôt** : `LLM_MODEL` vaut `gpt-5.2` en
+   production contre `gpt-5.4` dans les `.env.example`.
+
+## Reconstruire depuis zéro
+
+Si le groupe de ressources devait être recréé, dans l'ordre :
+
+1. Groupe de ressources `rg-agent0` en France Central.
+2. Log Analytics, Container Registry, Managed Environment.
+3. Compte de stockage (Table Storage suffit).
+4. Les trois Container Apps depuis les images de l'ACR, avec le
+   découpage d'ingress du schéma ci-dessus (seul le web est public).
+5. Activer l'identité SystemAssigned sur les trois, puis attribuer à
+   celle de l'API : `AcrPull` sur le registre et
+   `Storage Table Data Contributor` sur le compte de stockage.
+6. Renseigner les variables et secrets listés plus haut.
+7. Domaine personnalisé `agent0.sijo.fr` sur `agent0-web` + certificat
+   managé.
+8. Vérifier : `GET /api/health` sur l'API doit rendre
+   `dependencies.mcp.status = "connected"`.
 
 ## Coûts (ordre de grandeur)
 
-- Container Apps en consommation avec scale-to-zero : ~0 € au repos, facturation à la seconde d'activité.
-- ACR Basic : ~5 €/mois.
-- Log Analytics : quelques €/mois selon le volume de logs (rétention 30 jours).
+- Container Apps : `agent0-api` et `agent0-mcp` gardent un réplica
+  minimum, donc facturation continue et non scale-to-zero. Seul le web
+  redescend à zéro.
+- ACR Basic : ~5 €/mois. Table Storage : négligeable à ce volume.
+- Log Analytics : quelques €/mois selon le volume, rétention 30 jours.

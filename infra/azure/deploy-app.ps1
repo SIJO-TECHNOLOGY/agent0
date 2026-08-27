@@ -12,7 +12,12 @@ param(
     [ValidateSet("web-ui", "agent-api", "mcp-boondmanager", "all")]
     [string]$App = "all",
     [string]$ResourceGroup = "rg-agent0",
-    [string]$BaseName = "agent0"
+    [string]$BaseName = "agent0",
+    # Pinned on purpose: rg-agent0 also holds an unused legacy registry, and
+    # picking "the first one listed" could push images to a registry the apps
+    # have no AcrPull role on — a deployment that builds fine and then fails
+    # to start. See infra/azure/README.md.
+    [string]$AcrName = "agent0acr"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,8 +27,10 @@ function Fail($msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
 
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) { Fail "Azure CLI not found." }
 
-$acrName = az acr list --resource-group $ResourceGroup --query "[0].name" --output tsv
-if (-not $acrName) { Fail "No container registry found in $ResourceGroup. Run provision.ps1 first." }
+$acrName = az acr show --name $AcrName --resource-group $ResourceGroup --query "name" --output tsv 2>$null
+if (-not $acrName) {
+    Fail "Container registry '$AcrName' not found in $ResourceGroup. Check the inventory in infra/azure/README.md, or pass -AcrName."
+}
 
 # Tag with the current commit (plus -dirty when uncommitted changes exist).
 $sha = git -C $repoRoot rev-parse --short HEAD
