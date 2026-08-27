@@ -147,12 +147,17 @@ clears it. A shared cache (Redis, or Azure Table through the existing
 storage factory) is the natural next step if replica count grows, and is
 deliberately out of scope today.
 
-### Semantic Retrieval (evaluated, not adopted)
+### Semantic Retrieval (shipped disabled)
 
-A vector index over candidate CVs was built and measured as a second
-recall channel alongside `searchCandidates` (ADR-014, on branch
-`feature/agent-api-cv-rag` — not merged, so the ADR is not in this
-tree). A/B measurement over the fully indexed base — 24 313 candidates,
+A vector index over candidate CVs runs as a second recall channel
+alongside `searchCandidates`, appending semantically similar candidates
+the keyword ladder missed
+([ADR-014](../decisions/adr-014-cv-semantic-retrieval.md)). It is
+**disabled by default** (`ENABLE_CV_RAG=false`) and contributes nothing
+until switched on.
+
+It ships disabled because the evaluation did not justify enabling it.
+A/B measurement over the fully indexed base — 24 313 candidates,
 indexed with zero failures — found **no measurable benefit**: 7 of 8
 queries returned identical results with and without it.
 
@@ -163,8 +168,10 @@ CV content**. The premise that CV text was unreachable was wrong.
 Combined with the recall ladder and evidence scoring, the existing path
 already reaches the profiles a vector channel would surface.
 
-The work is parked, not deleted, and reactivable by one environment
-variable if a concrete recall gap ever appears.
+Enabling it is not just a flag: it needs a populated index (hours of
+MCP traffic), an Azure Table store with the matching role, and enough
+startup headroom to load the index into memory. ADR-014 lists the
+prerequisites and the concrete trigger that should precede them.
 
 ## Component Responsibilities
 
@@ -375,7 +382,7 @@ The global architecture is the system context for the Agent API implementation. 
 - [ADR-011 - Agent1 Candidate Data Normalization](../decisions/adr-011-agent1-candidate-data-normalization.md) adds a deterministic-first data-quality pass with optional, conflict-only LLM reconciliation.
 - [ADR-012 - Reflection Decides Clarify-or-Retry](../decisions/adr-012-clarify-or-retry.md) lets the post-ranking reflection ask the user to clarify instead of replanning on an unresolved parameter.
 - [ADR-013 - TTL Caching Of Semi-Stable MCP Results](../decisions/adr-013-mcp-result-caching.md) places a TTL cache at the MCP client boundary and fixes which tools may never be cached.
-- ADR-014 - Semantic CV Retrieval records the vector recall channel that was built, measured, and parked — including why keyword recall already covered it. It lives on branch `feature/agent-api-cv-rag` (PR #25) and lands here only if that work is ever adopted.
+- [ADR-014 - Semantic CV Retrieval](../decisions/adr-014-cv-semantic-retrieval.md) records the vector recall channel: strictly additive, shipped disabled by default, and why keyword recall already covers what it was built for.
 - [Architectural Paradigm Shift: From Single-Shot Planning to Bounded ReAct Control Loop](../architecture-transitions/bounded-react-control-loop/README.md) drives the cross-document transition from the old control-loop model to the new bounded ReAct model.
 - [Milestone 001 - Agent API MCP Fuzzy Search](../milestones/milestone-001-agent-api-mcp-fuzzy-search.md) certifies the orchestration milestone with reproducible verification evidence.
 - [Milestone 002 - Bounded ReAct Control Loop](../milestones/milestone-002-bounded-react-control-loop.md) will certify the LLM observe-then-replan behavior with reproducible evidence.
