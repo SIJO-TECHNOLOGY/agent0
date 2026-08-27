@@ -253,6 +253,7 @@ def _clarification_response(
 _LIMITED_SEARCH_WARNING_CODES: frozenset[str] = frozenset(
     {
         "experience_filter_unmapped",
+        "state_filter_unmapped",
         "criteria_unverified",
         "criteria_visible",
         "filter_unresolved",
@@ -468,6 +469,12 @@ def _limited_search_hint(
             "filtre d’expérience non applicable"
             if lang == "fr"
             else "experience filter could not be applied"
+        )
+    if any(w.code == "state_filter_unmapped" for w in triggered):
+        clauses.append(
+            "certains états candidats demandés sont inconnus et n’ont pas été appliqués"
+            if lang == "fr"
+            else "some requested candidate states are unknown and were not applied"
         )
     if any(w.code == "filter_unresolved" for w in triggered):
         clauses.append(

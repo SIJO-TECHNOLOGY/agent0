@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api import (
+    candidate_states_router,
     chat_router,
     health_router,
     mcp_debug_router,
@@ -284,6 +285,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router, dependencies=protected)
     app.include_router(search_stream_router, dependencies=protected)
     app.include_router(mcp_tools_router, dependencies=protected)
+    app.include_router(candidate_states_router, dependencies=protected)
     # Debug router is always registered but its handler returns 404
     # when ENABLE_MCP_DEBUG_ENDPOINTS is false so its existence stays
     # invisible in production.

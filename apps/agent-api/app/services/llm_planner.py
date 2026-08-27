@@ -375,9 +375,21 @@ def build_planner_prompt(
         "the user gives no sense of relative importance (the Agent API then uses "
         "its default weights). This only re-weights Agent-API ranking; it never "
         "changes which records are fetched.\n\n"
+        "13. If the user restricts candidates to one or more BoondManager "
+        "pipeline STATES — e.g. 'en Vivier', 'A jouer', 'Qualifié', 'les "
+        "candidats du vivier', 'in the talent pool state' — set "
+        "`constraints.candidate_states` to a comma-separated list of the "
+        "state names EXACTLY as the user wrote them (e.g. \"Vivier\" or "
+        "\"A jouer, Qualifié\"). Multiple states are unioned. Do NOT put "
+        "state names in `entities` or `keywords`, and do NOT emit state "
+        "ids — the Agent API resolves the names against the BoondManager "
+        "dictionary and applies the `candidateStates` filter itself. Only "
+        "set this when the user clearly refers to a pipeline state, not "
+        "when a word is ordinary vocabulary ('un dev qualifié' means a "
+        "skilled dev, NOT the state 'Qualifié').\n\n"
         "OUTPUT SCHEMA (return JSON object with these keys exactly):\n"
         "{\n"
-        '  "interpreted_intent": {"entities": ["..."], "constraints": {"...": "...", "name": "Full Name (only when a person is named)", "ranking_priority": "domain,role,skill,seniority (optional, ordered most-important-first)"}},\n'
+        '  "interpreted_intent": {"entities": ["..."], "constraints": {"...": "...", "name": "Full Name (only when a person is named)", "ranking_priority": "domain,role,skill,seniority (optional, ordered most-important-first)", "candidate_states": "Vivier, A jouer (optional, only when the user names pipeline states)"}},\n'
         '  "plan": [\n'
         "    {\n"
         '      "tool_name": "...",\n'

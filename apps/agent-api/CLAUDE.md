@@ -146,6 +146,15 @@ Rules:
 - **Do not use** `typeOf` from `/information` or search results for contract display — that field is the resource type (`setting.typeOf.resource`), not the desired contract type.
 - Resolution priority in `nodes.py._raw_contract_type`: admin enrichment → detail enrichment → search summary.
 
+**Candidate pipeline-state filtering (ADR-015):**
+
+- Dictionary: `setting.state.candidate` (ids vary per BoondManager instance — never hardcode them).
+- Constraint keys: `candidate_state_ids` (csv ids from `filters.candidate_states`, UI checkboxes) and `candidate_states` (csv labels declared by the LLM planner, prompt rule 13). The Agent API resolves labels to ids (`resolve_candidate_state_ids`, accent/case-insensitive, never invents an id) and injects `candidateStates` into EVERY search pass, including relaxed ladder passes.
+- The LLM must never emit state ids (single-pass planning, prompt rule 4).
+- `GET /api/candidate-states` feeds the UI checkbox list from the cached dictionary (ADR-013).
+- Excluded states ("Ne plus contacter", "A SUPPRIMER", "Proposition refusé" — `_EXCLUDED_STATE_KEYWORDS`) are removed from search results before enrichment and never offered as filter options.
+- `_stateId` / `_stateLabel` are resolved on ALL results (not just the enriched slice) so every card carries `state_id` / `state_label`.
+
 Future UI types may include `mission_cards`, `client_cards`, `table`, `clarification_request`, and `error_message`, but do not emit them until the frontend supports them.
 
 ## Configuration

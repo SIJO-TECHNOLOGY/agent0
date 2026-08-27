@@ -114,6 +114,23 @@ async function devRequest(path, options = {}) {
     return [];
   }
 
+  if (path === buildEndpoint("candidate_states") && (options.method || "GET") === "GET") {
+    return {
+      states: [
+        { id: "0", label: "Import à traiter" },
+        { id: "1", label: "A contacter" },
+        { id: "2", label: "Qualifié" },
+        { id: "3", label: "E2" },
+        { id: "4", label: "E3" },
+        { id: "5", label: "Remise de proposition" },
+        { id: "6", label: "Proposition acceptée" },
+        { id: "7", label: "Vivier" },
+        { id: "8", label: "A jouer" },
+        { id: "9", label: "Converti en Ressource" },
+      ],
+    };
+  }
+
   if (path === buildEndpoint("conversations") && options.method === "POST") {
     const body = parseBody(options.body);
     const now = new Date().toISOString();
@@ -294,6 +311,8 @@ function getDevCandidates() {
       strengths: ["Très bon alignement Java/Spring", "Expérience finance", "Autonomie sur applications internes"],
       watch_points: ["Disponibilité sous un mois à confirmer"],
       technical_summary: "Solide socle Java/Spring Boot avec pratique Angular et bases PostgreSQL.",
+      state_label: "Vivier",
+      state_id: "7",
       boond_url: "https://ui.boondmanager.com/",
     },
     {
@@ -328,6 +347,8 @@ function getDevCandidates() {
       strengths: ["Microservices", "Kafka", "Disponibilité immédiate"],
       watch_points: ["Peu d'expérience frontend indiquée"],
       technical_summary: "Profil backend senior avec bonne profondeur sur Java, Spring et architectures distribuées.",
+      state_label: "A jouer",
+      state_id: "8",
       boond_url: "https://ui.boondmanager.com/",
     },
     {
@@ -361,6 +382,8 @@ function getDevCandidates() {
       strengths: ["Polyvalence fullstack", "Bonne autonomie", "Expérience Docker"],
       watch_points: ["Préavis de deux mois", "Moins spécialisé finance"],
       technical_summary: "Profil équilibré Java/React avec culture produit interne et pratiques DevOps de base.",
+      state_label: "Qualifié",
+      state_id: "2",
       boond_url: "https://ui.boondmanager.com/",
     },
   ];
@@ -479,6 +502,16 @@ export async function healthCheck() {
   });
 }
 
+export async function fetchCandidateStates() {
+  const response = await request(buildEndpoint("candidate_states"), {
+    method: "GET",
+  });
+  const states = Array.isArray(response?.states) ? response.states : [];
+  return states
+    .filter((state) => state && state.id !== undefined && state.id !== null && state.label)
+    .map((state) => ({ id: String(state.id), label: String(state.label) }));
+}
+
 export async function sendMessage(message, conversationId = null) {
   const response = await request(buildEndpoint("chat"), {
     method: "POST",
@@ -556,7 +589,7 @@ function emitSseEvent(parsed, onEvent) {
   onEvent({ type, data });
 }
 
-export async function streamSearch(query, onEvent, { signal, conversationId } = {}) {
+export async function streamSearch(query, onEvent, { signal, conversationId, filters } = {}) {
   if (DEV_MODE && DEV_API_MOCKS) {
     return devStreamSearch(query, onEvent, { signal });
   }
@@ -574,7 +607,7 @@ export async function streamSearch(query, onEvent, { signal, conversationId } = 
       headers,
       body: JSON.stringify({
         query,
-        filters: {},
+        filters: filters && typeof filters === "object" ? filters : {},
         ...(conversationId ? { conversation_id: conversationId, sessionId: conversationId } : {}),
       }),
       signal,

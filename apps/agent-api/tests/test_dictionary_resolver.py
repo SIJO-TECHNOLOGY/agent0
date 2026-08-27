@@ -127,3 +127,83 @@ def test_dictionary_contract_entries_extracts_setting_variants() -> None:
         {"id": 2, "label": "CDI"},
         {"id": 3, "label": "Freelance"},
     ]
+
+
+# ---------------------------------------------------------------------------
+# Candidate pipeline states
+# ---------------------------------------------------------------------------
+
+_STATE_ENTRIES = [
+    {"id": 0, "label": "Import à traiter"},
+    {"id": 2, "label": "Qualifié"},
+    {"id": 7, "label": "Vivier"},
+    {"id": 8, "label": "A jouer"},
+    {"id": 10, "label": "Proposition refusé"},
+    {"id": 11, "label": "Ne plus contacter"},
+    {"id": 12, "label": "A SUPPRIMER"},
+]
+
+
+def test_resolve_candidate_state_ids_is_accent_and_case_insensitive() -> None:
+    from app.services.dictionary_resolver import resolve_candidate_state_ids
+
+    matched, unresolved = resolve_candidate_state_ids(
+        _STATE_ENTRIES, ["vivier", "QUALIFIE", "a jouer"]
+    )
+    assert matched == [2, 7, 8]
+    assert unresolved == []
+
+
+def test_resolve_candidate_state_ids_reports_unknown_labels() -> None:
+    from app.services.dictionary_resolver import resolve_candidate_state_ids
+
+    matched, unresolved = resolve_candidate_state_ids(
+        _STATE_ENTRIES, ["Vivier", "Shortlist"]
+    )
+    assert matched == [7]
+    assert unresolved == ["Shortlist"]
+
+
+def test_detect_candidate_state_labels_multiword_and_cue() -> None:
+    from app.services.dictionary_resolver import detect_candidate_state_labels
+
+    # Multi-word label matches on its own; single-word label needs a cue.
+    assert detect_candidate_state_labels(
+        _STATE_ENTRIES, "je veux un dev C# a jouer"
+    ) == ["A jouer"]
+    assert detect_candidate_state_labels(
+        _STATE_ENTRIES, "un dev C# en Vivier"
+    ) == ["Vivier"]
+    assert detect_candidate_state_labels(
+        _STATE_ENTRIES, "candidats en qualifié"
+    ) == ["Qualifié"]
+
+
+def test_detect_candidate_state_labels_ignores_ordinary_vocabulary() -> None:
+    from app.services.dictionary_resolver import detect_candidate_state_labels
+
+    # "qualifié" without a state cue is ordinary vocabulary, not the state.
+    assert detect_candidate_state_labels(
+        _STATE_ENTRIES, "je cherche un dev très qualifié"
+    ) == []
+    assert detect_candidate_state_labels(_STATE_ENTRIES, "") == []
+
+
+def test_candidate_state_options_excludes_forbidden_states() -> None:
+    from app.services.dictionary_resolver import candidate_state_options
+
+    raw = [{"setting": {"state": {"candidate": _STATE_ENTRIES}}}]
+    options = candidate_state_options(raw)
+    labels = [option["label"] for option in options]
+    assert "Vivier" in labels and "A jouer" in labels
+    assert "Ne plus contacter" not in labels
+    assert "A SUPPRIMER" not in labels
+    assert "Proposition refusé" not in labels
+
+
+def test_proposition_refuse_is_a_fully_excluded_state() -> None:
+    from app.services.dictionary_resolver import resolve_excluded_state_ids
+
+    # Same treatment as "Ne plus contacter" / "A SUPPRIMER": candidates in
+    # this state are removed from search results entirely.
+    assert 10 in resolve_excluded_state_ids(_STATE_ENTRIES)

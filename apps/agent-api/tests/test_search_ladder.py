@@ -364,3 +364,181 @@ async def test_ladder_enriches_with_tech_doc_not_detail() -> None:
     assert "getCandidateTechnicalDocument" in calls
     # getCandidateDetail is dropped from criteria enrichment.
     assert "getCandidateDetail" not in calls
+
+
+# ---------------------------------------------------------------------------
+# Candidate pipeline-state filter (candidateStates)
+# ---------------------------------------------------------------------------
+
+_SEARCH_TOOL_WITH_STATES = McpTool(
+    name="searchCandidates",
+    description="Search candidates.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "keywords": {"type": "string"},
+            "keywordsType": {"type": "string"},
+            "candidateStates": {"type": "array", "items": {"type": "integer"}},
+            "page": {"type": "integer"},
+            "maxResults": {"type": "integer"},
+        },
+    },
+)
+
+
+async def _dict_with_states_handler(_inputs: dict[str, object]):
+    return [
+        {
+            "setting": {
+                "experience": [{"id": 5, "label": "10+ years"}],
+                "tool": [{"id": "java-id", "label": "Java"}],
+                "state": {
+                    "candidate": [
+                        {"id": 7, "label": "Vivier"},
+                        {"id": 8, "label": "A jouer"},
+                    ]
+                },
+            }
+        }
+    ]
+
+
+def _states_client(search_handler) -> MockMcpClient:
+    return MockMcpClient(
+        tools=[_SEARCH_TOOL_WITH_STATES, _DICTIONARY_TOOL],
+        handlers={
+            "searchCandidates": search_handler,
+            "getDictionary": _dict_with_states_handler,
+        },
+    )
+
+
+def _states_state(constraints: dict[str, str], query: str) -> GraphState:
+    return GraphState(
+        original_query=query,
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints=constraints,
+        ),
+        available_tools=[_SEARCH_TOOL_WITH_STATES, _DICTIONARY_TOOL],
+        llm_plan=_search_plan(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_ladder_applies_llm_declared_state_labels() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def search_handler(inputs: dict[str, object]):
+        captured.append(dict(inputs))
+        return [{"id": 1, "attributes": {"jobTitle": "Java Engineer", "state": 7}}]
+
+    result = await execute_llm_plan(
+        _states_state(
+            {"role": "developer", "candidate_states": "Vivier, A jouer"},
+            "dev java en vivier ou a jouer",
+        ),
+        _ctx(_states_client(search_handler)),
+    )
+
+    assert captured
+    # Every pass (including the complementary titleSkills pass) carries the
+    # unioned state ids so relaxation can never leak other states.
+    assert all(call.get("candidateStates") == [7, 8] for call in captured)
+    assert result.results and result.results[0].id == "1"
+    assert not any(w.code == "state_filter_unmapped" for w in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_ladder_applies_ui_selected_state_ids_without_dictionary_labels() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def search_handler(inputs: dict[str, object]):
+        captured.append(dict(inputs))
+        return [{"id": 2, "attributes": {"jobTitle": "Java Dev", "state": 8}}]
+
+    result = await execute_llm_plan(
+        _states_state(
+            {"role": "developer", "candidate_state_ids": "7,8"},
+            "dev java",
+        ),
+        _ctx(_states_client(search_handler)),
+    )
+
+    assert captured
+    assert all(call.get("candidateStates") == [7, 8] for call in captured)
+    assert result.results
+
+
+@pytest.mark.asyncio
+async def test_ladder_detects_state_label_in_query() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def search_handler(inputs: dict[str, object]):
+        captured.append(dict(inputs))
+        return [{"id": 3, "attributes": {"jobTitle": "Java Dev", "state": 7}}]
+
+    result = await execute_llm_plan(
+        _states_state({"role": "developer"}, "un dev java en Vivier"),
+        _ctx(_states_client(search_handler)),
+    )
+
+    assert captured
+    assert all(call.get("candidateStates") == [7] for call in captured)
+    assert result.results
+
+
+@pytest.mark.asyncio
+async def test_ladder_warns_on_unknown_state_label() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def search_handler(inputs: dict[str, object]):
+        captured.append(dict(inputs))
+        return [{"id": 4, "attributes": {"jobTitle": "Java Dev"}}]
+
+    result = await execute_llm_plan(
+        _states_state(
+            {"role": "developer", "candidate_states": "Shortlist"},
+            "dev java",
+        ),
+        _ctx(_states_client(search_handler)),
+    )
+
+    assert captured
+    # Unknown label: no id invented, search runs unfiltered, honest warning.
+    assert all("candidateStates" not in call for call in captured)
+    assert any(w.code == "state_filter_unmapped" for w in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_ladder_ignores_state_filter_when_schema_lacks_field() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def search_handler(inputs: dict[str, object]):
+        captured.append(dict(inputs))
+        return [{"id": 5, "attributes": {"jobTitle": "Java Dev"}}]
+
+    client = MockMcpClient(
+        tools=[_SEARCH_TOOL, _DICTIONARY_TOOL],
+        handlers={
+            "searchCandidates": search_handler,
+            "getDictionary": _dict_with_states_handler,
+        },
+    )
+    state = GraphState(
+        original_query="dev java en vivier",
+        interpreted_intent=InterpretedIntent(
+            objective="find",
+            entities=["java"],
+            constraints={"role": "developer", "candidate_states": "Vivier"},
+        ),
+        available_tools=[_SEARCH_TOOL, _DICTIONARY_TOOL],
+        llm_plan=_search_plan(),
+    )
+
+    result = await execute_llm_plan(state, _ctx(client))
+
+    assert captured
+    assert all("candidateStates" not in call for call in captured)
+    assert result.results

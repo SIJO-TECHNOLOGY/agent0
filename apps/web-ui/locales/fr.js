@@ -118,6 +118,17 @@ export default {
     sort_aria: "Trier les candidats",
     sort_default: "Ordre reçu",
     sort_score: "Score décroissant",
+    states_group_aria: "Filtrer par état",
+    states_button: "États",
+  },
+  filters: {
+    states_label: "États Boond",
+    check_all: "Tout cocher",
+    uncheck_all: "Tout décocher",
+    states_loading: "Chargement des états…",
+    states_error: "Impossible de charger la liste des états.",
+    states_empty: "Aucun état disponible.",
+    states_hint: "Les états sélectionnés filtrent la prochaine recherche.",
   },
   candidate: {
     no_name: "Candidat sans nom",
@@ -143,6 +154,7 @@ export default {
       tjm: "TJM",
       mobility: "Mobilité",
       match: "Match",
+      state: "État",
     },
     sections: {
       summary: "Résumé",

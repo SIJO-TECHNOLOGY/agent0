@@ -79,6 +79,25 @@ _STATE_LABEL_FIELDS: Final[tuple[str, ...]] = (
     "stateLabel",
     "state_label",
 )
+_STATE_ID_FIELDS: Final[tuple[str, ...]] = (
+    "_stateId",             # resolved by nodes.py from the search summary
+    "stateId",
+    "state_id",
+)
+
+
+def _extract_state_id(merged: dict[str, object]) -> str | None:
+    """Stable pipeline-state id for the card (string form of the raw id)."""
+    for field in _STATE_ID_FIELDS:
+        value = merged.get(field)
+        if isinstance(value, (str, int)) and str(value).strip():
+            return str(value).strip()
+    # Fallback: the raw BoondManager summary field when nodes.py could not
+    # resolve labels (e.g. dictionary unavailable).
+    raw = merged.get("state")
+    if isinstance(raw, (str, int)) and str(raw).strip():
+        return str(raw).strip()
+    return None
 
 _SKILLS_FIELDS: Final[tuple[str, ...]] = (
     "skills",
@@ -218,6 +237,7 @@ _SAFE_INTERNAL_FIELDS: Final[tuple[str, ...]] = (
     "_mobilityLabel",
     "_resolvedToolLabels",
     "_stateLabel",
+    "_stateId",
     "_resolvedLanguageLabels",
     "_resolvedActivityAreaLabels",
     "_sourceLabel",
@@ -1022,6 +1042,7 @@ def candidate_card_from_result(
         strengths=_extract_string_list(merged, _STRENGTHS_FIELDS),
         watch_points=_extract_string_list(merged, _WATCH_POINTS_FIELDS),
         state_label=_first_non_empty_str(merged, _STATE_LABEL_FIELDS),
+        state_id=_extract_state_id(merged),
         source=_first_non_empty_str(merged, _SOURCE_FIELDS),
         last_update=_first_non_empty_str(merged, _UPDATE_FIELDS),
         technical_summary=_build_technical_summary(merged),

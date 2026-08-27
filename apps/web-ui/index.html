@@ -124,6 +124,23 @@
 
       <div class="input-zone">
         <div class="input-error" id="inputError" role="alert"></div>
+        <div class="search-filters" id="searchFilters">
+          <div class="state-filter" id="stateFilter">
+            <button type="button" class="state-filter-btn" id="stateFilterBtn" aria-haspopup="true" aria-expanded="false" aria-controls="stateFilterPanel">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>
+              <span data-i18n="filters.states_label">États Boond</span>
+              <span class="state-filter-count" id="stateFilterCount" hidden></span>
+            </button>
+            <div class="state-filter-panel" id="stateFilterPanel" hidden>
+              <div class="state-filter-actions">
+                <button type="button" id="stateFilterAll" data-i18n="filters.check_all">Tout cocher</button>
+                <button type="button" id="stateFilterNone" data-i18n="filters.uncheck_all">Tout décocher</button>
+              </div>
+              <div class="state-filter-options" id="stateFilterOptions"></div>
+              <p class="state-filter-status" id="stateFilterStatus" hidden></p>
+            </div>
+          </div>
+        </div>
         <div class="input-wrap">
           <label for="messageInput" class="sr-only" data-i18n="input.aria_label">Décrivez le profil candidat recherché</label>
           <span class="input-icon" aria-hidden="true">

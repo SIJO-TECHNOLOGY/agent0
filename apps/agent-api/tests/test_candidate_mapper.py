@@ -520,3 +520,37 @@ def test_agent1_normalized_languages_surface_on_card() -> None:
     langs = {entry.get("language") for entry in card.languages}
     assert "Anglais" in langs
     assert "Français" in langs
+
+
+def test_state_id_maps_from_resolved_internal_field() -> None:
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={
+                "firstName": "Jane",
+                "lastName": "Doe",
+                "state": 7,
+                "_stateId": "7",
+                "_stateLabel": "Vivier",
+            },
+        )
+    )
+
+    assert card is not None
+    assert card.state_label == "Vivier"
+    assert card.state_id == "7"
+
+
+def test_state_id_falls_back_to_raw_state_field() -> None:
+    # Dictionary unavailable: no _stateId/_stateLabel injected, but the raw
+    # summary `state` id still gives the UI a stable filter key.
+    card = candidate_card_from_result(
+        _result(
+            source_tool="searchCandidates",
+            data={"firstName": "Jane", "lastName": "Doe", "state": 8},
+        )
+    )
+
+    assert card is not None
+    assert card.state_label is None
+    assert card.state_id == "8"

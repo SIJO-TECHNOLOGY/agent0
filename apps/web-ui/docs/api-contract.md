@@ -179,6 +179,7 @@ Candidate cards support optional sourcing-oriented fields:
 - `tjm`
 - `mobility`
 - `state_label`
+- `state_id`
 - `source`
 - `last_update`
 - `ai_evaluation` or `match_explanation`
@@ -208,9 +209,46 @@ controls:
 
 - sort by `match_score` when scores are present
 - show only available profiles when `availability` is present
+- filter by BoondManager state when `state_label` / `state_id` are present
+  (a compact "États" dropdown with one checkbox per state found in the
+  received results)
 
 These controls do not build BoondManager queries and do not replace backend
 filtering. They only rearrange or hide already received candidates in the UI.
+
+## Candidate States
+
+```http
+GET /api/candidate-states
+```
+
+Returns the selectable BoondManager candidate pipeline states used by the
+pre-query state filter next to the search input. Excluded states
+("Ne plus contacter", "A SUPPRIMER", "Proposition refusé") are already
+filtered out by the backend, and candidates in those states never appear
+in search results at all.
+
+```json
+{
+  "states": [
+    { "id": "7", "label": "Vivier" },
+    { "id": "8", "label": "A jouer" }
+  ]
+}
+```
+
+The selected state ids are sent with the search request:
+
+```json
+{
+  "query": "dev C# 5 ans d'expérience",
+  "filters": { "candidate_states": ["7", "8"] }
+}
+```
+
+Multiple states are additive (union): a candidate matches when it is in ANY
+of the selected states. The backend resolves and applies the filter at query
+time (BoondManager `candidateStates`).
 
 ## Clarification
 

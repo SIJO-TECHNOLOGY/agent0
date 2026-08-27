@@ -70,6 +70,7 @@ class CandidateCard(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     watch_points: list[str] = Field(default_factory=list)
     state_label: str | None = None
+    state_id: str | None = None
     source: str | None = None
     last_update: str | None = None
     technical_summary: str | None = None
@@ -282,6 +283,27 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
     dependencies: HealthDependencies
+
+
+class CandidateStateOption(BaseModel):
+    """One selectable candidate pipeline state (BoondManager dictionary)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+
+
+class CandidateStatesResponse(BaseModel):
+    """Candidate pipeline states offered as search filters to the web UI.
+
+    Excluded states ("Ne plus contacter", "A SUPPRIMER", …) are already
+    filtered out server-side and never offered.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    states: list[CandidateStateOption] = Field(default_factory=list)
 
 
 class McpToolsResponse(BaseModel):

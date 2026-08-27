@@ -1,5 +1,6 @@
 """FastAPI routers."""
 
+from app.api.candidate_states import router as candidate_states_router
 from app.api.health import router as health_router
 from app.api.mcp_debug import router as mcp_debug_router
 from app.api.mcp_tools import router as mcp_tools_router
@@ -9,6 +10,7 @@ from app.api.search_stream import router as search_stream_router
 from app.api.chat import router as chat_router
 
 __all__ = [
+    "candidate_states_router",
     "chat_router",
     "health_router",
     "mcp_debug_router",

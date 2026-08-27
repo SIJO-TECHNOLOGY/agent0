@@ -16,6 +16,7 @@ export const API_ENDPOINTS = {
   conversations: "/api/conversations",
   conversation_detail: "/api/conversations/:id",
   candidates_detail: "/api/candidates/:id",
+  candidate_states: "/api/candidate-states",
 };
 
 export const CHAT_TIMEOUT_MS = null;

@@ -1534,6 +1534,148 @@ button.footer-pill:hover {
   text-align: center;
 }
 
+.search-filters {
+  max-width: 760px;
+  margin: 0 auto 8px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.state-filter {
+  position: relative;
+}
+
+.state-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.state-filter-btn:hover,
+.state-filter-btn[aria-expanded="true"] {
+  border-color: var(--blue-mid);
+  color: var(--blue-dark);
+}
+
+.state-filter.active .state-filter-btn {
+  background: var(--blue-light);
+  border-color: var(--blue-mid);
+  color: var(--blue-dark);
+}
+
+.state-filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--blue);
+  color: #fff;
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+}
+
+.state-filter-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  min-width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  animation: up 0.14s ease;
+}
+
+.state-filter-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.state-filter-actions button {
+  border: none;
+  background: none;
+  padding: 2px 0;
+  color: var(--blue);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.state-filter-actions button:hover {
+  text-decoration: underline;
+}
+
+.state-filter-options {
+  display: grid;
+  gap: 2px;
+}
+
+.state-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.state-filter-option:hover {
+  background: var(--blue-light);
+}
+
+.state-filter-option input {
+  accent-color: var(--blue);
+}
+
+.state-filter-option:has(input:checked) {
+  color: var(--blue-dark);
+  font-weight: var(--fw-semibold);
+}
+
+.state-filter-status {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* Results-toolbar variant: the "États" dropdown opens BELOW its button,
+   right-aligned (the pre-query popover opens above the search input). */
+.result-state-filter .state-filter-panel {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  min-width: 220px;
+}
+
+.state-filter-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
 .input-wrap {
   max-width: 760px;
   margin: 0 auto;

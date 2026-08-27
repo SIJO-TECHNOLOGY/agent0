@@ -37,6 +37,7 @@ from app.services.candidate_mapper import (
 from app.services.dictionary_resolver import (
     dictionary_activity_area_option_entries,
     dictionary_availability_entries,
+    detect_candidate_state_labels,
     dictionary_candidate_state_entries,
     dictionary_contract_entries,
     dictionary_language_level_entries,
@@ -44,6 +45,7 @@ from app.services.dictionary_resolver import (
     dictionary_mobility_option_entries,
     dictionary_section_entries,
     dictionary_tool_entries,
+    resolve_candidate_state_ids,
     resolve_excluded_state_ids,
     resolve_experience_id,
     resolve_label_for_id,
@@ -250,6 +252,12 @@ async def analyze_intent(state: GraphState, _: NodeContext) -> GraphState:
     raw_page = state.filters.get("search_page")
     if _int_or_none(raw_page):
         constraints["search_page"] = str(raw_page)
+
+    # UI-selected candidate pipeline states (checkbox filter) — dictionary
+    # ids chosen by the user, applied server-side as candidateStates.
+    state_ids_csv = _candidate_state_ids_from_filters(state.filters)
+    if state_ids_csv:
+        constraints[CANDIDATE_STATE_IDS_CONSTRAINT] = state_ids_csv
 
     intent = InterpretedIntent(
         objective=objective,
@@ -503,6 +511,8 @@ async def _build_search_candidates_inputs(
     intent: InterpretedIntent | None,
     ctx: NodeContext,
     available_by_name: dict[str, McpTool],
+    *,
+    query: str = "",
 ) -> tuple[dict[str, object] | None, list[Warning]]:
     """Build ``searchCandidates`` inputs or signal "skip with clarification".
 
@@ -528,6 +538,21 @@ async def _build_search_candidates_inputs(
     if "keywords" in property_names and entities:
         inputs["keywords"] = " ".join(entities)
         has_meaningful_criterion = True
+
+    # Candidate pipeline-state filter (UI checkboxes / "en Vivier" queries).
+    # A state selection alone is a meaningful criterion — "all Vivier
+    # candidates" is a legitimate browse.
+    state_filter, state_warnings = await _resolve_candidate_state_filter(
+        ctx,
+        intent.constraints,
+        property_names,
+        available_by_name,
+        query=query,
+    )
+    if state_filter:
+        inputs.update(state_filter)
+        has_meaningful_criterion = True
+    warnings.extend(state_warnings)
 
     # Best-effort experience-filter resolution via getDictionary. Never
     # invents an id; only applies the filter when the resolver agrees.
@@ -581,6 +606,8 @@ async def _resolve_step_inputs(
     intent: InterpretedIntent | None,
     ctx: NodeContext,
     available_by_name: dict[str, McpTool],
+    *,
+    query: str = "",
 ) -> tuple[dict[str, object] | None, list[Warning]]:
     if tool_name == CANDIDATE_DETAIL_TOOL:
         adjusted, warnings = _build_candidate_detail_inputs(
@@ -589,7 +616,7 @@ async def _resolve_step_inputs(
         return adjusted, warnings
     if tool_name == SEARCH_CANDIDATES_TOOL:
         return await _build_search_candidates_inputs(
-            current_inputs, schema, intent, ctx, available_by_name
+            current_inputs, schema, intent, ctx, available_by_name, query=query
         )
     return current_inputs, []
 
@@ -637,6 +664,7 @@ async def select_tools(state: GraphState, ctx: NodeContext) -> GraphState:
             state.interpreted_intent,
             ctx,
             available_by_name,
+            query=state.original_query,
         )
         warnings.extend(extra_warnings)
 
@@ -1303,6 +1331,7 @@ CONTRACT_LABEL_KEY: Final[str] = "_contractLabel"
 MOBILITY_LABEL_KEY: Final[str] = "_mobilityLabel"
 RESOLVED_TOOL_LABELS_KEY: Final[str] = "_resolvedToolLabels"
 STATE_LABEL_KEY: Final[str] = "_stateLabel"
+STATE_ID_KEY: Final[str] = "_stateId"
 RESOLVED_LANGUAGE_LABELS_KEY: Final[str] = "_resolvedLanguageLabels"
 RESOLVED_ACTIVITY_AREA_LABELS_KEY: Final[str] = "_resolvedActivityAreaLabels"
 
@@ -1722,10 +1751,36 @@ async def enrich_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
             update={"data": merged_data}
         )
 
+    # Resolve the pipeline state on EVERY result (not just the enriched
+    # slice) so the frontend can filter/display state on all cards.
+    if state_entries:
+        for index, result in enumerate(enriched_results):
+            data = result.data
+            if STATE_LABEL_KEY in data and STATE_ID_KEY in data:
+                continue
+            raw_state = data.get("state")
+            if raw_state is None:
+                attrs = data.get("attributes")
+                if isinstance(attrs, dict):
+                    raw_state = attrs.get("state")
+            if raw_state is None:
+                continue
+            update: dict[str, object] = {STATE_ID_KEY: str(raw_state)}
+            if STATE_LABEL_KEY not in data:
+                label = resolve_label_for_id(state_entries, raw_state)
+                if label:
+                    update[STATE_LABEL_KEY] = label
+            enriched_results[index] = result.model_copy(
+                update={"data": {**data, **update}}
+            )
+
     # Index catch-up (ADR-014): the CV and technical document for these
     # candidates were just downloaded, so indexing them costs embeddings
     # only — no second round of MCP calls. This is what fills the index in
     # as the tool gets used, on top of the bulk indexing script.
+    # Runs after state resolution so the payloads it reads are final; the
+    # state keys it adds are internal (leading underscore) and are stripped
+    # from the indexed summary anyway.
     await _catch_up_vector_index(ctx, enriched_results[:enrichment_limit])
 
     new_calls = tool_calls[len(state.tool_calls):]
@@ -2696,6 +2751,11 @@ async def plan_with_llm(state: GraphState, ctx: NodeContext) -> GraphState:
     # carried by request filters, not something the LLM can know about.
     if _int_or_none(state.filters.get("search_page")):
         llm_constraints["search_page"] = str(state.filters["search_page"])
+    # UI-selected candidate pipeline states (checkbox filter) — likewise
+    # carried by request filters, authoritative over LLM-declared labels.
+    state_ids_csv = _candidate_state_ids_from_filters(state.filters)
+    if state_ids_csv:
+        llm_constraints[CANDIDATE_STATE_IDS_CONSTRAINT] = state_ids_csv
     intent = InterpretedIntent(
         objective=str(intent_dict.get("objective") or "llm_plan"),
         entities=_string_list(intent_dict.get("entities")),
@@ -2957,36 +3017,53 @@ async def _resolve_search_filters(
     schema: dict[str, object],
     intent: InterpretedIntent | None,
     available_by_name: dict[str, McpTool],
+    *,
+    query: str = "",
 ) -> tuple[dict[str, object], list[Warning]]:
     """Inject Agent-API-resolved dictionary filters into search inputs.
 
-    The LLM only declares intent; the Agent API resolves experience/tool
-    dictionary ids here (best-effort, never inventing an id). Filters the
-    (sanitized) plan already supplied validly are left untouched.
+    The LLM only declares intent; the Agent API resolves experience and
+    candidate-state dictionary ids here (best-effort, never inventing an
+    id). Filters the (sanitized) plan already supplied validly are left
+    untouched.
     """
     warnings: list[Warning] = []
     if intent is None:
         return inputs, warnings
 
     property_names = _schema_property_names(schema)
-    min_years_raw = intent.constraints.get("min_experience_years")
+    resolved = dict(inputs)
 
+    # Candidate pipeline-state filter (UI checkboxes / "en Vivier" queries).
+    if CANDIDATE_STATES_FIELD not in resolved:
+        state_filter, state_warnings = await _resolve_candidate_state_filter(
+            ctx,
+            intent.constraints,
+            property_names,
+            available_by_name,
+            query=query,
+        )
+        resolved.update(state_filter)
+        warnings.extend(state_warnings)
+
+    min_years_raw = intent.constraints.get("min_experience_years")
     exp_field = next(
         (f for f in _SEARCH_EXPERIENCE_FIELDS if f in property_names), None
     )
-    # Only the experience-level filter is injected here. The structured
-    # `tools` id filter is intentionally NOT applied — it is unreliable and
-    # can kill recall; skill matching is handled by keywords + ranking.
+    # Beyond states, only the experience-level filter is injected here. The
+    # structured `tools` id filter is intentionally NOT applied — it is
+    # unreliable and can kill recall; skill matching is handled by
+    # keywords + ranking.
     needs_experience = bool(min_years_raw) and exp_field is not None and (
-        exp_field not in inputs
+        exp_field not in resolved
     )
     if not needs_experience or exp_field is None:
-        return inputs, warnings
+        return resolved, warnings
 
     raw = await _fetch_dictionary(ctx, available_by_name)
     if raw is None:
         warnings.append(_experience_unmapped_warning())
-        return inputs, warnings
+        return resolved, warnings
 
     min_years = _int_or_none(min_years_raw)
     entry_id = (
@@ -2998,9 +3075,8 @@ async def _resolve_search_filters(
     )
     if entry_id is None:
         warnings.append(_experience_unmapped_warning())
-        return inputs, warnings
+        return resolved, warnings
 
-    resolved = dict(inputs)
     resolved[exp_field] = _coerce_for_field(schema, exp_field, entry_id)
     return resolved, warnings
 
@@ -3013,6 +3089,107 @@ def _experience_unmapped_warning() -> Warning:
             "dictionary entry was found for the requested experience level."
         ),
     )
+
+
+# Constraint keys carrying the candidate pipeline-state filter:
+# - ``candidate_state_ids``: comma-separated dictionary ids, supplied by the
+#   web UI's state-filter checkboxes (authoritative — no resolution needed).
+# - ``candidate_states``: comma-separated human-readable labels, declared by
+#   the LLM planner from the user's natural language ("en Vivier").
+CANDIDATE_STATE_IDS_CONSTRAINT: Final[str] = "candidate_state_ids"
+CANDIDATE_STATE_LABELS_CONSTRAINT: Final[str] = "candidate_states"
+CANDIDATE_STATES_FIELD: Final[str] = "candidateStates"
+
+
+def _candidate_state_ids_from_filters(filters: dict[str, object]) -> str | None:
+    """Normalize the UI-supplied state-id filter to a csv constraint value."""
+    raw = filters.get("candidate_states")
+    values: list[object]
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, list):
+        values = list(raw)
+    else:
+        return None
+    ids: list[str] = []
+    for value in values:
+        if _int_coercible(value):
+            text = str(int(str(value).strip()))
+            if text not in ids:
+                ids.append(text)
+    return ",".join(ids) if ids else None
+
+
+def _split_csv_constraint(value: object) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    return [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
+
+
+def _state_filter_unmapped_warning(labels: list[str]) -> Warning:
+    return Warning(
+        code="state_filter_unmapped",
+        message=(
+            "Candidate state filter partially applied: no dictionary entry "
+            "matched the state(s): " + ", ".join(labels) + "."
+        ),
+    )
+
+
+async def _resolve_candidate_state_filter(
+    ctx: NodeContext,
+    constraints: dict[str, str],
+    property_names: set[str],
+    available_by_name: dict[str, McpTool],
+    *,
+    query: str = "",
+    dict_raw: list[dict[str, object]] | None = None,
+) -> tuple[dict[str, object], list[Warning]]:
+    """Best-effort ``candidateStates`` filter inputs from the intent.
+
+    Sources, in trust order: UI-selected dictionary ids
+    (``candidate_state_ids``), LLM-declared labels (``candidate_states``),
+    then a conservative scan of the raw query for dictionary state labels.
+    Ids are unioned (BoondManager ``candidateStates[]`` semantics). Returns
+    ``({}, warnings)`` when nothing applies; never invents an id.
+    """
+    if CANDIDATE_STATES_FIELD not in property_names:
+        return {}, []
+    ids = _split_csv_constraint(constraints.get(CANDIDATE_STATE_IDS_CONSTRAINT))
+    labels = _split_csv_constraint(
+        constraints.get(CANDIDATE_STATE_LABELS_CONSTRAINT)
+    )
+    if not ids and not labels and not query.strip():
+        return {}, []
+
+    warnings: list[Warning] = []
+    resolved: list[object] = [int(i) for i in ids if _int_coercible(i)]
+    if labels or (not ids and query.strip()):
+        if dict_raw is None:
+            dict_raw = await _fetch_dictionary(ctx, available_by_name) or []
+        entries = dictionary_candidate_state_entries(dict_raw)
+        if not labels and entries:
+            labels = detect_candidate_state_labels(entries, query)
+        if labels:
+            matched, unresolved = resolve_candidate_state_ids(entries, labels)
+            resolved.extend(matched)
+            if unresolved:
+                warnings.append(_state_filter_unmapped_warning(unresolved))
+
+    unique: list[object] = []
+    seen: set[str] = set()
+    for value in resolved:
+        key = str(value)
+        if key not in seen:
+            seen.add(key)
+            unique.append(value)
+    if not unique:
+        return {}, warnings
+    logger.info(
+        "graph.candidate_state_filter",
+        extra={"state_ids": [str(v) for v in unique]},
+    )
+    return {CANDIDATE_STATES_FIELD: unique}, warnings
 
 
 _MAX_SEARCH_PASSES: Final[int] = 5
@@ -3179,6 +3356,7 @@ async def _execute_search_ladder(
     results: list[SearchResult],
     warnings: list[Warning],
     errors: list[AgentError],
+    original_query: str = "",
 ) -> bool:
     """Run searchCandidates as a recall-first relaxation ladder.
 
@@ -3200,6 +3378,19 @@ async def _execute_search_ladder(
 
     raw = await _fetch_dictionary(ctx, available_by_name)
     tool_entries = dictionary_section_entries(raw, "tool") if raw else []
+
+    # Candidate pipeline-state filter (UI checkboxes / "en Vivier" queries).
+    # Applied to EVERY pass so a relaxed search can never leak candidates
+    # outside the requested states.
+    state_filter, state_warnings = await _resolve_candidate_state_filter(
+        ctx,
+        intent.constraints,
+        _schema_property_names(schema),
+        available_by_name,
+        query=original_query,
+        dict_raw=raw,
+    )
+    warnings.extend(state_warnings)
 
     # An entity is a concrete (server-filterable) skill iff it resolves to a
     # tool dictionary id. This is generic across technologies.
@@ -3246,7 +3437,9 @@ async def _execute_search_ladder(
                     "pass_index": index,
                 },
             )
-        inputs, _dropped = _sanitize_tool_inputs(dict(search_pass.inputs), schema)
+        inputs, _dropped = _sanitize_tool_inputs(
+            {**search_pass.inputs, **state_filter}, schema
+        )
         call, raw_records = await _execute_single_tool(ctx, tool.name, inputs)
         tool_calls.append(call)
         if call.status is ToolCallStatus.FAILED:
@@ -3265,7 +3458,12 @@ async def _execute_search_ladder(
             # even when the resumeTd pass already returned results.
             if search_pass.inputs.get("keywordsType") != "titleSkills":
                 title_inputs, _ = _sanitize_tool_inputs(
-                    {**search_pass.inputs, "keywordsType": "titleSkills"}, schema
+                    {
+                        **search_pass.inputs,
+                        **state_filter,
+                        "keywordsType": "titleSkills",
+                    },
+                    schema,
                 )
                 title_call, title_records = await _execute_single_tool(
                     ctx, tool.name, title_inputs
@@ -3414,6 +3612,7 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
                     results=results,
                     warnings=warnings,
                     errors=errors,
+                    original_query=state.original_query,
                 )
                 if handled:
                     continue
@@ -3438,6 +3637,7 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
                     tool.input_schema,
                     state.interpreted_intent,
                     available_by_name,
+                    query=state.original_query,
                 )
                 warnings.extend(resolve_warnings)
             call, raw = await _execute_single_tool(ctx, step.tool_name, inputs)
