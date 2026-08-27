@@ -455,6 +455,9 @@ function showChat() {
   elements.loginBtn.disabled = false;
   setUiState("empty");
   updateSendButton();
+  // Warm the state-filter list so the popover opens instantly instead of
+  // fetching on first click (also warms the backend dictionary cache).
+  ensureCandidateStatesLoaded();
 }
 
 async function loadConversationsSafely() {
