@@ -58,7 +58,10 @@ def get_search_service(
     if isinstance(override, SearchService):
         return override
     llm_planner = getattr(request.app.state, "llm_planner", None)
-    return build_search_service(mcp_client, settings, llm_planner=llm_planner)
+    rag_service = getattr(request.app.state, "rag_service", None)
+    return build_search_service(
+        mcp_client, settings, llm_planner=llm_planner, rag_service=rag_service
+    )
 
 
 def build_search_service(
@@ -66,6 +69,7 @@ def build_search_service(
     settings: Settings,
     *,
     llm_planner: LlmPlanner | None = None,
+    rag_service: object | None = None,
 ) -> SearchService:
     """Single construction site for `SearchService` from settings.
 
@@ -97,6 +101,7 @@ def build_search_service(
         semantic_boost_weight=settings.semantic_boost_weight,
         agent1_reconciler=agent1_reconciler,
         allow_clarification=settings.allow_clarification,
+        rag_service=rag_service,  # type: ignore[arg-type]
     )
 
 

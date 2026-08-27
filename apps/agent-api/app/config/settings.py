@@ -237,6 +237,88 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- CV semantic retrieval / RAG (ADR-014) -------------------------------
+    enable_cv_rag: bool = Field(
+        default=False,
+        description=(
+            "When true, a vector index over candidate CVs runs as a SECOND "
+            "recall channel alongside searchCandidates: semantically similar "
+            "candidates the keyword search missed are added to the result "
+            "pool, then ranked by the normal scoring. Requires an embedding "
+            "API key and a populated index (see scripts/index_candidates.py). "
+            "Off by default: an empty index simply adds nothing."
+        ),
+    )
+    rag_store: str = Field(
+        default="sqlite",
+        description=(
+            "Backend for the CV vector index: 'sqlite' (local file, dev/tests) "
+            "or 'azure_table' (Azure Table Storage, production)."
+        ),
+    )
+    rag_sqlite_path: str = Field(
+        default="data/cv_index.db",
+        description=(
+            "SQLite file for the vector index (rag_store=sqlite). Relative "
+            "paths resolve against the working directory; ':memory:' for tests."
+        ),
+    )
+    rag_embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="Embedding model used to index CVs and embed queries.",
+    )
+    rag_embedding_dims: int = Field(
+        default=512, ge=64, le=3072,
+        description=(
+            "Embedding dimensionality (Matryoshka truncation). The whole "
+            "index is held in memory, so this directly sets its footprint: "
+            "~53 MB at 512 dims for 26k candidates, ~159 MB at 1536. "
+            "Changing it invalidates the index — re-run the indexing script."
+        ),
+    )
+    rag_embedding_api_key: str | None = Field(
+        default=None,
+        description=(
+            "API key for the embedding model. Falls back to OPENAI_API_KEY "
+            "when unset. Required when enable_cv_rag=true."
+        ),
+    )
+    rag_top_k: int = Field(
+        default=10, ge=1, le=200,
+        description=(
+            "Maximum candidates the vector channel may ADD to a search "
+            "(candidates already found by keyword search don't count). "
+            "Kept small on purpose: vector hits compete with keyword hits "
+            "for the bounded enrichment budget, so the channel should only "
+            "put forward candidates it is confident about."
+        ),
+    )
+    rag_min_score: float = Field(
+        default=0.45, ge=0.0, le=1.0,
+        description=(
+            "Cosine-similarity floor for a vector hit to be added. Measured "
+            "on the live base: clearly related profiles score ~0.5+, while "
+            "barely related ones still reach ~0.4 — 0.45 keeps the channel "
+            "precise. Lowering it trades precision for recall."
+        ),
+    )
+    rag_catch_up_enabled: bool = Field(
+        default=True,
+        description=(
+            "When true, candidates seen during a search but missing from the "
+            "index are indexed afterwards, so the index fills in with use. "
+            "Runs after the response is assembled and never blocks it."
+        ),
+    )
+    rag_index_concurrency: int = Field(
+        default=6, ge=1, le=32,
+        description=(
+            "Concurrent candidates fetched during indexing. Each costs 2 MCP "
+            "calls and makes BoondManager re-extract a PDF, so this is the "
+            "main throttle on a bulk indexing run."
+        ),
+    )
+
     # --- Conversation persistence --------------------------------------------
     conversation_store: str = Field(
         default="sqlite",
