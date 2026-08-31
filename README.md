@@ -30,6 +30,7 @@ The current Agent API direction is an **Architectural Paradigm Shift: From Singl
 │   ├── milestones/
 │   └── diagrams/
 ├── infra/
+│   ├── azure/
 │   ├── docker/
 │   ├── compose/
 │   └── scripts/
@@ -52,6 +53,7 @@ The current Agent API direction is an **Architectural Paradigm Shift: From Singl
 - `docs/decisions`: Architecture decision records and tradeoff notes.
 - `docs/milestones`: Delivery milestones and verification evidence.
 - `docs/diagrams`: Mermaid diagrams and exported diagram assets.
+- `infra/azure`: Production Azure Container Apps topology, deploy script, and runbook.
 - `infra/docker`: Docker-related placeholders and future build assets.
 - `infra/compose`: Docker Compose placeholders for local orchestration.
 - `infra/scripts`: Infrastructure and developer workflow scripts.

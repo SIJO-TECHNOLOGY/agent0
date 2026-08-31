@@ -281,7 +281,7 @@ Each tool should define:
 │   │   ├── scripts/
 │   │   └── tests/
 │   └── mcp-boondmanager/    # Spring Boot MCP server, deterministic
-└── infra/azure/             # Bicep: three Container Apps
+└── infra/azure/             # deploy script + documented Azure topology
 ```
 
 Each app deploys as its own Azure Container App. The structure keeps the
@@ -383,6 +383,8 @@ The global architecture is the system context for the Agent API implementation. 
 - [ADR-012 - Reflection Decides Clarify-or-Retry](../decisions/adr-012-clarify-or-retry.md) lets the post-ranking reflection ask the user to clarify instead of replanning on an unresolved parameter.
 - [ADR-013 - TTL Caching Of Semi-Stable MCP Results](../decisions/adr-013-mcp-result-caching.md) places a TTL cache at the MCP client boundary and fixes which tools may never be cached.
 - [ADR-014 - Semantic CV Retrieval](../decisions/adr-014-cv-semantic-retrieval.md) records the vector recall channel: strictly additive, shipped disabled by default, and why keyword recall already covers what it was built for.
+- [ADR-015 - Candidate Pipeline-State Filtering](../decisions/adr-015-candidate-state-filtering.md) resolves pipeline-state filters in the Agent API rather than the LLM, and carries them through every search pass.
+- [ADR-016 - Keep One Warm Replica For The Public Web Front](../decisions/adr-016-web-warm-replica.md) takes `agent0-web` out of scale-to-zero so the first visit after an idle period no longer pays a 30 s - 1 min cold start.
 - [Architectural Paradigm Shift: From Single-Shot Planning to Bounded ReAct Control Loop](../architecture-transitions/bounded-react-control-loop/README.md) drives the cross-document transition from the old control-loop model to the new bounded ReAct model.
 - [Milestone 001 - Agent API MCP Fuzzy Search](../milestones/milestone-001-agent-api-mcp-fuzzy-search.md) certifies the orchestration milestone with reproducible verification evidence.
 - [Milestone 002 - Bounded ReAct Control Loop](../milestones/milestone-002-bounded-react-control-loop.md) will certify the LLM observe-then-replan behavior with reproducible evidence.

@@ -102,7 +102,7 @@ Variables : `BOONDMANAGER_BASE_URL`, `BOONDMANAGER_JWT_CLIENT`.
 ### `agent0-web`
 
 Identité SystemAssigned. Réplicas **1 → 10**. Le minimum était à 0
-(scale-to-zero) jusqu'au 2026-08-27 : chaque visite après 5 minutes
+(scale-to-zero) jusqu'au 2026-08-31 : chaque visite après 5 minutes
 d'inactivité subissait un cold start de 30 s à 1 min, d'où le passage
 à 1. Variable : `AGENT_API_UPSTREAM`. Domaine `agent0.sijo.fr` avec
 certificat managé.
@@ -210,6 +210,6 @@ Si le groupe de ressources devait être recréé, dans l'ordre :
 
 - Container Apps : les trois applications gardent un réplica minimum,
   donc facturation continue et non scale-to-zero. Le web y est passé
-  le 2026-08-27 pour éliminer le cold start au chargement de la page.
+  le 2026-08-31 pour éliminer le cold start au chargement de la page.
 - ACR Basic : ~5 €/mois. Table Storage : négligeable à ce volume.
 - Log Analytics : quelques €/mois selon le volume, rétention 30 jours.
