@@ -34,3 +34,7 @@ out/
 
 # Local conversation store (sqlite)
 apps/agent-api/data/
+*.db
+
+# Claude Code worktrees / temporary worktrees
+.claude/worktrees/

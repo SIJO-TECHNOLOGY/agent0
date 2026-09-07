@@ -6,12 +6,13 @@ import pytest
 from httpx import AsyncClient
 
 from app.api.chat import (
-    _CONVERSATION_RESULTS,
     _PAGE_SIZE,
     _combine_query,
     _is_more_request,
     _serve_page,
 )
+from app.services import conversation_memory
+from app.session.memory import SessionKey
 
 
 def test_is_more_request() -> None:
@@ -23,24 +24,27 @@ def test_is_more_request() -> None:
 
 def test_serve_page_paginates_pool() -> None:
     pool = [{"id": f"c{i}"} for i in range(_PAGE_SIZE + 3)]  # one full page + 3
-    _CONVERSATION_RESULTS["conv_pg"] = {"candidates": pool, "shown": 0, "total": len(pool)}
+    key = SessionKey("dev", "conv_pg")
+    conversation_memory._pools[key] = {
+        "candidates": pool, "shown": 0, "total": len(pool)
+    }
     try:
-        first = _serve_page("conv_pg")
+        first = _serve_page("dev", "conv_pg")
         assert len(first.candidates) == _PAGE_SIZE
         assert "1-" in first.message
 
-        second = _serve_page("conv_pg")
+        second = _serve_page("dev", "conv_pg")
         assert len(second.candidates) == 3  # the remainder
         # The two pages are disjoint (new candidates).
         ids1 = {c["id"] for c in first.candidates}
         ids2 = {c["id"] for c in second.candidates}
         assert ids1.isdisjoint(ids2)
 
-        third = _serve_page("conv_pg")
+        third = _serve_page("dev", "conv_pg")
         assert third.candidates == []
         assert "Plus de candidats" in third.message
     finally:
-        _CONVERSATION_RESULTS.pop("conv_pg", None)
+        conversation_memory._pools.pop(key, None)
 
 
 def test_combine_query_starts_fresh() -> None:
@@ -208,8 +212,9 @@ async def test_memory_filter_uses_existing_candidates(client: AsyncClient) -> No
     from app.session import memory as session_memory
 
     session_id = "session_filter_test"
-    session_memory.reset(session_id)
+    session_memory.reset("dev", session_id)
     session_memory.save_search_results(
+        "dev",
         session_id,
         query="java",
         effective_query="java",
@@ -229,15 +234,16 @@ async def test_memory_filter_uses_existing_candidates(client: AsyncClient) -> No
         assert [candidate["id"] for candidate in body["candidates"]] == ["1"]
         assert body["debug"]["memoryCandidateCount"] == 1
     finally:
-        session_memory.reset(session_id)
+        session_memory.reset("dev", session_id)
 
 
 @pytest.mark.asyncio
 async def test_chat_session_reset_deletes_memory(client: AsyncClient) -> None:
     from app.session import memory as session_memory
+    from app.session.memory import SessionKey
 
     session_id = "session_reset_test"
-    session_memory.get_or_create(session_id).last_user_query = "java"
+    session_memory.get_or_create("dev", session_id).last_user_query = "java"
 
     response = await client.post(
         "/api/chat/session/reset",
@@ -246,4 +252,4 @@ async def test_chat_session_reset_deletes_memory(client: AsyncClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "sessionId": session_id}
-    assert session_id not in session_memory.SESSION_STORE
+    assert SessionKey("dev", session_id) not in session_memory.SESSION_STORE

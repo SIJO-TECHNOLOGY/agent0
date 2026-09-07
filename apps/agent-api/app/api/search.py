@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
+from app.api.auth import AuthenticatedUser, get_current_user
 from app.api.dependencies import get_search_service
 from app.models.api import (
     ErrorEnvelope,
@@ -33,10 +34,13 @@ async def search(
     payload: SearchRequest,
     request: Request,
     service: SearchService = Depends(get_search_service),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> SearchResponse | JSONResponse:
     try:
         return await service.search(
-            payload, ui_language=request.headers.get("accept-language")
+            payload,
+            ui_language=request.headers.get("accept-language"),
+            user_oid=user.oid,
         )
     except HTTPException:
         raise

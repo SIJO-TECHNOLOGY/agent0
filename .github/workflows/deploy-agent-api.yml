@@ -17,7 +17,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate deployment on the test suite for THIS commit: build-and-deploy only
+  # runs if these tests pass, so production is never built from an untested SHA.
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/agent-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies (incl. dev)
+        run: uv sync --frozen --extra dev
+      - name: Run tests
+        run: uv run pytest -q
+
   build-and-deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

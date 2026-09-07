@@ -304,7 +304,7 @@ def test_inject_conversation_context_pins_id_and_shows_all() -> None:
     from app.services import conversation_memory as memory
 
     cid = "conv_inject_test"
-    memory.reset(cid)
+    memory.reset("dev", cid)
     try:
         started = _inject_conversation_context(
             "search_started", {"conversation_id": "other"}, cid
@@ -324,9 +324,9 @@ def test_inject_conversation_context_pins_id_and_shows_all() -> None:
         assert len(final["ui"]["candidates"]) == len(full)
         assert final["message"] == "x"
         # The pool is stored fully-shown so "d'autres" doesn't re-serve page 1.
-        assert memory.next_page(cid)["candidates"] == []
+        assert memory.next_page("dev", cid)["candidates"] == []
     finally:
-        memory.reset(cid)
+        memory.reset("dev", cid)
 
 
 def test_inject_context_more_turn_excludes_seen_and_tracks_page() -> None:
@@ -335,7 +335,7 @@ def test_inject_context_more_turn_excludes_seen_and_tracks_page() -> None:
     from app.session import memory as session_memory
 
     cid = "conv_more_test"
-    memory.reset(cid)
+    memory.reset("dev", cid)
     try:
         # A "more" turn (page 2) whose provider results overlap the first page:
         # already-seen ids are dropped, only new profiles remain.
@@ -351,11 +351,11 @@ def test_inject_context_more_turn_excludes_seen_and_tracks_page() -> None:
         assert [c["id"] for c in final["ui"]["candidates"]] == ["c"]
         assert "nouveau" in final["message"].lower()
         # The session tracks the provider page and every id seen so far.
-        session = session_memory.get_or_create(cid)
+        session = session_memory.get_or_create("dev", cid)
         assert session.current_search["page"] == 2
         assert set(session.current_search["seenIds"]) == {"a", "b", "c"}
     finally:
-        memory.reset(cid)
+        memory.reset("dev", cid)
 
 
 # ---------- Tests ----------------------------------------------------------

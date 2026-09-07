@@ -12,7 +12,24 @@ from app.session.models import SessionMemory
 
 PAGE_SIZE: Final[int] = 12
 
-SESSION_STORE: dict[str, SessionMemory] = {}
+
+@dataclass(frozen=True)
+class SessionKey:
+    """Composite key for all process-local, per-user session state.
+
+    Runtime stores are keyed by ``(user_oid, conversation_id)`` — never by the
+    conversation id alone — so two authenticated users who happen to use the
+    same conversation id can never read, overwrite, or reset one another's
+    in-memory state. ``user_oid`` is the caller's stable Entra object id (or
+    the deterministic ``"dev"`` id when auth is disabled).
+    """
+
+    user_oid: str
+    conversation_id: str
+
+
+# Keyed by SessionKey so state is isolated per (user, conversation).
+SESSION_STORE: dict[SessionKey, SessionMemory] = {}
 
 _AFFIRMATIONS: Final[frozenset[str]] = frozenset(
     {"oui", "non", "yes", "no", "ok", "okay", "d'accord", "daccord", "ouais", "yep", "yup"}
@@ -47,26 +64,33 @@ def new_session_id() -> str:
     return f"session_{uuid.uuid4().hex[:12]}"
 
 
-def get_or_create(session_id: str | None) -> SessionMemory:
+def get_or_create(user_oid: str, session_id: str | None) -> SessionMemory:
     sid = session_id or new_session_id()
-    memory = SESSION_STORE.get(sid)
+    key = SessionKey(user_oid=user_oid, conversation_id=sid)
+    memory = SESSION_STORE.get(key)
     if memory is None:
         memory = SessionMemory(session_id=sid)
-        SESSION_STORE[sid] = memory
+        SESSION_STORE[key] = memory
     return memory
 
 
-def reset(session_id: str) -> None:
-    SESSION_STORE.pop(session_id, None)
+def reset(user_oid: str, session_id: str) -> None:
+    """Drop one user's session for a conversation.
+
+    Scoped to ``user_oid``: a caller can only ever clear their own state,
+    never another user's session that happens to share this id.
+    """
+    SESSION_STORE.pop(SessionKey(user_oid=user_oid, conversation_id=session_id), None)
 
 
 def append_message(
+    user_oid: str,
     session_id: str,
     *,
     role: Literal["user", "assistant"],
     content: str,
 ) -> SessionMemory:
-    memory = get_or_create(session_id)
+    memory = get_or_create(user_oid, session_id)
     memory.messages.append({"role": role, "content": content})
     if role == "user":
         memory.last_user_query = content
@@ -76,18 +100,18 @@ def append_message(
     return memory
 
 
-def context_payload(session_id: str) -> dict[str, object]:
-    return get_or_create(session_id).public_context()
+def context_payload(user_oid: str, session_id: str) -> dict[str, object]:
+    return get_or_create(user_oid, session_id).public_context()
 
 
-def context_snapshot(session_id: str) -> dict[str, object]:
+def context_snapshot(user_oid: str, session_id: str) -> dict[str, object]:
     """Search-session state persisted with each stored turn.
 
     Enough to rehydrate follow-ups ("more", filters) after a restart:
     the current search (query, provider page, seen ids) and the active
     filters.
     """
-    session = get_or_create(session_id)
+    session = get_or_create(user_oid, session_id)
     return {
         "currentSearch": dict(session.current_search),
         "lastFilters": dict(session.last_filters),
@@ -95,6 +119,7 @@ def context_snapshot(session_id: str) -> dict[str, object]:
 
 
 def save_search_results(
+    user_oid: str,
     session_id: str,
     *,
     query: str,
@@ -102,7 +127,7 @@ def save_search_results(
     candidates: list[dict[str, object]],
     filters: dict[str, object] | None = None,
 ) -> SessionMemory:
-    memory = get_or_create(session_id)
+    memory = get_or_create(user_oid, session_id)
     merged_filters = {**memory.last_filters, **(filters or {})}
     memory.current_search = {
         "query": query,
@@ -168,8 +193,8 @@ def combine_query(prior: str, new_message: str) -> str:
     return f"{prior_clean} {new_clean}".strip()
 
 
-def resolve_turn(session_id: str | None, message: str) -> SessionOperation:
-    memory = get_or_create(session_id)
+def resolve_turn(user_oid: str, session_id: str | None, message: str) -> SessionOperation:
+    memory = get_or_create(user_oid, session_id)
     normalized = _normalized(message)
     should_reset = is_reset_request(message)
     has_context = bool(memory.current_search or memory.current_candidates or memory.last_user_query)

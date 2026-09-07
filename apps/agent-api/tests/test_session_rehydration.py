@@ -9,11 +9,14 @@ from httpx import AsyncClient
 
 from app.services import conversation_memory
 from app.session import memory as session_memory
+from app.session.memory import SessionKey
 from app.session.rehydrate import ensure_session_hydrated
 from app.storage.sqlite_store import SqliteConversationStore
 
 USER = "user-1"
 OTHER = "user-2"
+# API requests in these tests run unauthenticated, so they belong to DEV_USER.
+DEV_OID = "dev"
 
 
 @pytest_asyncio.fixture()
@@ -55,7 +58,7 @@ async def test_hydration_restores_context_and_candidates(store) -> None:
 
     await ensure_session_hydrated(store, USER, "conv_1")
 
-    session = session_memory.SESSION_STORE["conv_1"]
+    session = session_memory.SESSION_STORE[SessionKey(USER, "conv_1")]
     assert session.current_search["effectiveQuery"] == "développeur java"
     assert session.current_search["page"] == 2
     assert session.current_search["seenIds"] == ["c1", "c2"]
@@ -71,7 +74,7 @@ async def test_hydration_scoped_to_owner(store) -> None:
     )
     _simulate_restart()
     await ensure_session_hydrated(store, OTHER, "conv_1")
-    assert "conv_1" not in session_memory.SESSION_STORE
+    assert SessionKey(OTHER, "conv_1") not in session_memory.SESSION_STORE
 
 
 async def test_hydration_skips_live_sessions(store) -> None:
@@ -80,18 +83,21 @@ async def test_hydration_skips_live_sessions(store) -> None:
         context={"currentSearch": {"page": 5}},
     )
     _simulate_restart()
-    live = session_memory.get_or_create("conv_1")
+    live = session_memory.get_or_create(USER, "conv_1")
     live.current_search = {"page": 1}
 
     await ensure_session_hydrated(store, USER, "conv_1")
     # The live session wins: no overwrite from the store.
-    assert session_memory.SESSION_STORE["conv_1"].current_search == {"page": 1}
+    assert (
+        session_memory.SESSION_STORE[SessionKey(USER, "conv_1")].current_search
+        == {"page": 1}
+    )
 
 
 async def test_hydration_without_store_is_noop() -> None:
     _simulate_restart()
     await ensure_session_hydrated(None, USER, "conv_1")
-    assert "conv_1" not in session_memory.SESSION_STORE
+    assert SessionKey(USER, "conv_1") not in session_memory.SESSION_STORE
 
 
 async def _run_stream(client: AsyncClient, query: str, conversation_id: str | None = None) -> str:
@@ -109,7 +115,7 @@ async def test_more_continues_after_restart(client: AsyncClient) -> None:
     conversations = (await client.get("/api/conversations")).json()
     conversation_id = conversations[0]["id"]
     original = dict(
-        session_memory.SESSION_STORE[conversation_id].current_search
+        session_memory.SESSION_STORE[SessionKey(DEV_OID, conversation_id)].current_search
     )
     assert original.get("page") == 1
 
@@ -117,7 +123,9 @@ async def test_more_continues_after_restart(client: AsyncClient) -> None:
 
     body = await _run_stream(client, "d'autres profils", conversation_id)
     assert "final_response" in body
-    restored = session_memory.SESSION_STORE[conversation_id].current_search
+    restored = session_memory.SESSION_STORE[
+        SessionKey(DEV_OID, conversation_id)
+    ].current_search
     # The follow-up continued the SAME search on the provider's next page
     # instead of starting a fresh one from "d'autres profils".
     assert restored.get("page") == 2

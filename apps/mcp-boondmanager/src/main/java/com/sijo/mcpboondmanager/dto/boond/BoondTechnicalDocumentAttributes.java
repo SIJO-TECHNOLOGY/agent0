@@ -5,14 +5,15 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.List;
 
 /**
- * Attributes returned under {@code data.attributes} by the candidate-scoped endpoint
- * {@code /candidates/{candidateId}/technical-data}.
+ * Attributes returned under {@code data.attributes} by the candidate-scoped tab
+ * {@code GET /candidates/{candidateId}/technical-data}.
  *
- * <p>This endpoint is keyed by the <strong>candidate</strong> id (so {@code data.id} is the
- * candidate id) and returns that candidate's own technical document. The technical document's own
- * identifier is carried in the {@code tdId} attribute. (Note: the sibling collection endpoint
- * {@code /technical-datas/{id}} is keyed by the technical-document id instead, so it must not be
- * called with a candidate id.)
+ * <p>The candidate id is only the {@code {candidateId}} path segment used to reach this tab;
+ * BoondManager resolves the candidate → DT link server-side and returns the candidate's technical
+ * document (DT) resource. That resource has its <strong>own</strong> identifier ({@code ID_DT}),
+ * carried both as {@code data.id} and, redundantly, in the {@code tdId} attribute — it is distinct
+ * from the candidate id ({@code ID_PROFIL}). The two ids must never be treated as interchangeable,
+ * and the candidate id is never used as a technical-data id.
  *
  * <p>BoondManager returns {@code diplomas}, {@code expertiseAreas} and {@code activityAreas} as JSON
  * arrays of strings, and {@code tools}/{@code languages} as arrays of objects (not delimited

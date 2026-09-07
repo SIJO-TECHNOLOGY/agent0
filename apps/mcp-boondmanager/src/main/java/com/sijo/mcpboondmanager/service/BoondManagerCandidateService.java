@@ -174,23 +174,31 @@ public class BoondManagerCandidateService {
         return (value == null || value < 0) ? null : value;
     }
 
+    /**
+     * Retrieves a candidate's technical document (BoondManager "dossier technique" / DT).
+     *
+     * <p>BoondManager resolves the candidate → DT link server-side through the candidate-scoped tab
+     * {@code GET /candidates/{candidateId}/technical-data} (one of the documented candidate tabs, next
+     * to {@code information} and {@code administrative}). The candidate id ({@code ID_PROFIL}) and the
+     * technical document id ({@code ID_DT}) are <strong>distinct identifiers</strong>: the candidate id
+     * is only ever used as the {@code {candidateId}} path segment of this tab route — it is never used
+     * as a technical-data id (this method never issues {@code /technical-datas/{candidateId}}). The
+     * returned {@code data.id}/{@code tdId} is the DT's own id, surfaced on the DTO alongside the
+     * authoritative {@code candidateId} taken from the request.
+     *
+     * <p>Candidates with no technical document (empty tab or {@code 404}) yield a clean
+     * {@linkplain TechnicalDocumentDto#notAvailable(Integer) "not available"} document rather than an
+     * error — mirroring {@link #getCandidateCV(Integer)}'s empty-CV handling.
+     */
     public TechnicalDocumentDto getCandidateTechnicalDocument(Integer candidateId) {
         String path = CANDIDATES_PATH + "/" + candidateId + "/technical-data";
-        String fallbackPath = CANDIDATES_PATH + "/" + candidateId + "/technical-datas";
         try {
             return getCandidateTechnicalDocumentAtPath(path, candidateId);
-        } catch (BoondApiException | ExternalServiceException ex) {
-            try {
-                return getCandidateTechnicalDocumentAtPath(fallbackPath, candidateId);
-            } catch (BoondApiException | ExternalServiceException fallbackEx) {
-                if (isNotFound(fallbackEx)) {
-                    if (!isNotFound(ex)) {
-                        throw ex;
-                    }
-                    throw new CandidateNotFoundException(candidateId, fallbackPath, fallbackEx);
-                }
-                throw fallbackEx;
+        } catch (BoondApiException ex) {
+            if (isNotFound(ex)) {
+                return TechnicalDocumentDto.notAvailable(candidateId);
             }
+            throw ex;
         }
     }
 
@@ -516,6 +524,10 @@ public class BoondManagerCandidateService {
     private TechnicalDocumentDto toTechnicalDocument(
             BoondSingleEnvelope<BoondTechnicalDocumentAttributes> envelope,
             Integer candidateId) {
+        if (envelope == null || envelope.data() == null) {
+            // Candidate has no technical document: not an error condition.
+            return TechnicalDocumentDto.notAvailable(candidateId);
+        }
         return toTechnicalDocument(envelope.data(), candidateId);
     }
 
@@ -523,10 +535,8 @@ public class BoondManagerCandidateService {
             BoondListEnvelope<BoondTechnicalDocumentAttributes> envelope,
             Integer candidateId) {
         if (envelope.data() == null || envelope.data().isEmpty()) {
-            throw new ExternalServiceException(
-                    "BoondManager returned no technical document records",
-                    CANDIDATES_PATH,
-                    null);
+            // Candidate has no technical document: not an error condition.
+            return TechnicalDocumentDto.notAvailable(candidateId);
         }
         return toTechnicalDocument(envelope.data().getFirst(), candidateId);
     }
