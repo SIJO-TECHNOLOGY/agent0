@@ -122,6 +122,7 @@ export default {
     states_button: "États",
   },
   filters: {
+    filter_label: "Filtres",
     states_label: "États Boond",
     check_all: "Tout cocher",
     uncheck_all: "Tout décocher",
@@ -129,9 +130,9 @@ export default {
     states_error: "Impossible de charger la liste des états.",
     states_empty: "Aucun état disponible.",
     states_hint: "Les états sélectionnés filtrent la prochaine recherche.",
-    sources_label: "Sources",
-    source_boond: "BoondManager",
-    source_linkedin: "LinkedIn",
+    sources_label: "Rechercher dans",
+    source_boond: "Recherche par BoondManager",
+    source_linkedin: "Recherche par LinkedIn",
     sources_hint: "Aucune sélection = les deux",
   },
   candidate: {

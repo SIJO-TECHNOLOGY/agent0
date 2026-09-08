@@ -1895,39 +1895,33 @@ textarea:disabled {
 }
 
 /* --- Candidate source selection + multi-source badges ------------------- */
-.source-filter {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
+/* Source selection lives inside the filter popover (a section above the
+   Boond-states list), so it reuses .state-filter-option styling. */
+.filter-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.source-filter-label {
+.filter-section-title {
+  margin: 0 0 2px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
-.source-filter-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--surface);
-  cursor: pointer;
-}
-
-.source-filter-option:has(input:checked) {
-  background: var(--blue-light);
-  border-color: var(--blue-mid);
-  color: var(--blue-dark);
+.filter-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 10px 0 8px;
 }
 
 .source-filter-hint {
   color: var(--text-muted);
   font-size: var(--fs-xs);
+  margin: 2px 0 0;
 }
 
 .source-badges {
