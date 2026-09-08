@@ -274,6 +274,7 @@ async def chat(
                 filters=operation.filters,
                 conversation_id=conversation_id,
                 sessionId=conversation_id,
+                sources=payload.sources,
             ),
             emitter,
             debug_mode=True,
@@ -292,6 +293,7 @@ async def chat(
                 filters=operation.filters,
                 conversation_id=conversation_id,
                 sessionId=conversation_id,
+                sources=payload.sources,
             ),
             user_oid=user.oid,
         )

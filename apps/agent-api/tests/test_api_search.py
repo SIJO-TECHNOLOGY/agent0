@@ -38,6 +38,15 @@ REQUIRED_CANDIDATE_KEYS = {
     "activity_areas",
     "tools",
     "languages",
+    # Multi-source (LinkedIn/external) fields — present on every card.
+    "sources",
+    "boond_ids",
+    "linkedin_url",
+    "consulting_status",
+    "long_mission_status",
+    "longest_mission_months",
+    "external_evidence",
+    "public_profile_incomplete",
 }
 
 

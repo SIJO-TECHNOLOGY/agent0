@@ -27,6 +27,9 @@ export const FEATURES = {
   candidate_cards: true,
   candidate_drawer: true,
   boond_redirect: true,
+  // Show the LinkedIn source option. The backend still enforces the real
+  // availability gate (EXTERNAL_SEARCH_ENABLED); this only toggles the UI.
+  linkedin_source: true,
 };
 
 // User-facing strings live in the locale dictionaries (locales/fr.js,

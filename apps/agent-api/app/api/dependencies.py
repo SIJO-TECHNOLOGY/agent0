@@ -59,8 +59,13 @@ def get_search_service(
         return override
     llm_planner = getattr(request.app.state, "llm_planner", None)
     rag_service = getattr(request.app.state, "rag_service", None)
+    external_source = getattr(request.app.state, "external_source", None)
     return build_search_service(
-        mcp_client, settings, llm_planner=llm_planner, rag_service=rag_service
+        mcp_client,
+        settings,
+        llm_planner=llm_planner,
+        rag_service=rag_service,
+        external_source=external_source,
     )
 
 
@@ -70,6 +75,7 @@ def build_search_service(
     *,
     llm_planner: LlmPlanner | None = None,
     rag_service: object | None = None,
+    external_source: object | None = None,
 ) -> SearchService:
     """Single construction site for `SearchService` from settings.
 
@@ -102,6 +108,11 @@ def build_search_service(
         agent1_reconciler=agent1_reconciler,
         allow_clarification=settings.allow_clarification,
         rag_service=rag_service,  # type: ignore[arg-type]
+        external_source=external_source,
+        external_search_enabled=settings.external_search_enabled,
+        external_max_results=settings.external_search_max_results,
+        long_mission_threshold_months=settings.candidate_long_mission_threshold_months,
+        prefer_consulting_profile=settings.candidate_prefer_consulting_profile,
     )
 
 

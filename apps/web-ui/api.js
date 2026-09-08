@@ -589,7 +589,7 @@ function emitSseEvent(parsed, onEvent) {
   onEvent({ type, data });
 }
 
-export async function streamSearch(query, onEvent, { signal, conversationId, filters } = {}) {
+export async function streamSearch(query, onEvent, { signal, conversationId, filters, sources } = {}) {
   if (DEV_MODE && DEV_API_MOCKS) {
     return devStreamSearch(query, onEvent, { signal });
   }
@@ -608,6 +608,7 @@ export async function streamSearch(query, onEvent, { signal, conversationId, fil
       body: JSON.stringify({
         query,
         filters: filters && typeof filters === "object" ? filters : {},
+        ...(Array.isArray(sources) && sources.length ? { sources } : {}),
         ...(conversationId ? { conversation_id: conversationId, sessionId: conversationId } : {}),
       }),
       signal,

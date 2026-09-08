@@ -48,6 +48,9 @@ const state = {
   candidateStates: null,
   candidateStatesLoading: false,
   stateFilterSelection: new Set(),
+  // Candidate source selection (BoondManager / LinkedIn). Empty = both
+  // (the backend enforces this default authoritatively).
+  sourceSelection: new Set(),
 };
 
 function generateSessionId() {
@@ -112,6 +115,10 @@ const elements = {
   stateFilterAll: document.getElementById("stateFilterAll"),
   stateFilterNone: document.getElementById("stateFilterNone"),
   stateFilterStatus: document.getElementById("stateFilterStatus"),
+  sourceFilter: document.getElementById("sourceFilter"),
+  sourceBoond: document.getElementById("sourceBoond"),
+  sourceLinkedin: document.getElementById("sourceLinkedin"),
+  sourceLinkedinWrap: document.getElementById("sourceLinkedinWrap"),
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -205,6 +212,7 @@ function bindEvents() {
   if (elements.stateFilterNone) {
     elements.stateFilterNone.addEventListener("click", () => setAllStateFilter(false));
   }
+  setupSourceFilter();
   document.addEventListener("click", (event) => {
     if (
       elements.stateFilterPanel
@@ -408,6 +416,29 @@ function updateStateFilterCount() {
 function buildSearchFilters() {
   const selected = [...state.stateFilterSelection];
   return selected.length ? { candidate_states: selected } : {};
+}
+
+function setupSourceFilter() {
+  // Hide the LinkedIn option when the external source is not built into this
+  // deployment. The backend still enforces the real availability gate.
+  if (!FEATURES.linkedin_source && elements.sourceLinkedinWrap) {
+    elements.sourceLinkedinWrap.hidden = true;
+  }
+  const bind = (input, value) => {
+    if (!input) return;
+    input.addEventListener("change", () => {
+      if (input.checked) state.sourceSelection.add(value);
+      else state.sourceSelection.delete(value);
+    });
+  };
+  bind(elements.sourceBoond, "boond");
+  if (FEATURES.linkedin_source) bind(elements.sourceLinkedin, "linkedin");
+}
+
+// Selected candidate sources, or [] when none are ticked (backend resolves
+// "no selection" to both, or Boond only when external search is disabled).
+function buildSelectedSources() {
+  return [...state.sourceSelection];
 }
 
 function applyFeatureVisibility() {
@@ -1145,6 +1176,8 @@ function renderCandidateCard(candidate) {
   title.textContent = candidate.title || t("candidate.fallback_title");
 
   identity.append(name, title);
+  const badges = createSourceBadges(candidate);
+  if (badges) identity.append(badges);
   header.append(identity, createMatchBadge(candidate.match_score));
 
   const meta = document.createElement("div");
@@ -1183,6 +1216,13 @@ function renderCandidateCard(candidate) {
   boondBtn.disabled = !candidate.boond_url;
   boondBtn.addEventListener("click", () => openBoondManager(candidate.boond_url));
 
+  const linkedinBtn = document.createElement("a");
+  linkedinBtn.className = "candidate-btn secondary";
+  linkedinBtn.textContent = t("candidate.open_linkedin");
+  linkedinBtn.href = candidate.linkedin_url || "#";
+  linkedinBtn.target = "_blank";
+  linkedinBtn.rel = "noopener noreferrer";
+
   if (FEATURES.candidate_drawer && CANDIDATE_CONFIG.show_candidate_drawer) {
     actions.appendChild(detailsBtn);
   }
@@ -1191,8 +1231,13 @@ function renderCandidateCard(candidate) {
     actions.appendChild(boondBtn);
   }
 
+  if (candidate.linkedin_url) {
+    actions.appendChild(linkedinBtn);
+  }
+
   card.append(
     header,
+    createQualificationChips(candidate),
     meta,
     renderHighlightTags(candidate.highlights),
     summary,
@@ -1200,10 +1245,76 @@ function renderCandidateCard(candidate) {
     skills,
     renderExperiences(candidate.experiences),
     renderCandidateInsights(candidate),
+    renderPublicProfileNote(candidate),
     actions,
   );
 
   return card;
+}
+
+function createSourceBadges(candidate) {
+  const raw = Array.isArray(candidate.sources) && candidate.sources.length
+    ? candidate.sources
+    : (candidate.source ? [candidate.source] : []);
+  const wrap = document.createElement("div");
+  wrap.className = "source-badges";
+  const seen = new Set();
+  raw.forEach((source) => {
+    const key = String(source).toLowerCase();
+    let cls = null;
+    let label = null;
+    if (key === "boond" || key === "boondmanager") { cls = "boond"; label = "BOOND"; }
+    else if (key === "linkedin" || key === "linkedin_web") { cls = "linkedin"; label = "LINKEDIN"; }
+    if (!cls || seen.has(cls)) return;
+    seen.add(cls);
+    const badge = document.createElement("span");
+    badge.className = `source-badge source-badge-${cls}`;
+    badge.textContent = label;
+    wrap.appendChild(badge);
+  });
+  return seen.size ? wrap : null;
+}
+
+function createQualificationChips(candidate) {
+  const wrap = document.createElement("div");
+  wrap.className = "qualification-chips";
+
+  const cs = candidate.consulting_status;
+  if (cs === "confirmed") addChip(wrap, t("candidate.consulting.confirmed"), "pos");
+  else if (cs === "probable") addChip(wrap, t("candidate.consulting.probable"), "maybe");
+
+  const lm = candidate.long_mission_status;
+  const months = candidate.longest_mission_months;
+  if (lm === "confirmed") {
+    const label = months
+      ? tCount("candidate.long_mission.confirmed_months", months, { count: months })
+      : t("candidate.long_mission.confirmed");
+    addChip(wrap, label, "pos");
+  } else if (lm === "probable") {
+    addChip(wrap, t("candidate.long_mission.probable"), "maybe");
+  } else if (lm === "unknown") {
+    // Neutral — missing evidence is NOT a failure.
+    addChip(wrap, t("candidate.long_mission.unknown"), "neutral");
+  } else if (lm === "no") {
+    addChip(wrap, t("candidate.long_mission.no"), "neutral");
+  }
+
+  return wrap.children.length ? wrap : document.createComment("no-qualification");
+}
+
+function addChip(wrap, label, variant) {
+  const chip = document.createElement("span");
+  chip.className = `qualification-chip qualification-chip-${variant}`;
+  chip.textContent = label;
+  wrap.appendChild(chip);
+}
+
+function renderPublicProfileNote(candidate) {
+  if (!candidate.public_profile_incomplete) return document.createComment("no-note");
+  const note = document.createElement("p");
+  note.className = "public-profile-note";
+  note.textContent = t("candidate.public_incomplete");
+  return note;
 }
 
 function openCandidateDrawer(candidate) {
@@ -1497,6 +1608,7 @@ async function runSearchStream(text, thinking) {
       signal: state.abortController.signal,
       conversationId: ensureSessionId(),
       filters: buildSearchFilters(),
+      sources: buildSelectedSources(),
     },
   );
 

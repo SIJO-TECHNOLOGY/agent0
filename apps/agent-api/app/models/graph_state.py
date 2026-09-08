@@ -19,6 +19,22 @@ class GraphState(BaseModel):
     original_query: str
     filters: dict[str, object] = Field(default_factory=dict)
 
+    sources: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Resolved candidate sources for this run (values from "
+            "CandidateSource: 'boond', 'linkedin'). Resolved ONCE by the "
+            "SearchService and never re-derived; drives deterministic routing "
+            "so the LLM can never override the user's source selection. Empty "
+            "means the run was created before resolution (treated as Boond "
+            "only for safety)."
+        ),
+    )
+    external_metrics: dict[str, object] = Field(
+        default_factory=dict,
+        description="Observability counters from external (LinkedIn) discovery.",
+    )
+
     session_id: str | None = None
     conversation_history: list[dict[str, object]] = Field(default_factory=list)
     session_context: dict[str, object] = Field(default_factory=dict)

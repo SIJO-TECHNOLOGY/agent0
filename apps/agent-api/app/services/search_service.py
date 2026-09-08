@@ -18,7 +18,9 @@ from app.models.api import (
     SearchResponse,
 )
 from app.models.graph_state import GraphState
+from app.models.sources import resolve_candidate_sources
 from app.models.tools import ToolCallStatus
+from app.candidate_sources.merge import merge_candidate_cards
 from app.services.candidate_mapper import candidate_cards_from_results
 from app.session import memory as session_memory
 from app.services.event_emitter import (
@@ -54,6 +56,11 @@ class SearchService:
         agent1_reconciler: Agent1Reconciler | None = None,
         allow_clarification: bool = True,
         rag_service: RagService | None = None,
+        external_source: object | None = None,
+        external_search_enabled: bool = False,
+        external_max_results: int = 20,
+        long_mission_threshold_months: int = 24,
+        prefer_consulting_profile: bool = True,
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
@@ -70,6 +77,11 @@ class SearchService:
         self._agent1_reconciler = agent1_reconciler
         self._allow_clarification = allow_clarification
         self._rag_service = rag_service
+        self._external_source = external_source
+        self._external_search_enabled = external_search_enabled
+        self._external_max_results = external_max_results
+        self._long_mission_threshold_months = long_mission_threshold_months
+        self._prefer_consulting_profile = prefer_consulting_profile
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -94,6 +106,11 @@ class SearchService:
             agent1_reconciler=self._agent1_reconciler,
             allow_clarification=self._allow_clarification,
             rag_service=self._rag_service,
+            external_source=self._external_source,
+            external_search_enabled=self._external_search_enabled,
+            external_max_results=self._external_max_results,
+            long_mission_threshold_months=self._long_mission_threshold_months,
+            prefer_consulting_profile=self._prefer_consulting_profile,
         )
 
     async def search(
@@ -150,10 +167,33 @@ class SearchService:
         )
 
         ctx = self._build_ctx(emitter, debug_mode=debug_mode)
+        # Resolve the candidate sources ONCE (deterministic routing). The
+        # request may carry `sources` top-level or inside `filters` (the SSE
+        # frontend threads UI state through filters); top-level wins.
+        raw_sources = request.sources
+        if raw_sources is None:
+            filter_sources = request.filters.get("sources")
+            if isinstance(filter_sources, list):
+                raw_sources = [str(s) for s in filter_sources]
+        resolved = resolve_candidate_sources(
+            raw_sources, external_search_enabled=self._external_search_enabled
+        )
+        sources = sorted(s.value for s in resolved)
+        logger.info(
+            "search.sources_resolved",
+            extra={
+                "conversation_id": conversation_id,
+                "requested": raw_sources,
+                "resolved": sources,
+                "external_enabled": self._external_search_enabled,
+            },
+        )
+        await emitter.emit("sources_resolved", {"sources": sources})
         session = session_memory.get_or_create(user_oid, conversation_id)
         initial_state = GraphState(
             original_query=request.query,
             filters=dict(request.filters),
+            sources=sources,
             session_id=conversation_id,
             conversation_history=list(session.messages[-12:]),
             session_context=session.public_context(),
@@ -165,6 +205,9 @@ class SearchService:
         final_state = await run_workflow(initial_state, ctx)
 
         candidates = candidate_cards_from_results(final_state.results)
+        # Collapse same-person duplicates across sources (strong evidence only:
+        # shared canonical LinkedIn URL or Boond id — never name alone).
+        candidates = merge_candidate_cards(candidates)
         candidate_dicts = [candidate.model_dump() for candidate in candidates]
         context = session_memory.save_search_results(
             user_oid,

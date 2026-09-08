@@ -20,6 +20,12 @@ from app.models.api import CandidateCard
 from app.models.results import SearchResult
 from app.skill_patterns import KNOWN_SKILL_PATTERNS as _KNOWN_SKILL_PATTERNS
 
+# Source-tool tag and result.data keys for external (LinkedIn/web) candidates.
+# Kept in sync with app.graph.nodes (which imports them from here).
+LINKEDIN_SOURCE_TOOL: Final[str] = "linkedin_web"
+LINKEDIN_EVIDENCE_KEY: Final[str] = "_linkedin_evidence"
+LINKEDIN_URL_KEY: Final[str] = "_linkedin_url"
+
 # Tool name prefixes that, by MCP convention, return a relevance score.
 # Detail-style lookups (e.g. ``getCandidateDetail``) do not, so their
 # synthesized internal score (1.0) must surface as ``None`` to the UI.
@@ -980,6 +986,85 @@ def _truncate_text(value: str, limit: int) -> str:
     return f"{truncated}..."
 
 
+def _external_candidate_card(result: SearchResult) -> CandidateCard | None:
+    """Build a UI card for an external (LinkedIn/public-web) candidate.
+
+    Reads the structured ``ExternalCandidateEvidence`` stored on the result by
+    the discovery node. Nothing is invented: fields absent from public data
+    stay ``None``/``[]``, and the card is flagged as possibly incomplete.
+    """
+    evidence = result.data.get(LINKEDIN_EVIDENCE_KEY)
+    if not isinstance(evidence, dict):
+        return None
+    profile_url = str(evidence.get("profile_url") or result.data.get(LINKEDIN_URL_KEY) or "")
+    if not profile_url:
+        return None
+
+    consulting = evidence.get("consulting_profile") or {}
+    long_mission = evidence.get("long_mission") or {}
+    consulting_status = (
+        str(consulting.get("status")) if isinstance(consulting, dict) else None
+    )
+    long_status = (
+        str(long_mission.get("status")) if isinstance(long_mission, dict) else None
+    )
+    longest_months = (
+        long_mission.get("max_duration_months")
+        if isinstance(long_mission, dict)
+        else None
+    )
+    skills = [
+        str(s).strip()
+        for s in (evidence.get("matched_skills") or [])
+        if isinstance(s, str) and s.strip()
+    ]
+    experiences = [
+        {
+            "title": e.get("title"),
+            "company": e.get("client") or e.get("employer"),
+            "period": _external_period(e),
+        }
+        for e in (evidence.get("experiences") or [])
+        if isinstance(e, dict) and (e.get("title") or e.get("employer") or e.get("client"))
+    ][:5]
+    ext_evidence = [
+        {"field": str(item.get("field")), "value": str(item.get("value")),
+         "source_url": str(item.get("source_url") or "")}
+        for item in (evidence.get("evidence") or [])
+        if isinstance(item, dict) and item.get("field")
+    ]
+
+    return CandidateCard(
+        id=result.id or f"li:{profile_url}",
+        full_name=evidence.get("full_name") or None,
+        title=evidence.get("current_title") or None,
+        location=evidence.get("location") or None,
+        skills=skills,
+        match_score=result.score if result.score > 0.0 else None,
+        summary=evidence.get("snippet") or None,
+        experiences=experiences,
+        sources=[LINKEDIN_SOURCE_TOOL],
+        linkedin_url=profile_url,
+        boond_url=None,
+        source="linkedin",
+        consulting_status=consulting_status,
+        long_mission_status=long_status,
+        longest_mission_months=(
+            int(longest_months) if isinstance(longest_months, int) else None
+        ),
+        external_evidence=ext_evidence,
+        public_profile_incomplete=True,
+    )
+
+
+def _external_period(exp: dict[str, object]) -> str | None:
+    start = exp.get("start_date")
+    end = exp.get("end_date")
+    if start and end:
+        return f"{start} - {end}"
+    return str(start or end) if (start or end) else None
+
+
 def candidate_card_from_result(
     result: SearchResult,
     *,
@@ -991,6 +1076,8 @@ def candidate_card_from_result(
     candidate id. The caller should drop such records rather than
     surfacing a fake "unknown" candidate to the frontend.
     """
+    if result.source_tool == LINKEDIN_SOURCE_TOOL:
+        return _external_candidate_card(result)
     # Drop internal markers (e.g. enrichment flags) from lookups.
     safe_data = {
         k: v
@@ -1051,6 +1138,8 @@ def candidate_card_from_result(
         activity_areas=_extract_string_list(merged, _ACTIVITY_AREA_FIELDS),
         tools=_extract_tools(merged),
         languages=_extract_languages(merged),
+        sources=["boond"],
+        boond_ids=[resolved_id],
     )
 
 

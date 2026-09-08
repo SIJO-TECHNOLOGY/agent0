@@ -1893,3 +1893,109 @@ textarea:disabled {
     width: 100vw;
   }
 }
+
+/* --- Candidate source selection + multi-source badges ------------------- */
+.source-filter {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.source-filter-label {
+  font-weight: var(--fw-semibold);
+}
+
+.source-filter-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.source-filter-option:has(input:checked) {
+  background: var(--blue-light);
+  border-color: var(--blue-mid);
+  color: var(--blue-dark);
+}
+
+.source-filter-hint {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.source-badges {
+  display: inline-flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em;
+}
+
+.source-badge-boond {
+  background: var(--blue-light);
+  color: var(--blue-dark);
+  border: 1px solid var(--blue-mid);
+}
+
+.source-badge-linkedin {
+  background: #e8f2fb;
+  color: #0a66c2;
+  border: 1px solid #b9dcf5;
+}
+
+.qualification-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+
+.qualification-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  border: 1px solid transparent;
+}
+
+.qualification-chip-pos {
+  background: #e7f6ec;
+  color: #1f7a44;
+  border-color: #bfe6cc;
+}
+
+.qualification-chip-maybe {
+  background: #fdf4e3;
+  color: #98690d;
+  border-color: #f2e0b8;
+}
+
+.qualification-chip-neutral {
+  background: #f1f2f6;
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+.public-profile-note {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-style: italic;
+}

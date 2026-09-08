@@ -393,6 +393,89 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- External candidate discovery (LinkedIn via OpenAI Web Search) -------
+    external_search_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master switch for external (LinkedIn/Web) candidate discovery. "
+            "When false, the LinkedIn source never executes even if requested, "
+            "and 'no source selected' resolves to BoondManager only. When "
+            "true, 'no source selected' resolves to BoondManager + LinkedIn."
+        ),
+    )
+    external_search_provider: str = Field(
+        default="openai_web",
+        description=(
+            "External discovery backend. Only 'openai_web' (OpenAI Responses "
+            "API built-in web_search) is implemented."
+        ),
+    )
+    external_search_model: str = Field(
+        default="gpt-4o-mini",
+        description=(
+            "Model used for external web search via the OpenAI Responses API. "
+            "Must be a model that supports the built-in web_search tool. Not "
+            "hardcoded — override per environment."
+        ),
+    )
+    external_search_max_queries: int = Field(
+        default=5, ge=1, le=12,
+        description=(
+            "Hard upper bound on the number of complementary web-search "
+            "queries issued per external discovery (the bounded search "
+            "ladder). Bounds cost and latency."
+        ),
+    )
+    external_search_max_results: int = Field(
+        default=20, ge=1, le=100,
+        description=(
+            "Maximum external candidate profiles returned per search after "
+            "canonicalisation and deduplication."
+        ),
+    )
+    external_search_linkedin_only: bool = Field(
+        default=True,
+        description=(
+            "Restrict external discovery to public linkedin.com/in profile "
+            "pages. When true, non-profile LinkedIn pages (company/jobs/posts/"
+            "pulse) and other domains are rejected."
+        ),
+    )
+    external_search_cache_ttl_seconds: float = Field(
+        default=21600.0, ge=0.0,
+        description=(
+            "TTL for the in-process external web-search cache (default 6h). "
+            "Web search is slow and costly, so identical (query + source + "
+            "business settings) discoveries are cached. 0 disables."
+        ),
+    )
+    external_search_api_key: str | None = Field(
+        default=None,
+        description=(
+            "API key for the external web-search provider. Falls back to "
+            "OPENAI_API_KEY when unset. Required when external_search_enabled "
+            "and the LinkedIn source is used."
+        ),
+    )
+    candidate_prefer_consulting_profile: bool = Field(
+        default=True,
+        description=(
+            "SIJO business default: external candidates with evidence of a "
+            "consulting/freelance/ESN profile are preferred (positively "
+            "weighted in ranking). The planner applies this automatically; the "
+            "recruiter need not restate it per query."
+        ),
+    )
+    candidate_long_mission_threshold_months: int = Field(
+        default=24, ge=1, le=120,
+        description=(
+            "SIJO business default: the minimum client-mission duration (in "
+            "months) that counts as a 'long mission'. Evidence of at least one "
+            "mission >= this threshold is strongly valued for external "
+            "candidates. Configurable — never hardcode 24 in the code."
+        ),
+    )
+
     llm_planner_role: str = Field(
         default=(
             "You are an expert technical recruiter and CV search, matching, "

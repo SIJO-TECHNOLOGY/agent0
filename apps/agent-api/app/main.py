@@ -241,6 +241,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if loaded == 0:
             logger.warning("rag.index_empty_run_indexing_script")
 
+    # External (LinkedIn/web) candidate discovery. Built once and reused so
+    # the discovery cache is shared across requests. A missing key or the
+    # feature being off simply leaves the source absent (Boond-only pipeline).
+    app.state.external_source = None
+    if settings.external_search_enabled:
+        from app.candidate_sources.factory import build_external_source
+
+        external_source = build_external_source(settings)
+        app.state.external_source = external_source
+        logger.info(
+            "external_search.ready",
+            extra={
+                "provider": settings.external_search_provider,
+                "model": settings.external_search_model,
+                "available": external_source is not None,
+                "linkedin_only": settings.external_search_linkedin_only,
+            },
+        )
+
     try:
         yield
     finally:
@@ -264,6 +283,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.llm_planner = None
         app.state.conversation_store = None
         app.state.rag_service = None
+        app.state.external_source = None
 
 
 def create_app() -> FastAPI:
