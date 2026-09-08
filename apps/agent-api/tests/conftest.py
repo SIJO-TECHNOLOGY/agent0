@@ -22,11 +22,14 @@ def _test_env() -> None:
 
     A real .env with ENABLE_AUTH=true would 401 every unauthenticated
     test request (auth behaviour has its own tests with explicit
-    settings). Env vars take precedence over .env in pydantic-settings,
-    and the cache is cleared in case get_settings() already ran at
-    import time.
+    settings). APP_ENV is pinned to a local value too so a developer's
+    ``.env`` with APP_ENV=production cannot trip the production auth
+    fail-safe during the (unauthenticated) suite. Env vars take precedence
+    over .env in pydantic-settings, and the cache is cleared in case
+    get_settings() already ran at import time.
     """
     os.environ["ENABLE_AUTH"] = "false"
+    os.environ["APP_ENV"] = "test"
     get_settings.cache_clear()
 
 

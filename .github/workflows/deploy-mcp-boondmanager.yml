@@ -17,7 +17,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate deployment on the test suite for THIS commit. The Docker image build
+  # uses -DskipTests (tests are validated here, not inside the image build), so
+  # this job is what actually guarantees the deployed SHA passed its tests.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Run tests
+        run: mvn -B -f apps/mcp-boondmanager/pom.xml test
+
   build-and-deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

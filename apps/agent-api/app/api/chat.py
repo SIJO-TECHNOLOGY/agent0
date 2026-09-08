@@ -29,20 +29,22 @@ from app.storage import ConversationStore, StoredConversation
 
 router = APIRouter(tags=["chat"])
 
-_CANDIDATES: dict[str, dict[str, object]] = {}
+# In-process card cache keyed by (user_oid, candidate_id): a user can only
+# read back cards surfaced by their own searches, never another user's.
+_CANDIDATES: dict[tuple[str, str], dict[str, object]] = {}
 
 _PAGE_SIZE = memory.PAGE_SIZE
 _combine_query = memory.combine_query
 _is_more_request = memory.is_more_request
-_CONVERSATION_QUERIES = memory._queries
-_CONVERSATION_RESULTS = memory._pools
 
 
-def _serve_page(conversation_id: str, *, debug: dict[str, object] | None = None) -> ChatResponse:
+def _serve_page(
+    user_oid: str, conversation_id: str, *, debug: dict[str, object] | None = None
+) -> ChatResponse:
     """Return the next page of the conversation's stored result pool."""
-    info = memory.next_page(conversation_id)
+    info = memory.next_page(user_oid, conversation_id)
     for candidate in info["candidates"]:
-        _CANDIDATES[str(candidate.get("id"))] = candidate
+        _CANDIDATES[(user_oid, str(candidate.get("id")))] = candidate
     message = memory.pagination_message(info)
     return ChatResponse(
         conversation_id=conversation_id,
@@ -51,7 +53,7 @@ def _serve_page(conversation_id: str, *, debug: dict[str, object] | None = None)
         answer=message,
         ui={"type": "candidate_cards", "candidates": info["candidates"]},
         candidates=info["candidates"],
-        context=session_memory.context_payload(conversation_id),
+        context=session_memory.context_payload(user_oid, conversation_id),
         debug=debug or {},
     )
 
@@ -126,6 +128,7 @@ def _debug_payload(
 
 def _chat_response_from_search(
     *,
+    user_oid: str,
     conversation_id: str,
     search: SearchResponse,
     debug: dict[str, object] | None = None,
@@ -133,7 +136,7 @@ def _chat_response_from_search(
     ui_candidates = getattr(search.ui, "candidates", None) or []
     candidates = [candidate.model_dump() for candidate in ui_candidates]
     for candidate in candidates:
-        _CANDIDATES[str(candidate["id"])] = candidate
+        _CANDIDATES[(user_oid, str(candidate["id"]))] = candidate
 
     message = search.message
     return ChatResponse(
@@ -143,12 +146,14 @@ def _chat_response_from_search(
         answer=message,
         ui=search.ui.model_dump(),
         candidates=candidates,
-        context=search.context or session_memory.context_payload(conversation_id),
+        context=search.context
+        or session_memory.context_payload(user_oid, conversation_id),
         debug=debug or {},
     )
 
 
 def _response_from_memory_operation(
+    user_oid: str,
     conversation_id: str,
     operation: session_memory.SessionOperation,
     *,
@@ -156,21 +161,23 @@ def _response_from_memory_operation(
 ) -> ChatResponse:
     candidates = operation.candidates or []
     session_memory.save_search_results(
+        user_oid,
         conversation_id,
         query=operation.session.last_user_query,
         effective_query=operation.effective_query,
         candidates=candidates,
         filters=operation.filters,
     )
-    memory.store_results(conversation_id, candidates)
+    memory.store_results(user_oid, conversation_id, candidates)
     if debug is not None:
+        session = session_memory.get_or_create(user_oid, conversation_id)
         debug.update({
-            "currentSearch": dict(session_memory.get_or_create(conversation_id).current_search),
-            "lastFilters": dict(session_memory.get_or_create(conversation_id).last_filters),
-            "memoryCandidateCount": len(session_memory.get_or_create(conversation_id).current_candidates),
-            "conversationHistorySize": len(session_memory.get_or_create(conversation_id).messages),
+            "currentSearch": dict(session.current_search),
+            "lastFilters": dict(session.last_filters),
+            "memoryCandidateCount": len(session.current_candidates),
+            "conversationHistorySize": len(session.messages),
         })
-    info = memory.next_page(conversation_id)
+    info = memory.next_page(user_oid, conversation_id)
     message = operation.message or memory.pagination_message(info)
     return ChatResponse(
         conversation_id=conversation_id,
@@ -179,7 +186,7 @@ def _response_from_memory_operation(
         answer=message,
         ui={"type": "candidate_cards", "candidates": info["candidates"]},
         candidates=info["candidates"],
-        context=session_memory.context_payload(conversation_id),
+        context=session_memory.context_payload(user_oid, conversation_id),
         debug=debug or {},
     )
 
@@ -203,9 +210,11 @@ async def _persist_turn(
     assistant_ui: dict[str, object] | None = None,
 ) -> None:
     """Record one exchange both in session memory and in the durable store."""
-    session_memory.append_message(conversation_id, role="user", content=user_message)
     session_memory.append_message(
-        conversation_id, role="assistant", content=assistant_message
+        user.oid, conversation_id, role="user", content=user_message
+    )
+    session_memory.append_message(
+        user.oid, conversation_id, role="assistant", content=assistant_message
     )
     await store.record_turn(
         user.oid,
@@ -213,7 +222,7 @@ async def _persist_turn(
         user_message=user_message,
         assistant_message=assistant_message,
         assistant_ui=assistant_ui,
-        context=session_memory.context_snapshot(conversation_id),
+        context=session_memory.context_snapshot(user.oid, conversation_id),
     )
 
 
@@ -229,13 +238,13 @@ async def chat(
     conversation_id = _session_id_from_payload(payload)
     debug_enabled = debug or payload.debug
     await ensure_session_hydrated(store, user.oid, conversation_id)
-    operation = session_memory.resolve_turn(conversation_id, message)
+    operation = session_memory.resolve_turn(user.oid, conversation_id, message)
 
-    if operation.action == "more" and memory.has_pool(conversation_id):
+    if operation.action == "more" and memory.has_pool(user.oid, conversation_id):
         debug_payload = _debug_payload(
             service=service, effective_query=operation.effective_query, operation=operation
         ) if debug_enabled else {}
-        response = _serve_page(conversation_id, debug=debug_payload)
+        response = _serve_page(user.oid, conversation_id, debug=debug_payload)
         await _persist_turn(
             store, user, conversation_id,
             user_message=message, assistant_message=response.message,
@@ -248,7 +257,7 @@ async def chat(
             service=service, effective_query=operation.effective_query, operation=operation
         ) if debug_enabled else {}
         response = _response_from_memory_operation(
-            conversation_id, operation, debug=debug_payload
+            user.oid, conversation_id, operation, debug=debug_payload
         )
         await _persist_turn(
             store, user, conversation_id,
@@ -268,6 +277,7 @@ async def chat(
             ),
             emitter,
             debug_mode=True,
+            user_oid=user.oid,
         )
         debug_payload = _debug_payload(
             service=service,
@@ -282,16 +292,18 @@ async def chat(
                 filters=operation.filters,
                 conversation_id=conversation_id,
                 sessionId=conversation_id,
-            )
+            ),
+            user_oid=user.oid,
         )
         debug_payload = {}
 
-    _CONVERSATION_QUERIES[conversation_id] = operation.effective_query
+    memory.set_query(user.oid, conversation_id, operation.effective_query)
 
     if getattr(search.ui, "type", None) == "clarification":
-        _CONVERSATION_RESULTS.pop(conversation_id, None)
+        memory.clear_results(user.oid, conversation_id)
         response = _chat_response_from_search(
-            conversation_id=conversation_id, search=search, debug=debug_payload
+            user_oid=user.oid, conversation_id=conversation_id,
+            search=search, debug=debug_payload,
         )
         await _persist_turn(
             store, user, conversation_id,
@@ -302,9 +314,10 @@ async def chat(
 
     full = [candidate.model_dump() for candidate in getattr(search.ui, "candidates", [])]
     if not full:
-        _CONVERSATION_RESULTS.pop(conversation_id, None)
+        memory.clear_results(user.oid, conversation_id)
         response = _chat_response_from_search(
-            conversation_id=conversation_id, search=search, debug=debug_payload
+            user_oid=user.oid, conversation_id=conversation_id,
+            search=search, debug=debug_payload,
         )
         await _persist_turn(
             store, user, conversation_id,
@@ -313,8 +326,8 @@ async def chat(
         )
         return response
 
-    memory.store_results(conversation_id, full)
-    response = _serve_page(conversation_id, debug=debug_payload)
+    memory.store_results(user.oid, conversation_id, full)
+    response = _serve_page(user.oid, conversation_id, debug=debug_payload)
     await _persist_turn(
         store, user, conversation_id,
         user_message=message, assistant_message=response.message,
@@ -324,11 +337,16 @@ async def chat(
 
 
 @router.post("/api/chat/session/reset", response_model=SessionResetResponse)
-async def reset_chat_session(payload: SessionResetRequest) -> SessionResetResponse:
+async def reset_chat_session(
+    payload: SessionResetRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> SessionResetResponse:
     session_id = payload.sessionId or payload.conversation_id
     if not session_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sessionId is required")
-    memory.reset(session_id)
+    # Scoped to the authenticated user: a caller can only reset their OWN
+    # session for this id, never another user's session that shares it.
+    memory.reset(user.oid, session_id)
     return SessionResetResponse(sessionId=session_id)
 
 
@@ -351,7 +369,7 @@ async def create_conversation(
     store: ConversationStore = Depends(get_conversation_store),
 ) -> ConversationSummary:
     conversation = await store.create_conversation(user.oid, title=payload.title)
-    session_memory.get_or_create(conversation.id)
+    session_memory.get_or_create(user.oid, conversation.id)
     return _summary(conversation)
 
 
@@ -410,8 +428,8 @@ async def delete_conversation(
     deleted = await store.delete_conversation(user.oid, conversation_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    memory.reset(conversation_id)
-    session_memory.reset(conversation_id)
+    # memory.reset also clears the session-memory entry for this (user, id).
+    memory.reset(user.oid, conversation_id)
 
 
 @router.delete("/api/conversations", status_code=status.HTTP_204_NO_CONTENT)
@@ -422,8 +440,7 @@ async def delete_all_conversations(
     conversations = await store.list_conversations(user.oid)
     await store.delete_all_conversations(user.oid)
     for conversation in conversations:
-        memory.reset(conversation.id)
-        session_memory.reset(conversation.id)
+        memory.reset(user.oid, conversation.id)
 
 
 @router.get("/api/candidates/{candidate_id}")
@@ -432,7 +449,7 @@ async def get_candidate(
     user: AuthenticatedUser = Depends(get_current_user),
     store: ConversationStore = Depends(get_conversation_store),
 ) -> dict[str, object]:
-    candidate = _CANDIDATES.get(candidate_id)
+    candidate = _CANDIDATES.get((user.oid, candidate_id))
     if candidate is not None:
         return candidate
     # The in-process cache is empty after a restart: fall back to the
@@ -447,7 +464,7 @@ async def get_candidate(
                 continue
             for card in candidates:
                 if isinstance(card, dict) and str(card.get("id")) == candidate_id:
-                    _CANDIDATES[candidate_id] = card
+                    _CANDIDATES[(user.oid, candidate_id)] = card
                     return card
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 

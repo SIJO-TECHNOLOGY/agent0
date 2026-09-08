@@ -83,9 +83,34 @@ class AuthenticatedUser:
 DEV_USER = AuthenticatedUser(username="dev", name=None, oid="dev")
 
 
+# Environments where running unauthenticated is a deliberate convenience
+# (local development, tests, CI). Anything else — production, staging, or an
+# unrecognized value — is treated as needing server-side auth, so an operator
+# can never *silently* ship an unauthenticated instance by forgetting to set
+# ENABLE_AUTH.
+_AUTH_OPTIONAL_ENVS: frozenset[str] = frozenset(
+    {"local", "dev", "development", "test", "testing", "ci"}
+)
+
+
 def validate_auth_settings(settings: Settings) -> None:
-    """Raise `AuthConfigurationError` when auth is on but unconfigured."""
+    """Validate the auth configuration at startup; fail fast on an unsafe combo.
+
+    Two failure modes, both raising `AuthConfigurationError`:
+
+    * `ENABLE_AUTH=false` outside a known local/dev/test environment
+      (`APP_ENV`) — production must not run without server-side token
+      validation; frontend MSAL alone is not a security boundary.
+    * `ENABLE_AUTH=true` without `ENTRA_TENANT_ID`/`ENTRA_CLIENT_ID`.
+    """
+    env = (settings.app_env or "").strip().lower()
     if not settings.enable_auth:
+        if env not in _AUTH_OPTIONAL_ENVS:
+            raise AuthConfigurationError(
+                f"ENABLE_AUTH must be true when APP_ENV={settings.app_env!r}: "
+                "server-side authentication cannot be disabled outside "
+                "local/dev/test environments."
+            )
         return
     missing = [
         name

@@ -1,0 +1,68 @@
+name: Validate
+
+# Quality gate: runs the full test/build suites on every pull request and can
+# be reused by the deploy workflows (workflow_call) so production is only ever
+# built from a commit whose tests passed. Frontend MSAL is not a security
+# boundary, and a green build is not proof of correctness — these suites are.
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  agent-api:
+    name: agent-api (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/agent-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies (incl. dev)
+        run: uv sync --frozen --extra dev
+      - name: Run tests
+        run: uv run pytest -q
+
+  mcp-boondmanager:
+    name: mcp-boondmanager (mvn test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Run tests
+        run: mvn -B -f apps/mcp-boondmanager/pom.xml test
+
+  web-ui:
+    name: web-ui (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web-ui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web-ui/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build

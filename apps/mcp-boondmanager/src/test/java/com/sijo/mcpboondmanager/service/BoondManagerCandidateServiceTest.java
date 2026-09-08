@@ -41,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -193,14 +194,16 @@ class BoondManagerCandidateServiceTest {
     }
 
     @Test
-    void givenCandidateId_whenGetCandidateTechnicalDocument_thenCallsTechnicalDataPath() {
+    void givenCandidateId_whenGetCandidateTechnicalDocument_thenCallsTechnicalDataTab() {
         when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
                 .thenReturn(technicalDocumentEnvelope());
 
         TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
 
-        assertThat(response.id()).isEqualTo(42);
+        // candidateId (ID_PROFIL) is authoritative and taken from the request; id/tdId
+        // carry the technical document's own id (ID_DT) — a distinct identifier.
         assertThat(response.candidateId()).isEqualTo(42);
+        assertThat(response.id()).isEqualTo(101);
         assertThat(response.tdId()).isEqualTo("101");
         assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
         assertThat(response.tools())
@@ -211,19 +214,18 @@ class BoondManagerCandidateServiceTest {
     }
 
     @Test
-    void givenTechnicalDataPathFails_whenGetCandidateTechnicalDocument_thenTriesPluralFallbackPath() {
-        BoondApiException backend = new BoondApiException(
-                "boom", HttpStatus.INTERNAL_SERVER_ERROR, "/candidates/42/technical-data", null);
+    void givenCandidateId_whenGetCandidateTechnicalDocument_thenNeverUsesCandidateIdAsTechnicalDataId() {
+        // Guards the corrected contract: the ONLY BoondManager path hit is the
+        // candidate-scoped tab. The candidate id is never used as a technical-data id
+        // (no /technical-datas/{candidateId}) and the removed plural fallback is not called.
         when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
-                .thenThrow(backend);
-        when(client.get(eq("/candidates/42/technical-datas"), any(ParameterizedTypeReference.class)))
                 .thenReturn(technicalDocumentEnvelope());
 
-        TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
+        service().getCandidateTechnicalDocument(42);
 
-        assertThat(response.id()).isEqualTo(42);
-        assertThat(response.skills()).isEqualTo("Java, Spring, PostgreSQL");
-        assertThat(response.candidateId()).isEqualTo(42);
+        verify(client).get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class));
+        verify(client, never()).get(eq("/technical-datas/42"), any(ParameterizedTypeReference.class));
+        verify(client, never()).get(eq("/candidates/42/technical-datas"), any(ParameterizedTypeReference.class));
     }
 
     @Test
@@ -242,6 +244,34 @@ class BoondManagerCandidateServiceTest {
     }
 
     @Test
+    void givenCandidateWithoutTechnicalDocument_whenListEmpty_thenReturnsNotAvailable() {
+        ExternalServiceException parseAsSingleFailure = new ExternalServiceException(
+                "single envelope parse failed", "/candidates/42/technical-data", null);
+        when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
+                .thenThrow(parseAsSingleFailure)
+                .thenReturn(emptyTechnicalDocumentListEnvelope());
+
+        TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
+
+        assertThat(response.candidateId()).isEqualTo(42);
+        assertThat(response.tdId()).isNull();
+        assertThat(response.skills()).isNull();
+        assertThat(response.tools()).isNull();
+    }
+
+    @Test
+    void givenCandidateWithoutTechnicalDocument_whenSingleEnvelopeHasNoData_thenReturnsNotAvailable() {
+        when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
+                .thenReturn(emptyTechnicalDocumentEnvelope());
+
+        TechnicalDocumentDto response = service().getCandidateTechnicalDocument(42);
+
+        assertThat(response.candidateId()).isEqualTo(42);
+        assertThat(response.tdId()).isNull();
+        assertThat(response.skills()).isNull();
+    }
+
+    @Test
     void givenCandidateNotFound_whenGetCandidateDetail_thenMapsToCandidateNotFoundException() {
         BoondApiException backend = new BoondApiException(
                 "missing", HttpStatus.NOT_FOUND, "/candidates/404/information", null);
@@ -257,19 +287,32 @@ class BoondManagerCandidateServiceTest {
     }
 
     @Test
-    void givenTechnicalDocumentNotFound_whenGetCandidateTechnicalDocument_thenMapsToCandidateNotFoundException() {
+    void givenTechnicalDocumentNotFound_whenGetCandidateTechnicalDocument_thenReturnsNotAvailable() {
+        // A 404 on the technical-data tab means "this candidate has no technical
+        // document" — a clean empty document, not a hard error.
         BoondApiException backend = new BoondApiException(
                 "missing", HttpStatus.NOT_FOUND, "/candidates/404/technical-data", null);
-        BoondApiException fallbackBackend = new BoondApiException(
-                "missing", HttpStatus.NOT_FOUND, "/candidates/404/technical-datas", null);
         when(client.get(eq("/candidates/404/technical-data"), any(ParameterizedTypeReference.class)))
                 .thenThrow(backend);
-        when(client.get(eq("/candidates/404/technical-datas"), any(ParameterizedTypeReference.class)))
-                .thenThrow(fallbackBackend);
 
-        assertThatThrownBy(() -> service().getCandidateTechnicalDocument(404))
-                .isInstanceOfSatisfying(CandidateNotFoundException.class, ex ->
-                        assertThat(ex.candidateId()).isEqualTo(404));
+        TechnicalDocumentDto response = service().getCandidateTechnicalDocument(404);
+
+        assertThat(response.candidateId()).isEqualTo(404);
+        assertThat(response.tdId()).isNull();
+        assertThat(response.skills()).isNull();
+    }
+
+    @Test
+    void givenTechnicalDataServerError_whenGetCandidateTechnicalDocument_thenPropagatesException() {
+        // A non-404 backend error is a genuine failure and must NOT be masked as
+        // "no technical document".
+        BoondApiException backend = new BoondApiException(
+                "boom", HttpStatus.INTERNAL_SERVER_ERROR, "/candidates/42/technical-data", null);
+        when(client.get(eq("/candidates/42/technical-data"), any(ParameterizedTypeReference.class)))
+                .thenThrow(backend);
+
+        assertThatThrownBy(() -> service().getCandidateTechnicalDocument(42))
+                .isSameAs(backend);
     }
 
     @Test
@@ -347,7 +390,16 @@ class BoondManagerCandidateServiceTest {
                 List.of("backend"), List.of("finance"),
                 List.of(new BoondTechnicalDocumentAttributes.Tool("IntelliJ", 5)),
                 List.of(new BoondTechnicalDocumentAttributes.Language("en", "fluent")));
-        return new BoondSingleEnvelope<>(new BoondData<>("42", "candidate", attrs));
+        // data.id is the technical-document resource id (ID_DT), NOT the candidate id.
+        return new BoondSingleEnvelope<>(new BoondData<>("101", "technicaldata", attrs));
+    }
+
+    private BoondSingleEnvelope<BoondTechnicalDocumentAttributes> emptyTechnicalDocumentEnvelope() {
+        return new BoondSingleEnvelope<>(null);
+    }
+
+    private BoondListEnvelope<BoondTechnicalDocumentAttributes> emptyTechnicalDocumentListEnvelope() {
+        return new BoondListEnvelope<>(List.of(), new BoondMeta(new BoondMeta.Totals(0), 1));
     }
 
     private BoondListEnvelope<BoondTechnicalDocumentAttributes> technicalDocumentListEnvelope() {

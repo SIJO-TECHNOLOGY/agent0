@@ -256,3 +256,18 @@ def test_validate_auth_settings_fails_fast_on_missing_ids() -> None:
 
 def test_validate_auth_settings_noop_when_disabled() -> None:
     validate_auth_settings(Settings(use_mock_mcp=True, enable_auth=False))
+
+
+def test_validate_auth_settings_rejects_disabled_auth_in_production() -> None:
+    # Secure by default: auth may only be off in local/dev/test environments.
+    with pytest.raises(AuthConfigurationError):
+        validate_auth_settings(
+            Settings(use_mock_mcp=True, enable_auth=False, app_env="production")
+        )
+
+
+def test_validate_auth_settings_allows_disabled_auth_locally() -> None:
+    for env in ("local", "dev", "development", "test", "testing", "ci"):
+        validate_auth_settings(
+            Settings(use_mock_mcp=True, enable_auth=False, app_env=env)
+        )

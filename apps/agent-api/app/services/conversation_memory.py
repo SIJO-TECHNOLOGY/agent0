@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from app.session import memory as session_memory
+from app.session.memory import SessionKey
 
 PAGE_SIZE = session_memory.PAGE_SIZE
 SESSION_STORE = session_memory.SESSION_STORE
 
-# Backwards-compatible views used by existing routes/tests. They mirror the
-# richer SessionMemory fields but are not the source of truth anymore.
-_queries: dict[str, str] = {}
-_pools: dict[str, dict] = {}
+# Query text and paginated result pools per session. Keyed by SessionKey
+# ``(user_oid, conversation_id)`` — never the conversation id alone — so one
+# user's pool can never be read or overwritten through another user's request.
+_queries: dict[SessionKey, str] = {}
+_pools: dict[SessionKey, dict] = {}
 
 
 def new_conversation_id() -> str:
@@ -29,25 +31,26 @@ def combine_query(prior: str, new_message: str) -> str:
     return session_memory.combine_query(prior, new_message)
 
 
-def accumulate_query(conversation_id: str, message: str) -> str:
-    memory = session_memory.get_or_create(conversation_id)
+def accumulate_query(user_oid: str, conversation_id: str, message: str) -> str:
+    memory = session_memory.get_or_create(user_oid, conversation_id)
     prior = str(memory.current_search.get("effectiveQuery", memory.last_user_query))
     effective = session_memory.combine_query(prior, message)
-    _queries[conversation_id] = effective
+    _queries[SessionKey(user_oid=user_oid, conversation_id=conversation_id)] = effective
     memory.last_user_query = effective
     memory.current_search = {**memory.current_search, "effectiveQuery": effective}
     memory.touch()
     return effective
 
 
-def store_results(conversation_id: str, candidates: list[dict]) -> None:
-    _pools[conversation_id] = {
+def store_results(user_oid: str, conversation_id: str, candidates: list[dict]) -> None:
+    _pools[SessionKey(user_oid=user_oid, conversation_id=conversation_id)] = {
         "candidates": list(candidates),
         "shown": 0,
         "total": len(candidates),
     }
-    memory = session_memory.get_or_create(conversation_id)
+    memory = session_memory.get_or_create(user_oid, conversation_id)
     session_memory.save_search_results(
+        user_oid,
         conversation_id,
         query=memory.last_user_query,
         effective_query=str(memory.current_search.get("effectiveQuery", memory.last_user_query)),
@@ -55,35 +58,47 @@ def store_results(conversation_id: str, candidates: list[dict]) -> None:
     )
 
 
-def mark_all_shown(conversation_id: str) -> None:
+def set_query(user_oid: str, conversation_id: str, effective_query: str) -> None:
+    """Record the effective query for a session (isolated per user)."""
+    _queries[SessionKey(user_oid=user_oid, conversation_id=conversation_id)] = effective_query
+
+
+def clear_results(user_oid: str, conversation_id: str) -> None:
+    """Drop this user's result pool for a conversation (isolated per user)."""
+    _pools.pop(SessionKey(user_oid=user_oid, conversation_id=conversation_id), None)
+
+
+def mark_all_shown(user_oid: str, conversation_id: str) -> None:
     """Record that every stored candidate has been displayed (no pagination)."""
-    pool = _pools.get(conversation_id)
+    pool = _pools.get(SessionKey(user_oid=user_oid, conversation_id=conversation_id))
     if pool is not None:
         pool["shown"] = pool["total"]
 
 
-def has_pool(conversation_id: str) -> bool:
-    return conversation_id in _pools or bool(
-        session_memory.get_or_create(conversation_id).current_candidates
+def has_pool(user_oid: str, conversation_id: str) -> bool:
+    key = SessionKey(user_oid=user_oid, conversation_id=conversation_id)
+    return key in _pools or bool(
+        session_memory.get_or_create(user_oid, conversation_id).current_candidates
     )
 
 
-def next_page(conversation_id: str) -> dict:
-    if conversation_id not in _pools:
-        candidates = session_memory.get_or_create(conversation_id).current_candidates
-        _pools[conversation_id] = {
+def next_page(user_oid: str, conversation_id: str) -> dict:
+    key = SessionKey(user_oid=user_oid, conversation_id=conversation_id)
+    if key not in _pools:
+        candidates = session_memory.get_or_create(user_oid, conversation_id).current_candidates
+        _pools[key] = {
             "candidates": list(candidates),
             "shown": 0,
             "total": len(candidates),
         }
-    pool = _pools.get(conversation_id) or {"candidates": [], "shown": 0, "total": 0}
+    pool = _pools.get(key) or {"candidates": [], "shown": 0, "total": 0}
     candidates: list[dict] = pool["candidates"]
     shown: int = pool["shown"]
     total: int = pool["total"]
     page = candidates[shown : shown + PAGE_SIZE]
     if page:
         pool["shown"] = shown + len(page)
-        _pools[conversation_id] = pool
+        _pools[key] = pool
     return {
         "candidates": page,
         "start": shown + 1 if page else shown,
@@ -100,7 +115,9 @@ def pagination_message(info: dict) -> str:
     return f"{info['total']} candidats trouves - affichage {info['start']}-{info['end']}.{suffix}"
 
 
-def reset(conversation_id: str) -> None:
-    _queries.pop(conversation_id, None)
-    _pools.pop(conversation_id, None)
-    session_memory.reset(conversation_id)
+def reset(user_oid: str, conversation_id: str) -> None:
+    """Drop this user's runtime state for a conversation (isolated per user)."""
+    key = SessionKey(user_oid=user_oid, conversation_id=conversation_id)
+    _queries.pop(key, None)
+    _pools.pop(key, None)
+    session_memory.reset(user_oid, conversation_id)

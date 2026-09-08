@@ -38,7 +38,10 @@ async def ensure_session_hydrated(
     """
     if store is None:
         return
-    if conversation_id in session_memory.SESSION_STORE:
+    if (
+        session_memory.SessionKey(user_oid=user_id, conversation_id=conversation_id)
+        in session_memory.SESSION_STORE
+    ):
         return
 
     try:
@@ -50,7 +53,7 @@ async def ensure_session_hydrated(
         logger.exception("session.rehydrate_failed")
         return
 
-    session = session_memory.get_or_create(conversation_id)
+    session = session_memory.get_or_create(user_id, conversation_id)
 
     current_search = stored.context.get("currentSearch")
     if isinstance(current_search, dict):

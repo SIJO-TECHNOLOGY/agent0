@@ -132,6 +132,15 @@ The app registration must be single-tenant and expose the
 token on every call. Off by default so local development and tests run
 unauthenticated.
 
+**Secure by default in production.** Frontend MSAL is not a security
+boundary — anything reaching FastAPI must be validated server-side. So
+startup *also* fails fast when `ENABLE_AUTH=false` and `APP_ENV` is not
+one of `local`/`dev`/`development`/`test`/`testing`/`ci` (the container
+image sets `APP_ENV=production`). An operator therefore cannot silently
+ship an unauthenticated production instance by forgetting the flag; auth
+may only be disabled in an explicitly local/dev/test environment. See
+[ADR-016](../../docs/decisions/adr-016-backend-security-hardening.md).
+
 ## Conversation Persistence
 
 Each user's conversations (titles, messages, candidate cards, search
@@ -153,6 +162,15 @@ Conversations are auto-titled from their first message; `PATCH
 overwritten. `DELETE /api/conversations/{id}` (and the bulk `DELETE
 /api/conversations`) permanently remove rows — there is no soft
 delete.
+
+**Runtime session isolation.** The process-local stores that back
+follow-ups ("d'autres", filter/sort, pagination) — session memory, the
+query/result pools, and the candidate-card cache — are keyed by
+`(user_oid, conversation_id)`, never by the conversation id alone. Two
+authenticated users who happen to reuse the same conversation id cannot
+read, overwrite, or reset one another's in-memory state, and
+`POST /api/chat/session/reset` only ever clears the caller's own
+session. See [ADR-016](../../docs/decisions/adr-016-backend-security-hardening.md).
 
 ## Diagnostic Scripts
 

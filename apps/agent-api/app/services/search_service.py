@@ -97,11 +97,15 @@ class SearchService:
         )
 
     async def search(
-        self, request: SearchRequest, *, ui_language: str | None = None
+        self,
+        request: SearchRequest,
+        *,
+        ui_language: str | None = None,
+        user_oid: str = "dev",
     ) -> SearchResponse:
         """Non-streaming search. Events are discarded by NoopEventEmitter."""
         return await self.search_with_events(
-            request, NoopEventEmitter(), ui_language=ui_language
+            request, NoopEventEmitter(), ui_language=ui_language, user_oid=user_oid
         )
 
     async def search_with_events(
@@ -111,6 +115,7 @@ class SearchService:
         *,
         debug_mode: bool = False,
         ui_language: str | None = None,
+        user_oid: str = "dev",
     ) -> SearchResponse:
         """Run the workflow while emitting progress events to ``emitter``.
 
@@ -145,7 +150,7 @@ class SearchService:
         )
 
         ctx = self._build_ctx(emitter, debug_mode=debug_mode)
-        session = session_memory.get_or_create(conversation_id)
+        session = session_memory.get_or_create(user_oid, conversation_id)
         initial_state = GraphState(
             original_query=request.query,
             filters=dict(request.filters),
@@ -162,6 +167,7 @@ class SearchService:
         candidates = candidate_cards_from_results(final_state.results)
         candidate_dicts = [candidate.model_dump() for candidate in candidates]
         context = session_memory.save_search_results(
+            user_oid,
             conversation_id,
             query=session.last_user_query or request.query,
             effective_query=request.query,

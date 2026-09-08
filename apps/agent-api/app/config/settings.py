@@ -362,7 +362,9 @@ class Settings(BaseSettings):
             "requires a valid Microsoft Entra ID access token issued for this "
             "API (Authorization: Bearer). Startup fails fast if "
             "entra_tenant_id or entra_client_id is missing. Off by default so "
-            "local development and tests run unauthenticated."
+            "local development and tests run unauthenticated — but production "
+            "MUST enable it: startup also fails fast when this is false and "
+            "APP_ENV is not a local/dev/test value (see validate_auth_settings)."
         ),
     )
     entra_tenant_id: str | None = Field(

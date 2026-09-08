@@ -58,6 +58,7 @@ async def _drive_workflow(
     *,
     debug_mode: bool = False,
     ui_language: str | None = None,
+    user_oid: str = "dev",
 ) -> None:
     """Run the search; ensure the queue closes on every exit path."""
     try:
@@ -66,6 +67,7 @@ async def _drive_workflow(
             emitter,
             debug_mode=debug_mode,
             ui_language=ui_language,
+            user_oid=user_oid,
         )
     except McpClientUnavailableError:
         logger.info("search_stream.mcp_unavailable")
@@ -125,7 +127,7 @@ async def _persist_final_response(
             user_message=user_message,
             assistant_message=str(data.get("message") or ""),
             assistant_ui=ui if isinstance(ui, dict) else None,
-            context=session_memory.context_snapshot(conversation_id),
+            context=session_memory.context_snapshot(user_id, conversation_id),
         )
     except Exception:  # noqa: BLE001 — history loss < broken stream
         logger.exception("search_stream.persist_failed")
@@ -136,6 +138,7 @@ def _inject_conversation_context(
     data: dict[str, object],
     conversation_id: str,
     *,
+    user_id: str = "dev",
     search_page: int = 1,
     exclude_ids: set[str] | None = None,
 ) -> dict[str, object]:
@@ -167,18 +170,20 @@ def _inject_conversation_context(
                 else "Aucun nouveau candidat trouvé pour cette recherche."
             )
             data["answer"] = data["message"]
-        memory.store_results(conversation_id, shown)
-        memory.mark_all_shown(conversation_id)
+        memory.store_results(user_id, conversation_id, shown)
+        memory.mark_all_shown(user_id, conversation_id)
         # Track the provider page and every candidate id shown so far, so the
         # next "d'autres" fetches the following page and skips repeats.
-        session = session_memory.get_or_create(conversation_id)
+        session = session_memory.get_or_create(user_id, conversation_id)
         prior_seen = {str(i) for i in (exclude_ids or set())}
         new_seen = prior_seen | {str(c.get("id")) for c in shown if c.get("id")}
         session.current_search["page"] = search_page
         session.current_search["seenIds"] = sorted(new_seen)
         session.touch()
-    data["context"] = session_memory.context_payload(conversation_id)
-    session_memory.append_message(conversation_id, role="assistant", content=str(data.get("message") or ""))
+    data["context"] = session_memory.context_payload(user_id, conversation_id)
+    session_memory.append_message(
+        user_id, conversation_id, role="assistant", content=str(data.get("message") or "")
+    )
     return data
 
 
@@ -203,6 +208,7 @@ async def _stream(
             emitter,
             debug_mode=debug_mode,
             ui_language=http_request.headers.get("accept-language"),
+            user_oid=user_id,
         )
     )
     try:
@@ -215,6 +221,7 @@ async def _stream(
             data = event["data"] if isinstance(event["data"], dict) else {}
             data = _inject_conversation_context(
                 event_type, data, conversation_id,
+                user_id=user_id,
                 search_page=search_page, exclude_ids=exclude_ids,
             )
             if event_type == "final_response":
@@ -252,19 +259,22 @@ async def _memory_operation_stream(
     )
     candidates = operation.candidates or []
     session_memory.save_search_results(
+        user_id,
         conversation_id,
         query=operation.session.last_user_query,
         effective_query=operation.effective_query,
         candidates=candidates,
         filters=operation.filters,
     )
-    memory.store_results(conversation_id, candidates)
-    memory.mark_all_shown(conversation_id)
+    memory.store_results(user_id, conversation_id, candidates)
+    memory.mark_all_shown(user_id, conversation_id)
     message = operation.message or (
         f"{len(candidates)} candidats correspondent à ta recherche."
         if candidates else "Aucun candidat ne correspond à ces critères."
     )
-    session_memory.append_message(conversation_id, role="assistant", content=message)
+    session_memory.append_message(
+        user_id, conversation_id, role="assistant", content=message
+    )
     await _persist_final_response(
         store, user_id, conversation_id,
         user_message=user_message,
@@ -282,7 +292,7 @@ async def _memory_operation_stream(
             "answer": message,
             "ui": {"type": "candidate_cards", "candidates": candidates},
             "candidates": candidates,
-            "context": session_memory.context_payload(conversation_id),
+            "context": session_memory.context_payload(user_id, conversation_id),
             "debug": {
                 "sessionId": conversation_id,
                 "isFollowUp": operation.is_follow_up,
@@ -376,8 +386,10 @@ async def search_stream(
     # keep working exactly where the user left off.
     await ensure_session_hydrated(store, user.oid, conversation_id)
 
-    operation = session_memory.resolve_turn(conversation_id, payload.query)
-    session_memory.append_message(conversation_id, role="user", content=payload.query)
+    operation = session_memory.resolve_turn(user.oid, conversation_id, payload.query)
+    session_memory.append_message(
+        user.oid, conversation_id, role="user", content=payload.query
+    )
 
     if operation.action in {"filter", "sort"} and operation.candidates is not None:
         return StreamingResponse(
@@ -410,7 +422,7 @@ async def search_stream(
         } or {str(c.get("id")) for c in session.current_candidates if c.get("id")}
 
     effective_query = operation.effective_query
-    memory._queries[conversation_id] = effective_query
+    memory.set_query(user.oid, conversation_id, effective_query)
     extra_filters: dict[str, object] = {**payload.filters, **operation.filters}
     if search_page > 1:
         extra_filters["search_page"] = search_page
