@@ -100,6 +100,36 @@ async def test_non_profile_urls_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_clearly_foreign_no_french_excluded() -> None:
+    # Hard filter: a Romania-based profile with no French / no France experience
+    # is excluded from results (not just demoted). A France-based one stays.
+    foreign = _profile("https://www.linkedin.com/in/foreign", full_name="Ion P.",
+                       location="Bucharest, Romania", languages=["Romanian", "English"],
+                       matched_skills=["Java"])
+    local = _profile("https://www.linkedin.com/in/local", full_name="Marie D.",
+                     location="Paris, France", languages=["French"], matched_skills=["Java"])
+    backend = FakeBackend(_result([foreign, local]))
+    source = LinkedInWebSource(backend, max_queries=1,
+                               require_french_or_france_experience=True)
+    result = await source.discover(CandidateSearchQuery(required_skills=["Java"], location="Paris"))
+    urls = [c.evidence.profile_url for c in result.candidates]
+    assert urls == ["https://www.linkedin.com/in/local"]
+    assert result.metrics["excluded_foreign"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_foreign_filter_can_be_disabled() -> None:
+    foreign = _profile("https://www.linkedin.com/in/foreign", full_name="Ion P.",
+                       location="Bucharest, Romania", languages=["Romanian"],
+                       matched_skills=["Java"])
+    backend = FakeBackend(_result([foreign]))
+    source = LinkedInWebSource(backend, max_queries=1,
+                               require_french_or_france_experience=False)
+    result = await source.discover(CandidateSearchQuery(required_skills=["Java"]))
+    assert len(result.candidates) == 1  # kept (demoted), not excluded
+
+
+@pytest.mark.asyncio
 async def test_invented_url_rejected_when_evidence_available() -> None:
     # The model emits a profile URL that is NOT among the search's cited
     # sources → treated as invented and rejected.

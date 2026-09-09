@@ -46,6 +46,9 @@ _W_LOCATION_FRANCOPHONE: Final[float] = 0.04
 # experience in France — regardless of nationality or current country.
 _W_FRENCH: Final[float] = 0.08
 _W_FRANCE_EXPERIENCE: Final[float] = 0.10
+# Intrinsic "preferably in Île-de-France" nudge, applied whenever the candidate
+# is based in IDF, independent of the requested location.
+_W_IDF_INTRINSIC: Final[float] = 0.05
 
 # Negative weights — applied only for CONFIRMED-negative evidence.
 _P_CONSULTING_NO: Final[float] = 0.10
@@ -65,6 +68,13 @@ _FRANCE_IDF_MARKERS: Final[frozenset[str]] = frozenset({
     "france", "ile-de-france", "ile de france", "idf", "paris", "nanterre",
     "boulogne", "versailles", "creteil", "saint-denis", "montreuil", "issy",
     "levallois", "courbevoie", "la defense", "defense", "hauts-de-seine",
+    "seine-saint-denis", "val-de-marne", "val-d'oise", "val-d oise",
+    "yvelines", "essonne", "seine-et-marne", "cergy", "massy", "saclay",
+})
+_IDF_ONLY_MARKERS: Final[frozenset[str]] = frozenset({
+    "ile-de-france", "ile de france", "idf", "paris", "nanterre", "boulogne",
+    "versailles", "creteil", "saint-denis", "montreuil", "issy", "levallois",
+    "courbevoie", "la defense", "defense", "hauts-de-seine",
     "seine-saint-denis", "val-de-marne", "val-d'oise", "val-d oise",
     "yvelines", "essonne", "seine-et-marne", "cergy", "massy", "saclay",
 })
@@ -131,7 +141,9 @@ def _speaks_french(evidence: ExternalCandidateEvidence) -> bool:
     """True when the profile evidences French (language list or francophone place)."""
     for lang in evidence.languages:
         folded = _fold(lang)
-        if "franc" in folded or folded == "fr":  # français / french / francophone
+        # "franc" covers français / francais / francophone; "french" is the
+        # English spelling; "fr" the bare code.
+        if "franc" in folded or "french" in folded or folded == "fr":
             return True
     if _has_marker(_fold(evidence.location), _FRANCOPHONE_MARKERS):
         return True
@@ -149,6 +161,30 @@ def _has_france_experience(evidence: ExternalCandidateEvidence) -> bool:
         _has_marker(_fold(exp.location), _FRANCE_IDF_MARKERS)
         for exp in evidence.experiences
     )
+
+
+def speaks_french(evidence: ExternalCandidateEvidence) -> bool:
+    """Public: does the profile evidence French (language or francophone place)?"""
+    return _speaks_french(evidence)
+
+
+def has_france_experience(evidence: ExternalCandidateEvidence) -> bool:
+    """Public: does the profile evidence an experience in France?"""
+    return _has_france_experience(evidence)
+
+
+def is_ineligible_foreign(evidence: ExternalCandidateEvidence) -> bool:
+    """True for a clearly-foreign profile with NO French AND NO France experience.
+
+    Conservative by design (UNKNOWN != NO): excludes ONLY when the current
+    location matches a recognised foreign country/city marker AND the profile
+    evidences neither French nor an experience in France. A profile whose
+    location we cannot place, or that speaks French, or that worked in France,
+    is never excluded here.
+    """
+    if _speaks_french(evidence) or _has_france_experience(evidence):
+        return False
+    return _has_marker(_fold(evidence.location), _FOREIGN_MARKERS)
 
 
 def _fold(text: str | None) -> str:
@@ -251,6 +287,12 @@ def score_external_candidate(
             score += _W_LOCATION_FRANCOPHONE
         elif rel == "foreign" and not (speaks_fr or fr_exp):
             score -= _P_LOCATION_FOREIGN
+
+    # 5c — intrinsic "preferably in Île-de-France" nudge (independent of the
+    # requested location, so IDF is preferred even for a broad "France" query).
+    if _has_marker(_fold(evidence.location), _IDF_ONLY_MARKERS):
+        score += _W_IDF_INTRINSIC
+        breakdown["idf"] = True
 
     # 6 — role/title fit (small nudge).
     if query.job_titles and evidence.current_title:

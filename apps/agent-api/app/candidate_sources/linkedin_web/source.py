@@ -50,7 +50,10 @@ from app.candidate_sources.models import (
     ExternalExperience,
     ExternalProfileMatch,
 )
-from app.candidate_sources.ranking import score_external_candidate
+from app.candidate_sources.ranking import (
+    is_ineligible_foreign,
+    score_external_candidate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +190,7 @@ class LinkedInWebSource:
         linkedin_only: bool = True,
         threshold_months: int = 24,
         prefer_consulting_profile: bool = True,
+        require_french_or_france_experience: bool = True,
     ) -> None:
         self._backend = backend
         self._max_queries = max_queries
@@ -194,12 +198,14 @@ class LinkedInWebSource:
         self._linkedin_only = linkedin_only
         self._threshold_months = threshold_months
         self._prefer_consulting = prefer_consulting_profile
+        self._require_fr = require_french_or_france_experience
 
     async def discover(self, query: CandidateSearchQuery) -> ExternalDiscoveryResult:
         queries = build_search_queries(query, max_queries=self._max_queries)
         seen: dict[str, ExternalCandidateEvidence] = {}
         rejected = 0
         failures = 0
+        excluded_foreign = 0
         start = time.perf_counter()
 
         for search_query in queries:
@@ -240,6 +246,17 @@ class LinkedInWebSource:
                 if ident is None:
                     rejected += 1
                     continue
+                # Hard eligibility filter: drop clearly-foreign profiles that
+                # evidence neither French nor an experience in France (SIJO
+                # minimum bar). Conservative — unknown location is never
+                # excluded (see is_ineligible_foreign).
+                if self._require_fr and is_ineligible_foreign(evidence):
+                    excluded_foreign += 1
+                    logger.info(
+                        "linkedin_web.excluded_foreign",
+                        extra={"url": evidence.profile_url, "location": evidence.location},
+                    )
+                    continue
                 if ident in seen:
                     _merge_matched_skills(seen[ident], evidence)
                     continue
@@ -260,6 +277,7 @@ class LinkedInWebSource:
             rejected=rejected,
             failures=failures,
             latency_ms=latency_ms,
+            excluded_foreign=excluded_foreign,
         )
         logger.info("linkedin_web.discover", extra=metrics)
         return ExternalDiscoveryResult(candidates=scored, metrics=metrics)
@@ -435,6 +453,7 @@ def _build_metrics(
     rejected: int,
     failures: int,
     latency_ms: int,
+    excluded_foreign: int = 0,
 ) -> dict[str, object]:
     def _count(getter) -> int:
         return sum(1 for c in candidates if getter(c.evidence))
@@ -444,6 +463,7 @@ def _build_metrics(
         "result_count": len(candidates),
         "unique_linkedin_urls": len({c.evidence.profile_url for c in candidates}),
         "rejected_count": rejected,
+        "excluded_foreign": excluded_foreign,
         "failure_count": failures,
         "consulting_confirmed": _count(
             lambda e: e.consulting_profile.status == "confirmed"

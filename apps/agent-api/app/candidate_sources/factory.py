@@ -126,6 +126,9 @@ def build_external_source(settings) -> object | None:
         linkedin_only=settings.external_search_linkedin_only,
         threshold_months=settings.candidate_long_mission_threshold_months,
         prefer_consulting_profile=settings.candidate_prefer_consulting_profile,
+        require_french_or_france_experience=getattr(
+            settings, "candidate_require_french_or_france_experience", True
+        ),
     )
     return CachedExternalSource(
         source, ttl_seconds=settings.external_search_cache_ttl_seconds

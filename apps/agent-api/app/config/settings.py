@@ -478,6 +478,18 @@ class Settings(BaseSettings):
             "candidates. Configurable — never hardcode 24 in the code."
         ),
     )
+    candidate_require_french_or_france_experience: bool = Field(
+        default=True,
+        description=(
+            "SIJO hard filter for external candidates: EXCLUDE a discovered "
+            "profile whose current location is a clearly-foreign country AND "
+            "that evidences neither French nor an experience in France. "
+            "Conservative — a profile whose location cannot be placed, or that "
+            "speaks French, or that worked in France, is never excluded (we "
+            "never infer absence). False keeps such profiles (demoted, not "
+            "excluded)."
+        ),
+    )
 
     llm_planner_role: str = Field(
         default=(

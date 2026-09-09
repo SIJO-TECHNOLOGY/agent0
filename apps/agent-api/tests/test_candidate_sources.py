@@ -397,3 +397,48 @@ def test_foreign_but_francophone_with_france_experience_not_demoted() -> None:
     s_nope, _ = score_external_candidate(nope, q)
     assert s_ok > s_nope
     assert bd_ok.get("french") is True and bd_ok.get("france_experience") is True
+
+
+# --- hard exclusion of clearly-foreign profiles with no France link --------
+from app.candidate_sources.ranking import is_ineligible_foreign  # noqa: E402
+
+
+def test_ineligible_foreign_true_when_no_link() -> None:
+    ev = ExternalCandidateEvidence(
+        profile_url="https://www.linkedin.com/in/x", location="Bucharest, Romania",
+        languages=["Romanian", "English"],
+        experiences=[ExternalExperience(location="Bucharest, Romania")],
+    )
+    assert is_ineligible_foreign(ev) is True
+
+
+def test_ineligible_foreign_false_when_speaks_french() -> None:
+    ev = ExternalCandidateEvidence(
+        profile_url="https://www.linkedin.com/in/x", location="Bucharest, Romania",
+        languages=["French", "Romanian"],
+    )
+    assert is_ineligible_foreign(ev) is False
+
+
+def test_ineligible_foreign_false_when_france_experience() -> None:
+    ev = ExternalCandidateEvidence(
+        profile_url="https://www.linkedin.com/in/x", location="Bucharest, Romania",
+        experiences=[ExternalExperience(location="Paris, France")],
+    )
+    assert is_ineligible_foreign(ev) is False
+
+
+def test_ineligible_foreign_false_when_location_unknown() -> None:
+    # UNKNOWN != foreign — never excluded on missing data.
+    ev = ExternalCandidateEvidence(profile_url="https://www.linkedin.com/in/x")
+    assert is_ineligible_foreign(ev) is False
+
+
+def test_idf_intrinsic_nudge_on_broad_france_query() -> None:
+    # No required skills, so scores don't saturate at 1.0 and the IDF nudge
+    # stays visible between two France-based profiles.
+    q = CandidateSearchQuery(location="France")
+    idf, bd = score_external_candidate(_ext("https://www.linkedin.com/in/i", "Paris, France"), q)
+    other, bd_o = score_external_candidate(_ext("https://www.linkedin.com/in/o", "Lyon, France"), q)
+    assert idf > other
+    assert bd.get("idf") is True and "idf" not in bd_o
