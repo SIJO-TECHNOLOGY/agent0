@@ -422,11 +422,12 @@ class Settings(BaseSettings):
         ),
     )
     external_search_max_queries: int = Field(
-        default=5, ge=1, le=12,
+        default=6, ge=1, le=12,
         description=(
             "Hard upper bound on the number of complementary web-search "
             "queries issued per external discovery (the bounded search "
-            "ladder). Bounds cost and latency."
+            "ladder). More passes = better recall on niche queries, at higher "
+            "cost/latency. Bounds cost and latency."
         ),
     )
     external_search_max_results: int = Field(

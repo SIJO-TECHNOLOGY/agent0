@@ -20,6 +20,7 @@ actually returned so we never trust an LLM-emitted URL that has no evidence.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Protocol, TypeVar
@@ -246,6 +247,11 @@ class LinkedInWebSource:
                 if ident is None:
                     rejected += 1
                     continue
+                # Drop grounded-but-unpresentable profiles: no name (even from
+                # the URL slug) AND no title — they would render as blank cards.
+                if not (evidence.full_name or evidence.current_title):
+                    rejected += 1
+                    continue
                 # Hard eligibility filter: drop clearly-foreign profiles that
                 # evidence neither French nor an experience in France (SIJO
                 # minimum bar). Conservative — unknown location is never
@@ -407,9 +413,10 @@ class LinkedInWebSource:
             consulting_status=consulting.status,
         )
         evidence = _grounded_evidence(profile, canon)
+        full_name = (profile.full_name or "").strip() or _name_from_identifier(ident)
         return ExternalCandidateEvidence(
             profile_url=canon,
-            full_name=profile.full_name,
+            full_name=full_name,
             current_title=profile.current_title,
             current_company=profile.current_company,
             location=profile.location,
@@ -421,6 +428,29 @@ class LinkedInWebSource:
             evidence=evidence,
             snippet=profile.snippet,
         )
+
+
+_NAME_ID_RE = re.compile(r"^[a-zA-Zà-öø-ÿ'-]+$")
+
+
+def _name_from_identifier(identifier: str | None) -> str | None:
+    """Derive a display name from a LinkedIn /in/ slug when none was extracted.
+
+    ``alexandre-nepomniachtchi`` -> "Alexandre Nepomniachtchi";
+    ``jean-dupont-5130a9141`` -> "Jean Dupont" (trailing id segment dropped).
+    Returns None when the slug yields no alphabetic name (e.g. ``parisdennard``),
+    so we never fabricate a fake-looking name.
+    """
+    if not identifier:
+        return None
+    parts = [p for p in identifier.split("-") if p]
+    words = [p for p in parts if _NAME_ID_RE.match(p) and not p.isdigit()]
+    # A trailing token that is a long alnum id (letters+digits) is dropped by
+    # the regex already; require >= 2 alphabetic word parts to look like a name.
+    words = [w for w in words if any(ch.isalpha() for ch in w) and not any(ch.isdigit() for ch in w)]
+    if len(words) < 2:
+        return None
+    return " ".join(w.capitalize() for w in words)
 
 
 def _grounded_evidence(

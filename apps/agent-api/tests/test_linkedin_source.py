@@ -249,3 +249,32 @@ async def test_find_profile_for_candidate() -> None:
     assert match is not None
     assert match.confidence_level == "strong"
     assert match.profile_url == "https://www.linkedin.com/in/jean-dupont"
+
+
+def test_name_from_identifier() -> None:
+    from app.candidate_sources.linkedin_web.source import _name_from_identifier
+    assert _name_from_identifier("alexandre-nepomniachtchi") == "Alexandre Nepomniachtchi"
+    assert _name_from_identifier("jean-dupont-5130a9141") == "Jean Dupont"
+    assert _name_from_identifier("parisdennard") is None  # single blob -> no fake name
+
+
+@pytest.mark.asyncio
+async def test_name_derived_from_slug_when_missing() -> None:
+    # Grounded profile with no extracted name gets a display name from its slug.
+    p = _profile("https://www.linkedin.com/in/marie-durand", matched_skills=["Java"],
+                 location="Paris, France")
+    backend = FakeBackend(_result([p]))
+    source = LinkedInWebSource(backend, max_queries=1)
+    res = await source.discover(CandidateSearchQuery(required_skills=["Java"], location="Paris"))
+    assert res.candidates[0].evidence.full_name == "Marie Durand"
+
+
+@pytest.mark.asyncio
+async def test_unpresentable_profile_dropped() -> None:
+    # No name derivable from the slug AND no title -> dropped (blank card).
+    p = _profile("https://www.linkedin.com/in/xy", matched_skills=["Java"],
+                 location="Paris, France")
+    backend = FakeBackend(_result([p]))
+    source = LinkedInWebSource(backend, max_queries=1)
+    res = await source.discover(CandidateSearchQuery(required_skills=["Java"], location="Paris"))
+    assert res.candidates == []

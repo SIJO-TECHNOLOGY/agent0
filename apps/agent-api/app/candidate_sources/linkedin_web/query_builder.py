@@ -90,6 +90,13 @@ def build_search_queries(
         consulting_word = "consultant" if query.prefer_consulting_profile else ""
         add(skill_terms, _quote(location), consulting_word)
 
+    # 3b — each required skill INDIVIDUALLY with the role + location. Broadens a
+    # strict multi-skill query (e.g. "C++ AND C# AND Sophis") so adjacent, still
+    # on-target profiles surface instead of only the rare all-in-one match.
+    role_hint = primary_title or ""
+    for skill in skills[:3]:
+        add(_quote(skill), _quote(role_hint), _quote(location))
+
     # 4 — company anchor (an ESN/end-client name is highly discriminating).
     for company in companies[:1]:
         add(_quote(company), _quote(primary_skill or primary_title or ""),
