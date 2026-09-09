@@ -369,6 +369,35 @@ def _base_message(
                 else "Please refine your search with at least one keyword "
                 "(skill, technology, role, location, or company)."
             )
+        # Multi-source awareness: when LinkedIn is the ONLY requested source,
+        # there are legitimately no MCP (BoondManager) tool calls, so the
+        # "no MCP tool" message below would be misleading. Explain the
+        # external outcome instead (and distinguish "ran, found nothing" from
+        # "external search not available").
+        sources = set(final_state.sources or [])
+        external_ran = bool(final_state.external_metrics)
+        if "linkedin" in sources and "boond" not in sources:
+            if _has_warning(final_state, "external_search_failed"):
+                return (
+                    "La recherche LinkedIn n’a pas pu aboutir (erreur du service "
+                    "externe). Réessaie dans un instant."
+                    if lang == "fr"
+                    else "The LinkedIn search could not be completed (external "
+                    "service error). Please try again."
+                )
+            if not external_ran:
+                return (
+                    "La recherche LinkedIn n’est pas disponible côté serveur "
+                    "(fonctionnalité désactivée ou clé OpenAI manquante)."
+                    if lang == "fr"
+                    else "LinkedIn search is not available on the server "
+                    "(feature disabled or OpenAI key missing)."
+                )
+            return (
+                "Aucun profil LinkedIn public ne correspond à ta recherche."
+                if lang == "fr"
+                else "No public LinkedIn profile matched your search."
+            )
         if not final_state.tool_calls:
             return (
                 "Impossible de lancer une recherche candidat pour cette demande : "
