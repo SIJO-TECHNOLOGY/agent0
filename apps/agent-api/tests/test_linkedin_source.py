@@ -117,6 +117,21 @@ async def test_invented_url_rejected_when_evidence_available() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ungrounded_profile_rejected() -> None:
+    # A profile with NO cited web sources is treated as invented and rejected
+    # (grounding is mandatory) — this is what stops hallucinated profiles.
+    profile = _profile("https://www.linkedin.com/in/jane-doe", full_name="Jane Doe",
+                        matched_skills=["Java"])
+    backend = FakeBackend(
+        BackendResult(parsed=DiscoveryResult(profiles=[profile]), cited_urls=[])
+    )
+    source = LinkedInWebSource(backend, max_queries=1)
+    result = await source.discover(CandidateSearchQuery(required_skills=["Java"]))
+    assert result.candidates == []
+    assert result.metrics["rejected_count"] >= 1
+
+
+@pytest.mark.asyncio
 async def test_missing_terms_do_not_fail_whole_search() -> None:
     # First query returns nothing; a later query returns a candidate.
     good = _profile("https://www.linkedin.com/in/found", full_name="Found",

@@ -24,14 +24,33 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
+def _attr(obj: object, name: str) -> object:
+    """Read a field whether ``obj`` is a pydantic-ish object or a dict."""
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
 def _extract_cited_urls(response: object) -> list[str]:
-    """Collect url_citation annotation URLs from a Responses API response."""
+    """Collect the URLs the web search actually cited (grounding evidence).
+
+    Robust to the annotation being an object or a dict, and to the message
+    content being a list of blocks. Only ``url_citation``-style annotations
+    (those carrying a ``url``) are collected — these are the pages the search
+    genuinely retrieved, which is what we validate discovered profiles against.
+    """
     urls: list[str] = []
     output = getattr(response, "output", None) or []
     for item in output:
-        for content in getattr(item, "content", None) or []:
-            for annotation in getattr(content, "annotations", None) or []:
-                url = getattr(annotation, "url", None)
+        content = _attr(item, "content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            annotations = _attr(block, "annotations") or []
+            if not isinstance(annotations, list):
+                continue
+            for annotation in annotations:
+                url = _attr(annotation, "url")
                 if isinstance(url, str) and url:
                     urls.append(url)
     return urls

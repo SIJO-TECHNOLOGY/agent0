@@ -122,6 +122,9 @@ _DISCOVERY_SYSTEM = (
     "Rules you must follow strictly:\n"
     "- Only return profiles you actually found via web search; never guess or "
     "construct a profile URL from a name.\n"
+    "- If web search returns no relevant public profile, return an EMPTY "
+    "profiles list. Never fabricate a profile and never use placeholder names "
+    "such as 'Jane Doe' or 'John Smith'.\n"
     "- Use null for any field you cannot see in public data; never invent "
     "values.\n"
     "- Distinguish EMPLOYER (who paid the person) from CLIENT (the end customer "
@@ -324,12 +327,17 @@ class LinkedInWebSource:
         if canon is None:
             return None
         ident = canonical_identifier(url)
-        # When the search reported the sources it used, an LLM-emitted URL that
-        # is not among them was not actually found — reject it (no invented
-        # identities). With no citations available we cannot validate, so we
-        # accept well-formed profile URLs.
-        if cited_ids and ident not in cited_ids:
-            logger.info("linkedin_web.url_unsupported", extra={"url": url})
+        # Grounding is MANDATORY: accept a profile ONLY if the web search
+        # actually cited its URL. If the search reported no sources, or this
+        # URL is not among them, the profile was not genuinely found — treat it
+        # as invented and reject it. This is what stops hallucinated
+        # "Jane Doe"-style profiles from a model that fills the schema without
+        # real web results. Never trust an LLM-emitted URL on its own.
+        if not cited_ids or ident not in cited_ids:
+            logger.info(
+                "linkedin_web.url_unsupported",
+                extra={"url": url, "cited_count": len(cited_ids)},
+            )
             return None
 
         experiences = [
