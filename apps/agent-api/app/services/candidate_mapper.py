@@ -1033,6 +1033,11 @@ def _external_candidate_card(result: SearchResult) -> CandidateCard | None:
         for item in (evidence.get("evidence") or [])
         if isinstance(item, dict) and item.get("field")
     ]
+    languages = [
+        {"language": str(lang).strip()}
+        for lang in (evidence.get("languages") or [])
+        if isinstance(lang, str) and lang.strip()
+    ]
 
     return CandidateCard(
         id=result.id or f"li:{profile_url}",
@@ -1040,6 +1045,7 @@ def _external_candidate_card(result: SearchResult) -> CandidateCard | None:
         title=evidence.get("current_title") or None,
         location=evidence.get("location") or None,
         skills=skills,
+        languages=languages,
         match_score=result.score if result.score > 0.0 else None,
         summary=evidence.get("snippet") or None,
         experiences=experiences,

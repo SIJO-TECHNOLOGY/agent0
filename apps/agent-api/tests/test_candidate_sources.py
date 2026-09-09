@@ -369,3 +369,31 @@ def test_francophone_between_region_and_foreign() -> None:
     foreign, _ = score_external_candidate(_ext("https://www.linkedin.com/in/x", "Warsaw, Poland"), q)
     assert region >= franco > foreign
     assert bd_r["location"] == "match" and bd_f["location"] == "francophone"
+
+
+def test_foreign_but_francophone_with_france_experience_not_demoted() -> None:
+    # SIJO rule: nationality/current country don't matter as long as the person
+    # speaks French AND has had an experience in France. A Bucharest-based dev
+    # who speaks French and worked in Paris must outrank a Bucharest dev with
+    # neither.
+    q = CandidateSearchQuery(required_skills=["Java"], location="Paris")
+    ok = ExternalCandidateEvidence(
+        profile_url="https://www.linkedin.com/in/ok",
+        matched_skills=["Java"],
+        location="Bucharest, Romania",
+        languages=["French", "English", "Romanian"],
+        experiences=[ExternalExperience(title="Consultant", employer="Capgemini",
+                                        location="Paris, France", duration_months=20)],
+    )
+    nope = ExternalCandidateEvidence(
+        profile_url="https://www.linkedin.com/in/nope",
+        matched_skills=["Java"],
+        location="Bucharest, Romania",
+        languages=["Romanian", "English"],
+        experiences=[ExternalExperience(title="Developer", employer="Local SRL",
+                                        location="Bucharest, Romania", duration_months=20)],
+    )
+    s_ok, bd_ok = score_external_candidate(ok, q)
+    s_nope, _ = score_external_candidate(nope, q)
+    assert s_ok > s_nope
+    assert bd_ok.get("french") is True and bd_ok.get("france_experience") is True

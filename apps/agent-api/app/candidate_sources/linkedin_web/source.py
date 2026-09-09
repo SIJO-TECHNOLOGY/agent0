@@ -63,6 +63,7 @@ class _DiscoveredExperience(BaseModel):
     title: str | None = None
     employer: str | None = None
     client: str | None = None
+    location: str | None = None
     start_date: str | None = None
     end_date: str | None = None
     duration_months: int | None = None
@@ -77,6 +78,7 @@ class _DiscoveredProfile(BaseModel):
     current_title: str | None = None
     current_company: str | None = None
     location: str | None = None
+    languages: list[str] = Field(default_factory=list)
     matched_skills: list[str] = Field(default_factory=list)
     experiences: list[_DiscoveredExperience] = Field(default_factory=list)
     snippet: str = ""
@@ -362,6 +364,7 @@ class LinkedInWebSource:
                 title=e.title,
                 employer=e.employer,
                 client=e.client,
+                location=e.location,
                 start_date=e.start_date,
                 end_date=e.end_date,
                 duration_months=e.duration_months,
@@ -392,6 +395,7 @@ class LinkedInWebSource:
             current_title=profile.current_title,
             current_company=profile.current_company,
             location=profile.location,
+            languages=[lang for lang in profile.languages if lang and lang.strip()],
             matched_skills=[s for s in profile.matched_skills if s and s.strip()],
             experiences=experiences,
             consulting_profile=consulting,

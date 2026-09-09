@@ -42,11 +42,18 @@ _W_ROLE: Final[float] = 0.05
 # location stays neutral, never penalised).
 _W_LOCATION_REGION: Final[float] = 0.12
 _W_LOCATION_FRANCOPHONE: Final[float] = 0.04
+# The real minimum bar (per SIJO): the candidate speaks French AND has had an
+# experience in France — regardless of nationality or current country.
+_W_FRENCH: Final[float] = 0.08
+_W_FRANCE_EXPERIENCE: Final[float] = 0.10
 
 # Negative weights — applied only for CONFIRMED-negative evidence.
 _P_CONSULTING_NO: Final[float] = 0.10
 _P_MISSION_NO: Final[float] = 0.12
-_P_LOCATION_FOREIGN: Final[float] = 0.22
+# A clearly-foreign CURRENT location is heavily demoted ONLY when the profile
+# shows neither French nor a France experience (a French-speaking candidate who
+# worked in France is fine even if based abroad now).
+_P_LOCATION_FOREIGN: Final[float] = 0.30
 
 # Accent-folded location markers. France / Île-de-France places (region match
 # when the requested location is in France), the broader French-speaking area
@@ -118,6 +125,30 @@ def _location_relevance(requested: str, candidate: str | None) -> str:
         return "unknown"
     # Generic case: only demote when we recognise a foreign place.
     return "foreign" if _has_marker(cand, _FOREIGN_MARKERS) else "unknown"
+
+
+def _speaks_french(evidence: ExternalCandidateEvidence) -> bool:
+    """True when the profile evidences French (language list or francophone place)."""
+    for lang in evidence.languages:
+        folded = _fold(lang)
+        if "franc" in folded or folded == "fr":  # français / french / francophone
+            return True
+    if _has_marker(_fold(evidence.location), _FRANCOPHONE_MARKERS):
+        return True
+    return any(
+        _has_marker(_fold(exp.location), _FRANCOPHONE_MARKERS)
+        for exp in evidence.experiences
+    )
+
+
+def _has_france_experience(evidence: ExternalCandidateEvidence) -> bool:
+    """True when a role took place in France (or the person is based there)."""
+    if _has_marker(_fold(evidence.location), _FRANCE_IDF_MARKERS):
+        return True
+    return any(
+        _has_marker(_fold(exp.location), _FRANCE_IDF_MARKERS)
+        for exp in evidence.experiences
+    )
 
 
 def _fold(text: str | None) -> str:
@@ -195,18 +226,31 @@ def score_external_candidate(
         else:
             breakdown["seniority"] = "unknown" if years is None else f"{years}y"
 
-    # 5 — location (medium-high, tiered). Prefer the requested region, then the
-    # broader francophone area; demote clearly-foreign profiles; unknown stays
-    # neutral.
+    # 5a — the SIJO minimum bar: French-speaking AND some experience in France
+    # (nationality / current country don't matter). Evidenced signals boost;
+    # unknown stays neutral (we can't prove absence from sparse public data).
+    speaks_fr = _speaks_french(evidence)
+    fr_exp = _has_france_experience(evidence)
+    if speaks_fr:
+        score += _W_FRENCH
+        breakdown["french"] = True
+    if fr_exp:
+        score += _W_FRANCE_EXPERIENCE
+        breakdown["france_experience"] = True
+
+    # 5b — location tier vs the requested place. A clearly-foreign CURRENT
+    # location is demoted ONLY when the profile shows neither French nor a
+    # France experience — so a francophone candidate who worked in France is
+    # kept even if based abroad now. Unknown stays neutral.
     if query.location:
         rel = _location_relevance(query.location, evidence.location)
+        breakdown["location"] = rel
         if rel == "match":
             score += _W_LOCATION_REGION
         elif rel == "francophone":
             score += _W_LOCATION_FRANCOPHONE
-        elif rel == "foreign":
+        elif rel == "foreign" and not (speaks_fr or fr_exp):
             score -= _P_LOCATION_FOREIGN
-        breakdown["location"] = rel
 
     # 6 — role/title fit (small nudge).
     if query.job_titles and evidence.current_title:

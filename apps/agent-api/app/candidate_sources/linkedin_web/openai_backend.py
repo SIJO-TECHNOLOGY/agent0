@@ -33,11 +33,16 @@ T = TypeVar("T", bound=BaseModel)
 _STRUCTURE_SYSTEM = (
     "You convert web-search findings about people into structured LinkedIn "
     "member profiles. Use ONLY the profile URLs given to you, verbatim. Use "
-    "null for any field not present in the findings; never invent values. "
+    "null (or an empty list) for any field not present in the findings; never "
+    "invent values. "
     "Distinguish EMPLOYER (who paid the person) from CLIENT (the end customer "
     "of a mission): set explicit_client_mission=true only when a client is "
     "clearly named for that line. Set consulting_context=true for an ESN / "
-    "consulting / freelance engagement."
+    "consulting / freelance engagement. "
+    "For each experience, also fill 'location' with the city/country of that "
+    "role when stated. Fill the profile-level 'languages' list with the "
+    "languages the person speaks when the profile shows them (e.g. "
+    "['French', 'English'])."
 )
 
 

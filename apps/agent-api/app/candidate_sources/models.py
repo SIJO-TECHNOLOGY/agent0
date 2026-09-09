@@ -70,6 +70,7 @@ class ExternalExperience(BaseModel):
     title: str | None = None
     employer: str | None = None
     client: str | None = None
+    location: str | None = None
     start_date: str | None = None
     end_date: str | None = None
     duration_months: int | None = None
@@ -110,6 +111,7 @@ class ExternalCandidateEvidence(BaseModel):
     current_title: str | None = None
     current_company: str | None = None
     location: str | None = None
+    languages: list[str] = Field(default_factory=list)
     matched_skills: list[str] = Field(default_factory=list)
     experiences: list[ExternalExperience] = Field(default_factory=list)
     consulting_profile: ConsultingProfileEvidence = Field(
