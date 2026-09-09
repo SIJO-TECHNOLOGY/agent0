@@ -59,27 +59,57 @@ class OpenAIWebSearchBackend:
         self._model = model
         self._linkedin_only = linkedin_only
 
-    def _web_search_tool(self) -> dict[str, object]:
-        tool: dict[str, object] = {"type": "web_search"}
+    def _tool_variants(self) -> list[dict[str, object]]:
+        """Web-search tool configs to try, most-specific first.
+
+        Different OpenAI API/model versions accept different shapes: the GA
+        ``web_search`` type, the older ``web_search_preview``, and the
+        ``allowed_domains`` filter is not universally supported. We fall back
+        gracefully so a config the account doesn't support doesn't silently
+        zero out discovery — the source layer validates the host regardless.
+        """
+        variants: list[dict[str, object]] = []
         if self._linkedin_only:
-            # Domain-restrict to LinkedIn where the API supports it. Harmless
-            # extra hint otherwise; the source layer also validates the host.
-            tool["filters"] = {"allowed_domains": ["linkedin.com"]}
-        return tool
+            variants.append(
+                {"type": "web_search", "filters": {"allowed_domains": ["linkedin.com"]}}
+            )
+        variants.append({"type": "web_search"})
+        variants.append({"type": "web_search_preview"})
+        return variants
 
     async def search(self, prompt: str, schema: type[T]) -> BackendResult:
         from app.candidate_sources.linkedin_web.source import _DISCOVERY_SYSTEM
 
-        response = await self._client.responses.parse(
-            model=self._model,
-            tools=[self._web_search_tool()],
-            input=[
-                {"role": "system", "content": _DISCOVERY_SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            text_format=schema,
-        )
-        parsed = getattr(response, "output_parsed", None)
-        if parsed is None:
-            parsed = schema()  # empty, valid — degrade to "no profiles"
-        return BackendResult(parsed=parsed, cited_urls=_extract_cited_urls(response))
+        messages = [
+            {"role": "system", "content": _DISCOVERY_SYSTEM},
+            {"role": "user", "content": prompt},
+        ]
+        last_error: Exception | None = None
+        for tool in self._tool_variants():
+            try:
+                response = await self._client.responses.parse(
+                    model=self._model,
+                    tools=[tool],
+                    input=messages,
+                    text_format=schema,
+                )
+            except Exception as exc:  # noqa: BLE001 — try the next tool shape
+                last_error = exc
+                logger.info(
+                    "linkedin_web.tool_variant_failed",
+                    extra={"tool_type": tool.get("type"),
+                           "has_filters": "filters" in tool,
+                           "error": str(exc)[:300]},
+                )
+                continue
+            parsed = getattr(response, "output_parsed", None)
+            if parsed is None:
+                parsed = schema()  # empty, valid — degrade to "no profiles"
+            return BackendResult(
+                parsed=parsed, cited_urls=_extract_cited_urls(response)
+            )
+        # Every tool shape failed — surface the last error so the source layer
+        # logs it (and the search degrades to "no results", not a crash).
+        raise RuntimeError(
+            f"web_search call failed for all tool variants: {last_error}"
+        ) from last_error

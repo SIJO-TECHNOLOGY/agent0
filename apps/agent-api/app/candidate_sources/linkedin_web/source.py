@@ -185,9 +185,10 @@ class LinkedInWebSource:
                 result = await self._backend.search(
                     _discovery_prompt(search_query, query), DiscoveryResult
                 )
-            except Exception:  # noqa: BLE001 — one failed query is non-fatal
+            except Exception as exc:  # noqa: BLE001 — one failed query is non-fatal
                 logger.warning(
-                    "linkedin_web.query_failed", extra={"query": search_query}
+                    "linkedin_web.query_failed",
+                    extra={"query": search_query, "error": str(exc)[:500]},
                 )
                 failures += 1
                 continue
@@ -195,6 +196,14 @@ class LinkedInWebSource:
             parsed = result.parsed
             if not isinstance(parsed, DiscoveryResult):
                 continue
+            logger.info(
+                "linkedin_web.query_done",
+                extra={
+                    "query": search_query,
+                    "profiles_returned": len(parsed.profiles),
+                    "cited_urls": len(result.cited_urls),
+                },
+            )
             cited_ids = {
                 cid
                 for cid in (canonical_identifier(u) for u in result.cited_urls)
