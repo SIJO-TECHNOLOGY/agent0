@@ -91,10 +91,16 @@ def build_external_source(settings) -> object | None:
             extra={"provider": settings.external_search_provider},
         )
         return None
+    # Key resolution order: a dedicated external key, then a generic OpenAI
+    # key, then the LLM planner key when that provider is OpenAI (so a project
+    # that only sets LLM_API_KEY still powers web search without duplicating
+    # the key). Never falls back to a non-OpenAI provider key.
     api_key = (
         getattr(settings, "external_search_api_key", None)
         or getattr(settings, "openai_api_key", None)
     )
+    if not api_key and str(getattr(settings, "llm_provider", "")).lower() == "openai":
+        api_key = getattr(settings, "llm_api_key", None)
     if not api_key:
         logger.warning("external_source.no_api_key")
         return None
