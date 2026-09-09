@@ -209,3 +209,37 @@ async def test_llm_planner_cannot_override_linkedin_only() -> None:
     assert mcp.boond_search_calls() == []
     assert external.discover_calls == 1
     assert len(_linkedin_cards(resp)) >= 1
+
+
+# --- external discovery defaults geography to France when none given --------
+def test_external_query_defaults_location_when_none() -> None:
+    from app.graph.nodes import NodeContext, _candidate_search_query_from_state
+    from app.models.graph_state import GraphState
+    from app.models.intent import InterpretedIntent
+
+    ctx = NodeContext(mcp_client=MockMcpClient(),
+                      external_default_location="Île-de-France, France")
+    state = GraphState(
+        original_query="développeur java",
+        sources=["linkedin"],
+        interpreted_intent=InterpretedIntent(objective="x", entities=["java"], constraints={}),
+    )
+    q = _candidate_search_query_from_state(state, ctx)
+    assert q.location == "Île-de-France, France"
+
+
+def test_external_query_uses_stated_location_over_default() -> None:
+    from app.graph.nodes import NodeContext, _candidate_search_query_from_state
+    from app.models.graph_state import GraphState
+    from app.models.intent import InterpretedIntent
+
+    ctx = NodeContext(mcp_client=MockMcpClient(),
+                      external_default_location="Île-de-France, France")
+    state = GraphState(
+        original_query="dev java à Nantes",
+        sources=["linkedin"],
+        interpreted_intent=InterpretedIntent(
+            objective="x", entities=["java"], constraints={"location": "Nantes"}),
+    )
+    q = _candidate_search_query_from_state(state, ctx)
+    assert q.location == "Nantes"

@@ -125,6 +125,9 @@ class NodeContext:
     external_max_results: int = 20
     long_mission_threshold_months: int = 24
     prefer_consulting_profile: bool = True
+    # Default geography for external discovery when the query names no location
+    # (SIJO recruits in France). Empty string disables the default.
+    external_default_location: str = ""
 
 
 def _replace(state: GraphState, **changes: object) -> GraphState:
@@ -1968,6 +1971,11 @@ def _candidate_search_query_from_state(
         if isinstance(value, str) and value.strip():
             location = value.strip()
             break
+    # SIJO recruits in France: when the query names no location, default the
+    # external geography (so web search targets France/IDF instead of returning
+    # globally skill-matching profiles). The recruiter's stated location wins.
+    if not location and ctx.external_default_location.strip():
+        location = ctx.external_default_location.strip()
 
     prefer = ctx.prefer_consulting_profile
     override = str(constraints.get("prefer_consulting_profile") or "").strip().lower()

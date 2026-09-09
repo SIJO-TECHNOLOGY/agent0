@@ -478,6 +478,17 @@ class Settings(BaseSettings):
             "candidates. Configurable — never hardcode 24 in the code."
         ),
     )
+    external_default_location: str = Field(
+        default="Île-de-France, France",
+        description=(
+            "Default geography for EXTERNAL (LinkedIn) discovery when the "
+            "recruiter's query names no location. SIJO recruits in France, so "
+            "web search targets this area by default (and ranking prefers it) "
+            "instead of returning globally skill-matching profiles. The "
+            "recruiter's own location, when stated, always overrides it. Set "
+            "empty to disable the geo default."
+        ),
+    )
     candidate_require_french_or_france_experience: bool = Field(
         default=True,
         description=(

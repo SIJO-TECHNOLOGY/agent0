@@ -61,6 +61,7 @@ class SearchService:
         external_max_results: int = 20,
         long_mission_threshold_months: int = 24,
         prefer_consulting_profile: bool = True,
+        external_default_location: str = "",
     ) -> None:
         self._mcp_client = mcp_client
         self._max_replan_attempts = max_replan_attempts
@@ -82,6 +83,7 @@ class SearchService:
         self._external_max_results = external_max_results
         self._long_mission_threshold_months = long_mission_threshold_months
         self._prefer_consulting_profile = prefer_consulting_profile
+        self._external_default_location = external_default_location
 
     @property
     def llm_planner(self) -> LlmPlanner | None:
@@ -111,6 +113,7 @@ class SearchService:
             external_max_results=self._external_max_results,
             long_mission_threshold_months=self._long_mission_threshold_months,
             prefer_consulting_profile=self._prefer_consulting_profile,
+            external_default_location=self._external_default_location,
         )
 
     async def search(

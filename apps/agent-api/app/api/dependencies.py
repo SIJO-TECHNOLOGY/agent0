@@ -113,6 +113,7 @@ def build_search_service(
         external_max_results=settings.external_search_max_results,
         long_mission_threshold_months=settings.candidate_long_mission_threshold_months,
         prefer_consulting_profile=settings.candidate_prefer_consulting_profile,
+        external_default_location=settings.external_default_location,
     )
 
 
