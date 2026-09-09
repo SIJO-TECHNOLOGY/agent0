@@ -411,11 +411,14 @@ class Settings(BaseSettings):
         ),
     )
     external_search_model: str = Field(
-        default="gpt-4o-mini",
+        default="gpt-4o",
         description=(
             "Model used for external web search via the OpenAI Responses API. "
-            "Must be a model that supports the built-in web_search tool. Not "
-            "hardcoded — override per environment."
+            "Must be a model that grounds the built-in web_search tool well: "
+            "gpt-4o (default), gpt-5, gpt-5.4 reliably return real "
+            "url_citation sources for LinkedIn queries, whereas gpt-4o-mini "
+            "tends to fabricate (its ungrounded output is then rejected, so it "
+            "yields few/no results). Not hardcoded — override per environment."
         ),
     )
     external_search_max_queries: int = Field(

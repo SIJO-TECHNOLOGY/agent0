@@ -149,10 +149,18 @@ def _discovery_prompt(search_query: str, query: CandidateSearchQuery) -> str:
     if query.prefer_consulting_profile:
         wants.append("prefer consultant/freelance profiles")
     brief = "; ".join(wants) if wants else "(no extra criteria)"
+    # The web_search tool does its own searching, so a raw `site:` string is a
+    # poor instruction — it works far better with natural language. We strip
+    # the `site:`/quotes and keep the ladder pass's terms as the focus.
+    focus = search_query.replace("site:linkedin.com/in", "").replace('"', " ")
+    focus = " ".join(focus.split()).strip()
     return (
-        f"Web search query: {search_query}\n"
-        f"Recruiter brief: {brief}\n"
-        "Return the matching public LinkedIn member profiles."
+        "Using web search, find REAL public LinkedIn member profiles "
+        "(linkedin.com/in/...) matching this search"
+        + (f", focusing on: {focus}." if focus else ".")
+        + f"\nCriteria: {brief}."
+        + "\nList each person you actually find, with their linkedin.com/in URL. "
+        "If you find none, return an empty list — never invent a profile."
     )
 
 

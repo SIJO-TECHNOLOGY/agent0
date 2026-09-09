@@ -1,11 +1,12 @@
 """OpenAI Responses API web_search backend for LinkedIn discovery.
 
 Isolated from ``source.py`` so the discovery pipeline stays network-free and
-unit-testable. Uses the installed OpenAI SDK (>= 2.x): the Responses API with
-the built-in ``web_search`` tool and structured outputs via ``responses.parse``.
-The cited-source URLs are read from the response's ``url_citation`` annotations
-so the source layer can reject any profile URL the search did not actually
-surface.
+unit-testable. Uses the installed OpenAI SDK (>= 2.x) Responses API in TWO
+steps: (1) ``responses.create`` with the built-in ``web_search`` tool, whose
+``url_citation`` annotations are the REAL pages the search retrieved (our
+grounding evidence); (2) ``responses.parse`` (no tool) to structure ONLY those
+cited profiles. Structured-output mode is never used WITH web_search because it
+suppresses citations and lets the model fabricate profiles.
 
 Public web content only — no login, no cookies, no scraping, no browser.
 """
@@ -18,10 +19,26 @@ from typing import TypeVar
 from pydantic import BaseModel
 
 from app.candidate_sources.linkedin_web.source import BackendResult
+from app.candidate_sources.linkedin_web.url_utils import (
+    canonical_profile_url,
+    is_profile_url,
+)
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+# System prompt for the second (structuring) pass — no web tool, so it must
+# only reformat the findings and never introduce a new URL.
+_STRUCTURE_SYSTEM = (
+    "You convert web-search findings about people into structured LinkedIn "
+    "member profiles. Use ONLY the profile URLs given to you, verbatim. Use "
+    "null for any field not present in the findings; never invent values. "
+    "Distinguish EMPLOYER (who paid the person) from CLIENT (the end customer "
+    "of a mission): set explicit_client_mission=true only when a client is "
+    "clearly named for that line. Set consulting_context=true for an ESN / "
+    "consulting / freelance engagement."
+)
 
 
 def _attr(obj: object, name: str) -> object:
@@ -78,57 +95,84 @@ class OpenAIWebSearchBackend:
         self._model = model
         self._linkedin_only = linkedin_only
 
-    def _tool_variants(self) -> list[dict[str, object]]:
-        """Web-search tool configs to try, most-specific first.
+    # Tool-type variants to try (no domain filter: `allowed_domains` is not
+    # supported by all models, e.g. gpt-4o-mini returns HTTP 400, and the
+    # prompt + host validation + grounding already constrain to LinkedIn).
+    _TOOL_TYPES: tuple[str, ...] = ("web_search", "web_search_preview")
 
-        Different OpenAI API/model versions accept different shapes: the GA
-        ``web_search`` type, the older ``web_search_preview``, and the
-        ``allowed_domains`` filter is not universally supported. We fall back
-        gracefully so a config the account doesn't support doesn't silently
-        zero out discovery — the source layer validates the host regardless.
+    async def _web_search(self, prompt: str):
+        """Run one grounded web search (text mode) and return the response.
+
+        Text mode (`responses.create`) is deliberate: it attaches real
+        ``url_citation`` annotations — the actual pages the search retrieved —
+        which is our grounding evidence. Structured-output mode suppresses
+        those citations and lets the model fabricate, so it is NOT used here.
         """
-        variants: list[dict[str, object]] = []
-        if self._linkedin_only:
-            variants.append(
-                {"type": "web_search", "filters": {"allowed_domains": ["linkedin.com"]}}
-            )
-        variants.append({"type": "web_search"})
-        variants.append({"type": "web_search_preview"})
-        return variants
-
-    async def search(self, prompt: str, schema: type[T]) -> BackendResult:
         from app.candidate_sources.linkedin_web.source import _DISCOVERY_SYSTEM
 
-        messages = [
-            {"role": "system", "content": _DISCOVERY_SYSTEM},
-            {"role": "user", "content": prompt},
-        ]
         last_error: Exception | None = None
-        for tool in self._tool_variants():
+        for tool_type in self._TOOL_TYPES:
             try:
-                response = await self._client.responses.parse(
+                return await self._client.responses.create(
                     model=self._model,
-                    tools=[tool],
-                    input=messages,
-                    text_format=schema,
+                    tools=[{"type": tool_type}],
+                    input=[
+                        {"role": "system", "content": _DISCOVERY_SYSTEM},
+                        {"role": "user", "content": prompt},
+                    ],
                 )
             except Exception as exc:  # noqa: BLE001 — try the next tool shape
                 last_error = exc
                 logger.info(
                     "linkedin_web.tool_variant_failed",
-                    extra={"tool_type": tool.get("type"),
-                           "has_filters": "filters" in tool,
-                           "error": str(exc)[:300]},
+                    extra={"tool_type": tool_type, "error": str(exc)[:300]},
                 )
                 continue
-            parsed = getattr(response, "output_parsed", None)
-            if parsed is None:
-                parsed = schema()  # empty, valid — degrade to "no profiles"
-            return BackendResult(
-                parsed=parsed, cited_urls=_extract_cited_urls(response)
-            )
-        # Every tool shape failed — surface the last error so the source layer
-        # logs it (and the search degrades to "no results", not a crash).
         raise RuntimeError(
-            f"web_search call failed for all tool variants: {last_error}"
+            f"web_search call failed for all tool types: {last_error}"
         ) from last_error
+
+    async def search(self, prompt: str, schema: type[T]) -> BackendResult:
+        # Step 1 — grounded web search (text) → the REAL URLs the search cited.
+        response = await self._web_search(prompt)
+        cited_urls = _extract_cited_urls(response)
+        text = getattr(response, "output_text", "") or ""
+
+        profile_citations = [
+            url for url in cited_urls if is_profile_url(url)
+        ]
+        # No real LinkedIn profile was cited → return nothing (never fabricate).
+        if not profile_citations:
+            return BackendResult(parsed=schema(), cited_urls=cited_urls)
+
+        # Step 2 — structure ONLY the cited profiles (no web tool, so no new
+        # ungrounded URLs can appear). The model formats the findings; every
+        # profile_url must be one the search actually cited.
+        canonical = []
+        seen: set[str] = set()
+        for url in profile_citations:
+            canon = canonical_profile_url(url) or url
+            if canon not in seen:
+                seen.add(canon)
+                canonical.append(canon)
+        struct_prompt = (
+            "Structure the following web-search findings into LinkedIn member "
+            "profiles. Use ONLY these profile URLs, one entry per URL, verbatim "
+            "(do not invent any other URL):\n" + "\n".join(canonical)
+            + "\n\nFindings:\n" + text[:12000]
+        )
+        try:
+            structured = await self._client.responses.parse(
+                model=self._model,
+                input=[
+                    {"role": "system", "content": _STRUCTURE_SYSTEM},
+                    {"role": "user", "content": struct_prompt},
+                ],
+                text_format=schema,
+            )
+            parsed = getattr(structured, "output_parsed", None) or schema()
+        except Exception as exc:  # noqa: BLE001 — structuring is best-effort
+            logger.info("linkedin_web.structure_failed", extra={"error": str(exc)[:300]})
+            parsed = schema()
+        # Grounding set = the real cited URLs (canonical form included).
+        return BackendResult(parsed=parsed, cited_urls=cited_urls + canonical)
