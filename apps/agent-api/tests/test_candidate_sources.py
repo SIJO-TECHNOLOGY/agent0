@@ -339,3 +339,33 @@ def test_merge_does_not_merge_homonyms_without_url() -> None:
               linkedin_url="https://www.linkedin.com/in/jean-martin-2")
     merged = merge_candidate_cards([a, b])
     assert len(merged) == 2  # same name, no shared URL -> never merged
+
+
+# --- location preference (francophone / Île-de-France) ----------------------
+def _ext(url: str, location: str | None) -> ExternalCandidateEvidence:
+    return ExternalCandidateEvidence(
+        profile_url=url, matched_skills=["Java"], location=location
+    )
+
+
+def test_idf_request_prefers_local_over_foreign() -> None:
+    q = CandidateSearchQuery(required_skills=["Java"], location="Île-de-France")
+    paris, _ = score_external_candidate(_ext("https://www.linkedin.com/in/a", "Paris, France"), q)
+    bucharest, _ = score_external_candidate(_ext("https://www.linkedin.com/in/b", "Bucharest, Romania"), q)
+    assert paris > bucharest
+
+
+def test_unknown_location_not_penalised_like_foreign() -> None:
+    q = CandidateSearchQuery(required_skills=["Java"], location="Île-de-France")
+    unknown, _ = score_external_candidate(_ext("https://www.linkedin.com/in/u", None), q)
+    foreign, _ = score_external_candidate(_ext("https://www.linkedin.com/in/f", "Bucharest, Romania"), q)
+    assert unknown > foreign  # UNKNOWN location is neutral, foreign is demoted
+
+
+def test_francophone_between_region_and_foreign() -> None:
+    q = CandidateSearchQuery(required_skills=["Java"], location="Paris")
+    region, bd_r = score_external_candidate(_ext("https://www.linkedin.com/in/r", "Paris, France"), q)
+    franco, bd_f = score_external_candidate(_ext("https://www.linkedin.com/in/w", "Bruxelles, Belgique"), q)
+    foreign, _ = score_external_candidate(_ext("https://www.linkedin.com/in/x", "Warsaw, Poland"), q)
+    assert region >= franco > foreign
+    assert bd_r["location"] == "match" and bd_f["location"] == "francophone"

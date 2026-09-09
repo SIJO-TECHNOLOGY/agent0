@@ -15,6 +15,7 @@ Pure functions — no I/O.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from typing import Final
 
@@ -34,13 +35,89 @@ _W_CONSULTING_PROBABLE: Final[float] = 0.08
 _W_MISSION_CONFIRMED: Final[float] = 0.20
 _W_MISSION_PROBABLE: Final[float] = 0.10
 _W_SENIORITY: Final[float] = 0.05
-_W_LOCATION: Final[float] = 0.05
 _W_ROLE: Final[float] = 0.05
+# Location tiers (medium-high): a same-region match is a strong preference,
+# a same francophone area is a mild plus, a clearly-foreign location is a
+# solid demotion (but never an exclusion — "preferably local", and an unknown
+# location stays neutral, never penalised).
+_W_LOCATION_REGION: Final[float] = 0.12
+_W_LOCATION_FRANCOPHONE: Final[float] = 0.04
 
-# Negative weights — applied only for CONFIRMED-negative ("no") evidence.
+# Negative weights — applied only for CONFIRMED-negative evidence.
 _P_CONSULTING_NO: Final[float] = 0.10
 _P_MISSION_NO: Final[float] = 0.12
-_P_LOCATION_MISMATCH: Final[float] = 0.03
+_P_LOCATION_FOREIGN: Final[float] = 0.22
+
+# Accent-folded location markers. France / Île-de-France places (region match
+# when the requested location is in France), the broader French-speaking area
+# (mild preference), and clearly non-francophone places (demotion). The
+# foreign set is not exhaustive — an unrecognised location stays UNKNOWN
+# (neutral), so we never wrongly penalise a profile whose location we can't
+# place.
+_FRANCE_IDF_MARKERS: Final[frozenset[str]] = frozenset({
+    "france", "ile-de-france", "ile de france", "idf", "paris", "nanterre",
+    "boulogne", "versailles", "creteil", "saint-denis", "montreuil", "issy",
+    "levallois", "courbevoie", "la defense", "defense", "hauts-de-seine",
+    "seine-saint-denis", "val-de-marne", "val-d'oise", "val-d oise",
+    "yvelines", "essonne", "seine-et-marne", "cergy", "massy", "saclay",
+})
+_FRANCOPHONE_MARKERS: Final[frozenset[str]] = frozenset({
+    "france", "belgique", "belgium", "bruxelles", "brussels", "wallonie",
+    "luxembourg", "suisse", "switzerland", "geneve", "geneva", "lausanne",
+    "monaco", "quebec", "montreal", "maroc", "morocco", "casablanca",
+    "tunisie", "tunisia", "tunis", "algerie", "algeria", "alger",
+    "senegal", "dakar", "cote d'ivoire", "cote d ivoire", "abidjan",
+})
+_FOREIGN_MARKERS: Final[frozenset[str]] = frozenset({
+    "romania", "roumanie", "bucharest", "bucuresti", "cluj",
+    "india", "inde", "bangalore", "bengaluru", "mumbai", "delhi", "pune",
+    "hyderabad", "chennai", "noida", "gurgaon",
+    "poland", "pologne", "warsaw", "varsovie", "krakow", "wroclaw",
+    "germany", "allemagne", "deutschland", "berlin", "munich", "frankfurt",
+    "spain", "espagne", "madrid", "barcelona", "barcelone", "valencia",
+    "italy", "italie", "milan", "milano", "rome", "roma", "torino",
+    "portugal", "lisbon", "lisbonne", "porto",
+    "united kingdom", "london", "londres", "england", "manchester",
+    "united states", "new york", "san francisco", "seattle", "austin",
+    "netherlands", "amsterdam", "pays-bas", "rotterdam",
+    "ukraine", "kyiv", "kiev", "lviv",
+    "brazil", "bresil", "sao paulo",
+    "pakistan", "lahore", "karachi", "islamabad",
+    "turkey", "turquie", "istanbul", "egypt", "egypte", "cairo",
+})
+
+
+def _has_marker(text: str, markers: frozenset[str]) -> bool:
+    return any(m in text for m in markers)
+
+
+def _location_relevance(requested: str, candidate: str | None) -> str:
+    """Classify a candidate's location vs the requested one.
+
+    Returns ``match`` (same place/region), ``francophone`` (French-speaking
+    area when the request is in France), ``foreign`` (recognised non-francophone
+    place), or ``unknown`` (no location, or unrecognised — stays neutral).
+    """
+    cand = _fold(candidate)
+    if not cand:
+        return "unknown"
+    req = _fold(requested)
+    req_tokens = [t for t in re.split(r"[^a-z0-9]+", req) if len(t) >= 3]
+    if req and (req in cand or any(t in cand for t in req_tokens)):
+        return "match"
+    requested_is_france = _has_marker(req, _FRANCE_IDF_MARKERS) or any(
+        t in _FRANCE_IDF_MARKERS for t in req_tokens
+    )
+    if requested_is_france:
+        if _has_marker(cand, _FRANCE_IDF_MARKERS):
+            return "match"
+        if _has_marker(cand, _FRANCOPHONE_MARKERS):
+            return "francophone"
+        if _has_marker(cand, _FOREIGN_MARKERS):
+            return "foreign"
+        return "unknown"
+    # Generic case: only demote when we recognise a foreign place.
+    return "foreign" if _has_marker(cand, _FOREIGN_MARKERS) else "unknown"
 
 
 def _fold(text: str | None) -> str:
@@ -118,18 +195,18 @@ def score_external_candidate(
         else:
             breakdown["seniority"] = "unknown" if years is None else f"{years}y"
 
-    # 5 — location (medium).
+    # 5 — location (medium-high, tiered). Prefer the requested region, then the
+    # broader francophone area; demote clearly-foreign profiles; unknown stays
+    # neutral.
     if query.location:
-        loc = _fold(query.location)
-        cand_loc = _fold(evidence.location)
-        if cand_loc and loc in cand_loc:
-            score += _W_LOCATION
-            breakdown["location"] = "match"
-        elif cand_loc:
-            score -= _P_LOCATION_MISMATCH
-            breakdown["location"] = "mismatch"
-        else:
-            breakdown["location"] = "unknown"
+        rel = _location_relevance(query.location, evidence.location)
+        if rel == "match":
+            score += _W_LOCATION_REGION
+        elif rel == "francophone":
+            score += _W_LOCATION_FRANCOPHONE
+        elif rel == "foreign":
+            score -= _P_LOCATION_FOREIGN
+        breakdown["location"] = rel
 
     # 6 — role/title fit (small nudge).
     if query.job_titles and evidence.current_title:

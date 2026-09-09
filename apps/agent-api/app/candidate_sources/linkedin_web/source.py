@@ -154,11 +154,20 @@ def _discovery_prompt(search_query: str, query: CandidateSearchQuery) -> str:
     # the `site:`/quotes and keep the ladder pass's terms as the focus.
     focus = search_query.replace("site:linkedin.com/in", "").replace('"', " ")
     focus = " ".join(focus.split()).strip()
+    geo = ""
+    if query.location:
+        geo = (
+            f"\nThe person MUST be based in {query.location} (or otherwise in "
+            "France / a French-speaking area). Strongly prefer French-speaking "
+            "candidates and use the local (fr.linkedin.com) profiles. Do NOT "
+            "return people based in other countries."
+        )
     return (
         "Using web search, find REAL public LinkedIn member profiles "
         "(linkedin.com/in/...) matching this search"
         + (f", focusing on: {focus}." if focus else ".")
         + f"\nCriteria: {brief}."
+        + geo
         + "\nList each person you actually find, with their linkedin.com/in URL. "
         "If you find none, return an empty list — never invent a profile."
     )
