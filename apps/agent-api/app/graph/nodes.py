@@ -33,7 +33,10 @@ from app.services.candidate_mapper import (
     candidate_cards_from_results,
     candidate_cards_with_diagnostics,
     candidate_full_name,
+    LINKEDIN_EVIDENCE_KEY,
+    LINKEDIN_URL_KEY,
 )
+from app.candidate_sources.models import CandidateSearchQuery
 from app.services.dictionary_resolver import (
     dictionary_activity_area_option_entries,
     dictionary_availability_entries,
@@ -115,10 +118,35 @@ class NodeContext:
     # Semantic CV retrieval (ADR-014). None => the vector recall channel is
     # simply absent; the keyword ladder behaves exactly as before.
     rag_service: RagService | None = None
+    # External (LinkedIn/web) candidate discovery. None => the LinkedIn source
+    # is unavailable; the graph behaves exactly as the Boond-only pipeline.
+    external_source: object | None = None
+    external_search_enabled: bool = False
+    external_max_results: int = 20
+    long_mission_threshold_months: int = 24
+    prefer_consulting_profile: bool = True
+    # Default geography for external discovery when the query names no location
+    # (SIJO recruits in France). Empty string disables the default.
+    external_default_location: str = ""
 
 
 def _replace(state: GraphState, **changes: object) -> GraphState:
     return state.model_copy(update=changes)
+
+
+def _boond_requested(state: GraphState) -> bool:
+    """True when BoondManager search should run for this state.
+
+    Deterministic routing: an empty ``sources`` means the run predates source
+    resolution (legacy/tests) and defaults to Boond ON. Otherwise Boond runs
+    only when explicitly in the resolved set — the LLM can never flip this.
+    """
+    return not state.sources or "boond" in state.sources
+
+
+def _linkedin_requested(state: GraphState) -> bool:
+    """True when external (LinkedIn) discovery should run for this state."""
+    return "linkedin" in state.sources
 
 
 def _serialize_tool_entry(tool: McpTool) -> dict[str, object]:
@@ -167,6 +195,10 @@ def _candidate_ids_in(results: list[SearchResult], source_tool: str) -> list[str
 
 CANDIDATE_DETAIL_TOOL = "getCandidateDetail"
 SEARCH_CANDIDATES_TOOL = "searchCandidates"
+# Synthetic source_tool tag for external (LinkedIn/web) candidates. Chosen so
+# it does NOT start with "search" (the Boond evidence scorer keys off that
+# prefix), keeping external candidates out of the Boond-shaped scoring path.
+LINKEDIN_SOURCE_TOOL = "linkedin_web"
 TECHNICAL_DOCUMENT_TOOL = "getCandidateTechnicalDocument"
 DICTIONARY_TOOL = "getDictionary"
 LEGACY_CONSULTANT_SEARCH_TOOL = "search_consultants"
@@ -915,6 +947,11 @@ def _record_to_result(record: dict[str, object], source_tool: str) -> SearchResu
 
 async def execute_mcp_tools(state: GraphState, ctx: NodeContext) -> GraphState:
     """Execute selected MCP tools and collect normalized results."""
+    # Deterministic routing: skip ALL BoondManager tool calls when Boond is
+    # not among the resolved sources (e.g. LinkedIn-only search).
+    if not _boond_requested(state):
+        logger.info("graph.execute_mcp_tools.boond_skipped", extra={"sources": state.sources})
+        return state
     tool_calls = list(state.tool_calls)
     results = list(state.results)
     warnings = list(state.warnings)
@@ -1902,6 +1939,165 @@ def _apply_judgement(result: SearchResult, judgement) -> SearchResult:
     return result.model_copy(update={"data": data})
 
 
+def _candidate_search_query_from_state(
+    state: GraphState, ctx: NodeContext
+) -> CandidateSearchQuery:
+    """Build the provider-neutral search intent for external discovery.
+
+    Derived from the interpreted intent (skills = entities, role/location/
+    company/experience from constraints). The SIJO defaults come from ctx
+    (configurable), and the recruiter can override them per query via the
+    ``prefer_consulting_profile`` / ``long_mission_threshold_months``
+    constraints the planner may set (section 23) — never silently by the LLM.
+    """
+    intent = state.interpreted_intent
+    entities = list(intent.entities) if intent else []
+    constraints = dict(intent.constraints) if intent else {}
+
+    job_titles: list[str] = []
+    role = constraints.get("role") or constraints.get("title")
+    if isinstance(role, str) and role.strip():
+        job_titles.append(role.strip())
+
+    companies: list[str] = []
+    for key in ("company", "last_experience_company", "companies"):
+        value = constraints.get(key)
+        if isinstance(value, str) and value.strip():
+            companies.extend(_split_csv_constraint(value) or [value.strip()])
+
+    location = None
+    for key in ("location", "city"):
+        value = constraints.get(key)
+        if isinstance(value, str) and value.strip():
+            location = value.strip()
+            break
+    # SIJO recruits in France: when the query names no location, default the
+    # external geography (so web search targets France/IDF instead of returning
+    # globally skill-matching profiles). The recruiter's stated location wins.
+    if not location and ctx.external_default_location.strip():
+        location = ctx.external_default_location.strip()
+
+    prefer = ctx.prefer_consulting_profile
+    override = str(constraints.get("prefer_consulting_profile") or "").strip().lower()
+    if override in ("false", "0", "no", "non"):
+        prefer = False
+    elif override in ("true", "1", "yes", "oui"):
+        prefer = True
+
+    threshold = ctx.long_mission_threshold_months
+    thr_override = _int_or_none(constraints.get("long_mission_threshold_months"))
+    if thr_override is not None:
+        threshold = thr_override
+
+    return CandidateSearchQuery(
+        job_titles=job_titles,
+        required_skills=[e for e in entities if isinstance(e, str) and e.strip()],
+        optional_skills=[],
+        location=location,
+        companies=companies,
+        min_experience_years=_int_or_none(constraints.get("min_experience_years")),
+        limit=ctx.external_max_results,
+        prefer_consulting_profile=prefer,
+        long_mission_threshold_months=threshold,
+    )
+
+
+def _external_result_from_scored(scored: object) -> SearchResult:
+    """Convert a ScoredExternalCandidate into a SearchResult for the pipeline."""
+    evidence = scored.evidence  # type: ignore[attr-defined]
+    from app.candidate_sources.linkedin_web.url_utils import canonical_identifier
+
+    ident = canonical_identifier(evidence.profile_url) or evidence.profile_url
+    title = evidence.current_title or evidence.full_name or ident
+    return SearchResult(
+        id=f"li:{ident}",
+        type="linkedin_profile",
+        title=str(title),
+        snippet=evidence.snippet or "",
+        score=max(0.0, min(1.0, float(scored.score))),  # type: ignore[attr-defined]
+        source_tool=LINKEDIN_SOURCE_TOOL,
+        data={
+            LINKEDIN_EVIDENCE_KEY: evidence.model_dump(),
+            LINKEDIN_URL_KEY: evidence.profile_url,
+        },
+    )
+
+
+async def search_external(state: GraphState, ctx: NodeContext) -> GraphState:
+    """Discover external (LinkedIn/public-web) candidates and merge them in.
+
+    Deterministic routing + failure isolation:
+    - Runs only when 'linkedin' is in the resolved sources AND external search
+      is enabled AND a source is configured; otherwise a no-op.
+    - Any discovery failure is caught and surfaced as a NON-FATAL warning so a
+      concurrent BoondManager result set is never destroyed (section 25/43).
+    """
+    if not _linkedin_requested(state):
+        return state
+    if not ctx.external_search_enabled or ctx.external_source is None:
+        return state
+
+    query = _candidate_search_query_from_state(state, ctx)
+    try:
+        discovery = await ctx.external_source.discover(query)  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — external failure must not kill Boond
+        logger.warning("graph.search_external_failed", extra={"error": str(exc)})
+        return _replace(
+            state,
+            warnings=[
+                *state.warnings,
+                Warning(
+                    code="external_search_failed",
+                    message=(
+                        "External (LinkedIn) discovery could not be completed; "
+                        "showing available results only."
+                    ),
+                ),
+            ],
+        )
+
+    # Dedupe against candidates already in the pool: by external id (a replan
+    # may run discovery again) and by any canonical LinkedIn URL a Boond
+    # candidate already carries (cross-source identity, strong evidence only).
+    existing_ids = {r.id for r in state.results}
+    existing_urls = {
+        str(r.data.get(LINKEDIN_URL_KEY))
+        for r in state.results
+        if r.data.get(LINKEDIN_URL_KEY)
+    }
+    external_results: list[SearchResult] = []
+    for candidate in discovery.candidates:
+        result = _external_result_from_scored(candidate)
+        url = str(result.data.get(LINKEDIN_URL_KEY) or "")
+        if result.id in existing_ids or (url and url in existing_urls):
+            continue
+        existing_ids.add(result.id)
+        if url:
+            existing_urls.add(url)
+        external_results.append(result)
+    metrics = dict(discovery.metrics)
+    metrics["selected_sources"] = list(state.sources)
+    await ctx.event_emitter.emit("external_search_completed", metrics)
+    logger.info(
+        "graph.search_external",
+        extra={"added": len(external_results), **metrics},
+    )
+    warnings = list(state.warnings)
+    if not external_results:
+        warnings.append(
+            Warning(
+                code="external_no_results",
+                message="No public LinkedIn profiles matched this search.",
+            )
+        )
+    return _replace(
+        state,
+        results=[*state.results, *external_results],
+        external_metrics=metrics,
+        warnings=warnings,
+    )
+
+
 async def normalize_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     """Agent1 — normalise candidate data quality before matching.
 
@@ -1920,7 +2116,15 @@ async def normalize_candidates(state: GraphState, ctx: NodeContext) -> GraphStat
     if not state.results:
         return state
 
-    normalised = _agent1_normalize(state.results)
+    # External (LinkedIn) results carry structured evidence, not raw
+    # BoondManager fields — Agent1's heuristics don't apply, so pass them
+    # through untouched and normalise only the Boond candidates.
+    boond_results = [r for r in state.results if r.source_tool != LINKEDIN_SOURCE_TOOL]
+    external_results = [r for r in state.results if r.source_tool == LINKEDIN_SOURCE_TOOL]
+    if not boond_results:
+        return state
+
+    normalised = _agent1_normalize(boond_results)
     conflicted = [
         r for r in normalised
         if isinstance(r.data.get(NORM_CONFLICTS), list) and r.data.get(NORM_CONFLICTS)
@@ -1947,7 +2151,7 @@ async def normalize_candidates(state: GraphState, ctx: NodeContext) -> GraphStat
         },
     )
 
-    return _replace(state, results=normalised)
+    return _replace(state, results=[*normalised, *external_results])
 
 
 def _collect_strings(value: object, sink: list[str]) -> None:
@@ -2535,8 +2739,14 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
     re_ranked.sort(key=lambda r: (r.score, _evidence_depth(r)), reverse=True)
 
     # Drop zero-score candidates when positive matches exist, then cap at 25.
-    search_results = [r for r in re_ranked if r.source_tool.startswith("search")]
-    other_results = [r for r in re_ranked if not r.source_tool.startswith("search")]
+    # External (LinkedIn) results are already scored with tri-state semantics
+    # by `search_external`, so they rank in the SAME unified bucket as Boond
+    # candidates (interleaved by score) — not appended after them.
+    def _is_rankable(r: SearchResult) -> bool:
+        return r.source_tool.startswith("search") or r.source_tool == LINKEDIN_SOURCE_TOOL
+
+    search_results = [r for r in re_ranked if _is_rankable(r)]
+    other_results = [r for r in re_ranked if not _is_rankable(r)]
     positive = [r for r in search_results if r.score > 0.0]
     search_results = positive if positive else search_results
     re_ranked = search_results[:25] + other_results
@@ -2551,15 +2761,21 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         role=role,
         required_years=required_years,
     )
+    # `_criteria_status` only inspects BoondManager (search-prefixed) results —
+    # LinkedIn/public profiles have no technical document to "verify" against.
+    # So when the result set has no Boond candidate (e.g. a LinkedIn-only
+    # search), every criterion looks "missing" and the message wrongly claims
+    # it could not verify them. Suppress those Boond-only warnings in that case.
+    has_boond_result = any(r.source_tool.startswith("search") for r in re_ranked)
     warnings = list(state.warnings)
-    if missing and not any(w.code == "criteria_unverified" for w in warnings):
+    if has_boond_result and missing and not any(w.code == "criteria_unverified" for w in warnings):
         warnings.append(
             Warning(
                 code="criteria_unverified",
                 message="could not verify: " + ", ".join(missing),
             )
         )
-    if visible_only and not any(w.code == "criteria_visible" for w in warnings):
+    if has_boond_result and visible_only and not any(w.code == "criteria_visible" for w in warnings):
         warnings.append(
             Warning(
                 code="criteria_visible",
@@ -3562,6 +3778,14 @@ async def execute_llm_plan(state: GraphState, ctx: NodeContext) -> GraphState:
       than creating duplicates.
     """
     if state.llm_plan is None or not state.llm_plan.plan:
+        return state
+
+    # Deterministic routing: skip ALL BoondManager tool calls when Boond is
+    # not among the resolved sources (e.g. LinkedIn-only search). The LLM plan
+    # is ignored for execution; only the interpreted intent is reused by the
+    # external source downstream.
+    if not _boond_requested(state):
+        logger.info("graph.execute_llm_plan.boond_skipped", extra={"sources": state.sources})
         return state
 
     available_by_name = {tool.name: tool for tool in state.available_tools}

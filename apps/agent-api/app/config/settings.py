@@ -393,6 +393,126 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- External candidate discovery (LinkedIn via OpenAI Web Search) -------
+    external_search_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master switch for external (LinkedIn/Web) candidate discovery. "
+            "When false, the LinkedIn source never executes even if requested, "
+            "and 'no source selected' resolves to BoondManager only. When "
+            "true, 'no source selected' resolves to BoondManager + LinkedIn."
+        ),
+    )
+    external_search_provider: str = Field(
+        default="openai_web",
+        description=(
+            "External discovery backend. Only 'openai_web' (OpenAI Responses "
+            "API built-in web_search) is implemented."
+        ),
+    )
+    external_search_model: str = Field(
+        default="gpt-4o",
+        description=(
+            "Model used for external web search via the OpenAI Responses API. "
+            "Must be a model that grounds the built-in web_search tool well: "
+            "gpt-4o (default), gpt-5, gpt-5.4 reliably return real "
+            "url_citation sources for LinkedIn queries, whereas gpt-4o-mini "
+            "tends to fabricate (its ungrounded output is then rejected, so it "
+            "yields few/no results). Not hardcoded — override per environment."
+        ),
+    )
+    external_search_structure_model: str = Field(
+        default="gpt-4o-mini",
+        description=(
+            "Model for the SECOND (structuring) pass of external discovery — it "
+            "reformats already-cited web findings into JSON with no web search, "
+            "so a fast/cheap model keeps latency low with no grounding risk "
+            "(URLs are still validated against the citations). Default "
+            "gpt-4o-mini."
+        ),
+    )
+    external_search_max_queries: int = Field(
+        default=6, ge=1, le=12,
+        description=(
+            "Hard upper bound on the number of complementary web-search "
+            "queries issued per external discovery (the bounded search "
+            "ladder). More passes = better recall on niche queries, at higher "
+            "cost/latency. Bounds cost and latency."
+        ),
+    )
+    external_search_max_results: int = Field(
+        default=20, ge=1, le=100,
+        description=(
+            "Maximum external candidate profiles returned per search after "
+            "canonicalisation and deduplication."
+        ),
+    )
+    external_search_linkedin_only: bool = Field(
+        default=True,
+        description=(
+            "Restrict external discovery to public linkedin.com/in profile "
+            "pages. When true, non-profile LinkedIn pages (company/jobs/posts/"
+            "pulse) and other domains are rejected."
+        ),
+    )
+    external_search_cache_ttl_seconds: float = Field(
+        default=21600.0, ge=0.0,
+        description=(
+            "TTL for the in-process external web-search cache (default 6h). "
+            "Web search is slow and costly, so identical (query + source + "
+            "business settings) discoveries are cached. 0 disables."
+        ),
+    )
+    external_search_api_key: str | None = Field(
+        default=None,
+        description=(
+            "API key for the external web-search provider. Falls back to "
+            "OPENAI_API_KEY when unset. Required when external_search_enabled "
+            "and the LinkedIn source is used."
+        ),
+    )
+    candidate_prefer_consulting_profile: bool = Field(
+        default=True,
+        description=(
+            "SIJO business default: external candidates with evidence of a "
+            "consulting/freelance/ESN profile are preferred (positively "
+            "weighted in ranking). The planner applies this automatically; the "
+            "recruiter need not restate it per query."
+        ),
+    )
+    candidate_long_mission_threshold_months: int = Field(
+        default=24, ge=1, le=120,
+        description=(
+            "SIJO business default: the minimum client-mission duration (in "
+            "months) that counts as a 'long mission'. Evidence of at least one "
+            "mission >= this threshold is strongly valued for external "
+            "candidates. Configurable — never hardcode 24 in the code."
+        ),
+    )
+    external_default_location: str = Field(
+        default="Île-de-France, France",
+        description=(
+            "Default geography for EXTERNAL (LinkedIn) discovery when the "
+            "recruiter's query names no location. SIJO recruits in France, so "
+            "web search targets this area by default (and ranking prefers it) "
+            "instead of returning globally skill-matching profiles. The "
+            "recruiter's own location, when stated, always overrides it. Set "
+            "empty to disable the geo default."
+        ),
+    )
+    candidate_require_french_or_france_experience: bool = Field(
+        default=True,
+        description=(
+            "SIJO hard filter for external candidates: EXCLUDE a discovered "
+            "profile whose current location is a clearly-foreign country AND "
+            "that evidences neither French nor an experience in France. "
+            "Conservative — a profile whose location cannot be placed, or that "
+            "speaks French, or that worked in France, is never excluded (we "
+            "never infer absence). False keeps such profiles (demoted, not "
+            "excluded)."
+        ),
+    )
+
     llm_planner_role: str = Field(
         default=(
             "You are an expert technical recruiter and CV search, matching, "

@@ -112,6 +112,27 @@ count. The backend resolves it to a human-readable label (e.g. `"3-5 ans"`) in
 `experience_label`. The frontend displays `experience_years` when available,
 falling back to `experience_label` when only the level label exists.
 
+## Candidate Sources (BoondManager / LinkedIn)
+
+**Choosing the source (before searching).** The **Filtres** popover next to the
+search input lets the user pick the candidate source(s): **BoondManager**,
+**LinkedIn**, or both. No selection means both (resolved server-side; see
+agent-api ADR-017). LinkedIn searches are slower (they query the public web).
+
+**Result cards.** Each card shows a source badge (`[BOOND]` / `[LINKEDIN]`).
+LinkedIn cards add the strong SIJO qualification chips only — *Consultant
+confirmé* and *Mission longue confirmée : N mois* (weak/unknown signals are not
+shown) — plus a link to the public profile and a "public info may be
+incomplete" note.
+
+**Filtering the results (after searching).** The results toolbar has a single
+**Filtres** popover grouping every display-only filter, as sections:
+available/strict toggles, **Source** (All / BoondManager / LinkedIn — shown only
+when the results span more than one source), **États** (Boond pipeline states
+present), and **Tri** (received order / score). These filter the already-received
+cards on the client (no new backend query); the button badge counts the active
+filters.
+
 ## Candidate Drawer ("Voir plus")
 
 Clicking **Voir plus** on a candidate card opens a side drawer with enriched

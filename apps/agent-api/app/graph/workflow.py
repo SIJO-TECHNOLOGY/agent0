@@ -19,6 +19,7 @@ from app.graph.nodes import (
     rank_candidates,
     reflect_on_results,
     replan_if_needed,
+    search_external,
     select_tools,
     should_replan,
     should_replan_llm,
@@ -52,6 +53,7 @@ def build_deterministic_workflow(ctx: NodeContext):
     graph.add_node("evaluate_results", _bind(evaluate_results, ctx))
     graph.add_node("replan_if_needed", _bind(replan_if_needed, ctx))
     graph.add_node("enrich_candidates", _bind(enrich_candidates, ctx))
+    graph.add_node("search_external", _bind(search_external, ctx))
     graph.add_node("normalize_candidates", _bind(normalize_candidates, ctx))
     graph.add_node("rank_candidates", _bind(rank_candidates, ctx))
     graph.add_node("generate_final_response", _bind(generate_final_response, ctx))
@@ -70,7 +72,8 @@ def build_deterministic_workflow(ctx: NodeContext):
             "enrich_candidates": "enrich_candidates",
         },
     )
-    graph.add_edge("enrich_candidates", "normalize_candidates")
+    graph.add_edge("enrich_candidates", "search_external")
+    graph.add_edge("search_external", "normalize_candidates")
     graph.add_edge("normalize_candidates", "rank_candidates")
     graph.add_edge("rank_candidates", "generate_final_response")
     graph.add_edge("generate_final_response", END)
@@ -104,6 +107,7 @@ def build_llm_workflow(ctx: NodeContext):
     graph.add_node("plan_with_llm", _bind(plan_with_llm, ctx))
     graph.add_node("execute_llm_plan", _bind(execute_llm_plan, ctx))
     graph.add_node("enrich_candidates", _bind(enrich_candidates, ctx))
+    graph.add_node("search_external", _bind(search_external, ctx))
     graph.add_node("normalize_candidates", _bind(normalize_candidates, ctx))
     graph.add_node("evaluate_results", _bind(evaluate_results, ctx))
     graph.add_node("rank_candidates", _bind(rank_candidates, ctx))
@@ -114,7 +118,8 @@ def build_llm_workflow(ctx: NodeContext):
     graph.add_edge("discover_mcp_tools", "plan_with_llm")
     graph.add_edge("plan_with_llm", "execute_llm_plan")
     graph.add_edge("execute_llm_plan", "enrich_candidates")
-    graph.add_edge("enrich_candidates", "normalize_candidates")
+    graph.add_edge("enrich_candidates", "search_external")
+    graph.add_edge("search_external", "normalize_candidates")
     graph.add_edge("normalize_candidates", "evaluate_results")
     graph.add_edge("evaluate_results", "rank_candidates")
     graph.add_edge("rank_candidates", "reflect_on_results")

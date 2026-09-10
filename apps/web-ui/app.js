@@ -48,6 +48,9 @@ const state = {
   candidateStates: null,
   candidateStatesLoading: false,
   stateFilterSelection: new Set(),
+  // Candidate source selection (BoondManager / LinkedIn). Empty = both
+  // (the backend enforces this default authoritatively).
+  sourceSelection: new Set(),
 };
 
 function generateSessionId() {
@@ -112,6 +115,10 @@ const elements = {
   stateFilterAll: document.getElementById("stateFilterAll"),
   stateFilterNone: document.getElementById("stateFilterNone"),
   stateFilterStatus: document.getElementById("stateFilterStatus"),
+  sourceFilter: document.getElementById("sourceFilter"),
+  sourceBoond: document.getElementById("sourceBoond"),
+  sourceLinkedin: document.getElementById("sourceLinkedin"),
+  sourceLinkedinWrap: document.getElementById("sourceLinkedinWrap"),
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -205,6 +212,7 @@ function bindEvents() {
   if (elements.stateFilterNone) {
     elements.stateFilterNone.addEventListener("click", () => setAllStateFilter(false));
   }
+  setupSourceFilter();
   document.addEventListener("click", (event) => {
     if (
       elements.stateFilterPanel
@@ -408,6 +416,29 @@ function updateStateFilterCount() {
 function buildSearchFilters() {
   const selected = [...state.stateFilterSelection];
   return selected.length ? { candidate_states: selected } : {};
+}
+
+function setupSourceFilter() {
+  // Hide the LinkedIn option when the external source is not built into this
+  // deployment. The backend still enforces the real availability gate.
+  if (!FEATURES.linkedin_source && elements.sourceLinkedinWrap) {
+    elements.sourceLinkedinWrap.hidden = true;
+  }
+  const bind = (input, value) => {
+    if (!input) return;
+    input.addEventListener("change", () => {
+      if (input.checked) state.sourceSelection.add(value);
+      else state.sourceSelection.delete(value);
+    });
+  };
+  bind(elements.sourceBoond, "boond");
+  if (FEATURES.linkedin_source) bind(elements.sourceLinkedin, "linkedin");
+}
+
+// Selected candidate sources, or [] when none are ticked (backend resolves
+// "no selection" to both, or Boond only when external search is disabled).
+function buildSelectedSources() {
+  return [...state.sourceSelection];
 }
 
 function applyFeatureVisibility() {
@@ -1042,7 +1073,7 @@ function renderCandidateCards(candidates, ui = {}) {
   wrapper.className = "candidate-results";
 
   // Preserve filter/sort state across re-renders (e.g. language switch).
-  const viewState = { strictOnly: false, availableOnly: false, sortMode: "default", states: [] };
+  const viewState = { strictOnly: false, availableOnly: false, sortMode: "default", states: [], source: "all" };
   populateCandidateResults(wrapper, candidates, ui, viewState);
 
   // Register for re-render on language change (toolbar + cards are built with
@@ -1068,11 +1099,13 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
   const stateInputs = [...toolbar.querySelectorAll("[data-state-filter]")];
   const stateCountBadge = toolbar.querySelector("[data-state-count]");
   const stateFilterBox = toolbar.querySelector(".result-state-filter");
+  const sourceSelect = toolbar.querySelector("[data-source]");
 
   // Restore prior view state so a re-render does not reset the user's choices.
   if (strictInput) strictInput.checked = viewState.strictOnly;
   if (availableInput) availableInput.checked = viewState.availableOnly;
   if (sortSelect) sortSelect.value = viewState.sortMode;
+  if (sourceSelect) sourceSelect.value = viewState.source || "all";
   const restoredStates = Array.isArray(viewState.states) ? viewState.states : [];
   stateInputs.forEach((input) => {
     input.checked = restoredStates.includes(input.value);
@@ -1083,12 +1116,18 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
     viewState.availableOnly = Boolean(availableInput?.checked);
     viewState.sortMode = sortSelect?.value || "default";
     viewState.states = stateInputs.filter((input) => input.checked).map((input) => input.value);
+    viewState.source = sourceSelect?.value || "all";
 
+    const activeFilterCount =
+      (viewState.strictOnly ? 1 : 0) +
+      (viewState.availableOnly ? 1 : 0) +
+      (viewState.source && viewState.source !== "all" ? 1 : 0) +
+      viewState.states.length;
     if (stateCountBadge) {
-      stateCountBadge.textContent = String(viewState.states.length);
-      stateCountBadge.hidden = viewState.states.length === 0;
+      stateCountBadge.textContent = String(activeFilterCount);
+      stateCountBadge.hidden = activeFilterCount === 0;
     }
-    stateFilterBox?.classList.toggle("active", viewState.states.length > 0);
+    stateFilterBox?.classList.toggle("active", activeFilterCount > 0);
 
     list.innerHTML = "";
 
@@ -1102,6 +1141,11 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
     if (viewState.states.length) {
       visibleCandidates = visibleCandidates.filter((candidate) =>
         viewState.states.includes(candidateStateValue(candidate)),
+      );
+    }
+    if (viewState.source !== "all") {
+      visibleCandidates = visibleCandidates.filter((candidate) =>
+        candidateSourceValues(candidate).includes(viewState.source),
       );
     }
 
@@ -1145,6 +1189,8 @@ function renderCandidateCard(candidate) {
   title.textContent = candidate.title || t("candidate.fallback_title");
 
   identity.append(name, title);
+  const badges = createSourceBadges(candidate);
+  if (badges) identity.append(badges);
   header.append(identity, createMatchBadge(candidate.match_score));
 
   const meta = document.createElement("div");
@@ -1183,6 +1229,13 @@ function renderCandidateCard(candidate) {
   boondBtn.disabled = !candidate.boond_url;
   boondBtn.addEventListener("click", () => openBoondManager(candidate.boond_url));
 
+  const linkedinBtn = document.createElement("a");
+  linkedinBtn.className = "candidate-btn secondary";
+  linkedinBtn.textContent = t("candidate.open_linkedin");
+  linkedinBtn.href = candidate.linkedin_url || "#";
+  linkedinBtn.target = "_blank";
+  linkedinBtn.rel = "noopener noreferrer";
+
   if (FEATURES.candidate_drawer && CANDIDATE_CONFIG.show_candidate_drawer) {
     actions.appendChild(detailsBtn);
   }
@@ -1191,8 +1244,13 @@ function renderCandidateCard(candidate) {
     actions.appendChild(boondBtn);
   }
 
+  if (candidate.linkedin_url) {
+    actions.appendChild(linkedinBtn);
+  }
+
   card.append(
     header,
+    createQualificationChips(candidate),
     meta,
     renderHighlightTags(candidate.highlights),
     summary,
@@ -1200,10 +1258,73 @@ function renderCandidateCard(candidate) {
     skills,
     renderExperiences(candidate.experiences),
     renderCandidateInsights(candidate),
+    renderPublicProfileNote(candidate),
     actions,
   );
 
   return card;
+}
+
+function createSourceBadges(candidate) {
+  const raw = Array.isArray(candidate.sources) && candidate.sources.length
+    ? candidate.sources
+    : (candidate.source ? [candidate.source] : []);
+  const wrap = document.createElement("div");
+  wrap.className = "source-badges";
+  const seen = new Set();
+  raw.forEach((source) => {
+    const key = String(source).toLowerCase();
+    let cls = null;
+    let label = null;
+    if (key === "boond" || key === "boondmanager") { cls = "boond"; label = "BOOND"; }
+    else if (key === "linkedin" || key === "linkedin_web") { cls = "linkedin"; label = "LINKEDIN"; }
+    if (!cls || seen.has(cls)) return;
+    seen.add(cls);
+    const badge = document.createElement("span");
+    badge.className = `source-badge source-badge-${cls}`;
+    badge.textContent = label;
+    wrap.appendChild(badge);
+  });
+  return seen.size ? wrap : null;
+}
+
+function createQualificationChips(candidate) {
+  const wrap = document.createElement("div");
+  wrap.className = "qualification-chips";
+
+  // Only show strong/positive SIJO signals — the weak "probable consultant"
+  // and the "mission length: not enough info" chips are noise, so they are
+  // intentionally not rendered.
+  const cs = candidate.consulting_status;
+  if (cs === "confirmed") addChip(wrap, t("candidate.consulting.confirmed"), "pos");
+
+  const lm = candidate.long_mission_status;
+  const months = candidate.longest_mission_months;
+  if (lm === "confirmed") {
+    const label = months
+      ? tCount("candidate.long_mission.confirmed_months", months, { count: months })
+      : t("candidate.long_mission.confirmed");
+    addChip(wrap, label, "pos");
+  } else if (lm === "probable") {
+    addChip(wrap, t("candidate.long_mission.probable"), "maybe");
+  }
+
+  return wrap.children.length ? wrap : document.createComment("no-qualification");
+}
+
+function addChip(wrap, label, variant) {
+  const chip = document.createElement("span");
+  chip.className = `qualification-chip qualification-chip-${variant}`;
+  chip.textContent = label;
+  wrap.appendChild(chip);
+}
+
+function renderPublicProfileNote(candidate) {
+  if (!candidate.public_profile_incomplete) return document.createComment("no-note");
+  const note = document.createElement("p");
+  note.className = "public-profile-note";
+  note.textContent = t("candidate.public_incomplete");
+  return note;
 }
 
 function openCandidateDrawer(candidate) {
@@ -1497,6 +1618,7 @@ async function runSearchStream(text, thinking) {
       signal: state.abortController.signal,
       conversationId: ensureSessionId(),
       filters: buildSearchFilters(),
+      sources: buildSelectedSources(),
     },
   );
 
@@ -1625,28 +1747,38 @@ function createMetaItem(label, value) {
   return item;
 }
 
+function candidateSourceValues(candidate) {
+  const raw = Array.isArray(candidate.sources) && candidate.sources.length
+    ? candidate.sources
+    : (candidate.source ? [candidate.source] : []);
+  const out = new Set();
+  raw.forEach((sr) => {
+    const key = String(sr).toLowerCase();
+    if (key === "boond" || key === "boondmanager") out.add("boond");
+    else if (key === "linkedin" || key === "linkedin_web") out.add("linkedin_web");
+  });
+  return [...out];
+}
+
 function renderCandidateResultsToolbar(ui, candidates) {
   const toolbar = document.createElement("section");
   toolbar.className = "candidate-results-toolbar";
 
   const copy = document.createElement("div");
   copy.className = "candidate-results-copy";
-
   const title = document.createElement("h3");
   title.textContent = ui.title || tCount("results.count", candidates.length, { count: candidates.length });
   copy.appendChild(title);
-
   if (ui.subtitle) {
     const subtitle = document.createElement("p");
     subtitle.textContent = ui.subtitle;
     copy.appendChild(subtitle);
   }
-
-  const filters = Array.isArray(ui.filters_summary) ? ui.filters_summary : [];
-  if (filters.length) {
+  const summaryFilters = Array.isArray(ui.filters_summary) ? ui.filters_summary : [];
+  if (summaryFilters.length) {
     const filterList = document.createElement("div");
     filterList.className = "result-filter-tags";
-    filters.forEach((filter) => {
+    summaryFilters.forEach((filter) => {
       const tag = document.createElement("span");
       tag.textContent = filter;
       filterList.appendChild(tag);
@@ -1654,128 +1786,125 @@ function renderCandidateResultsToolbar(ui, candidates) {
     copy.appendChild(filterList);
   }
 
+  // A single "Filtres" popover grouping every display filter + the sort.
   const controls = document.createElement("div");
   controls.className = "candidate-result-controls";
 
-  if (candidates.some((candidate) => typeof candidate.is_full_match === "boolean")) {
-    const label = document.createElement("label");
-    label.className = "availability-toggle";
+  const container = document.createElement("div");
+  container.className = "state-filter result-state-filter result-filters";
 
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "state-filter-btn";
+  btn.setAttribute("aria-haspopup", "true");
+  btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-label", t("results.filters_button"));
+  const icon = document.createElement("span");
+  icon.className = "state-filter-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>';
+  const btnText = document.createElement("span");
+  btnText.textContent = t("results.filters_button");
+  const count = document.createElement("span");
+  count.className = "state-filter-count";
+  count.dataset.stateCount = "true";
+  count.hidden = true;
+  btn.append(icon, btnText, count);
+
+  const panel = document.createElement("div");
+  panel.className = "state-filter-panel";
+  panel.hidden = true;
+
+  const addSectionTitle = (key) => {
+    const heading = document.createElement("p");
+    heading.className = "filter-section-title";
+    heading.textContent = t(key);
+    panel.appendChild(heading);
+  };
+  const addToggle = (dataAttr, labelKey) => {
+    const label = document.createElement("label");
+    label.className = "state-filter-option";
     const input = document.createElement("input");
     input.type = "checkbox";
-    input.dataset.strictOnly = "true";
-
+    input.dataset[dataAttr] = "true";
     const text = document.createElement("span");
-    text.textContent = t("results.strict_toggle");
-
+    text.textContent = t(labelKey);
     label.append(input, text);
-    controls.appendChild(label);
+    panel.appendChild(label);
+  };
+
+  if (candidates.some((c) => typeof c.is_full_match === "boolean")) addToggle("strictOnly", "results.strict_toggle");
+  if (candidates.some((c) => c.availability)) addToggle("availableOnly", "results.available_toggle");
+
+  // Source — single-choice, only when the results span more than one source.
+  const sourceValues = new Set();
+  candidates.forEach((c) => candidateSourceValues(c).forEach((v) => sourceValues.add(v)));
+  if (sourceValues.size > 1) {
+    addSectionTitle("results.source_title");
+    const src = document.createElement("select");
+    src.dataset.source = "true";
+    src.className = "filter-select";
+    src.setAttribute("aria-label", t("results.source_aria"));
+    [["all", t("results.source_all")], ["boond", t("results.source_boond")], ["linkedin_web", t("results.source_linkedin")]]
+      .forEach(([value, label]) => {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        src.appendChild(opt);
+      });
+    panel.appendChild(src);
   }
 
-  if (candidates.some((candidate) => candidate.availability)) {
-    const label = document.createElement("label");
-    label.className = "availability-toggle";
-
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.dataset.availableOnly = "true";
-
-    const text = document.createElement("span");
-    text.textContent = t("results.available_toggle");
-
-    label.append(input, text);
-    controls.appendChild(label);
-  }
-
-  // Compact "États" dropdown: one checkbox per BoondManager state present
-  // in the received results (display-only filtering — no new backend query).
+  // États — one checkbox per pipeline state present in the received results.
   const stateOptions = collectResultStateOptions(candidates);
   if (stateOptions.length) {
-    const container = document.createElement("div");
-    container.className = "state-filter result-state-filter";
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "state-filter-btn";
-    btn.setAttribute("aria-haspopup", "true");
-    btn.setAttribute("aria-expanded", "false");
-    btn.setAttribute("aria-label", t("results.states_group_aria"));
-
-    const icon = document.createElement("span");
-    icon.className = "state-filter-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>';
-
-    const btnText = document.createElement("span");
-    btnText.textContent = t("results.states_button");
-
-    const count = document.createElement("span");
-    count.className = "state-filter-count";
-    count.dataset.stateCount = "true";
-    count.hidden = true;
-
-    btn.append(icon, btnText, count);
-
-    const panel = document.createElement("div");
-    panel.className = "state-filter-panel";
-    panel.hidden = true;
-
+    addSectionTitle("results.states_button");
     stateOptions.forEach((option) => {
       const label = document.createElement("label");
       label.className = "state-filter-option";
-
       const input = document.createElement("input");
       input.type = "checkbox";
       input.value = option.value;
       input.dataset.stateFilter = "true";
-
       const text = document.createElement("span");
       text.textContent = option.label;
-
       label.append(input, text);
       panel.appendChild(label);
     });
-
-    const closePanel = () => {
-      panel.hidden = true;
-      btn.setAttribute("aria-expanded", "false");
-    };
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const willOpen = panel.hidden;
-      panel.hidden = !willOpen;
-      btn.setAttribute("aria-expanded", String(willOpen));
-    });
-    const onDocClick = (event) => {
-      // Self-cleaning: drop the listener once this result block is gone.
-      if (!document.body.contains(container)) {
-        document.removeEventListener("click", onDocClick);
-        return;
-      }
-      if (!panel.hidden && !container.contains(event.target)) closePanel();
-    };
-    document.addEventListener("click", onDocClick);
-
-    container.append(btn, panel);
-    controls.appendChild(container);
   }
 
-  if (candidates.some((candidate) => candidate.match_score !== null && candidate.match_score !== undefined)) {
+  // Sort.
+  if (candidates.some((c) => c.match_score !== null && c.match_score !== undefined)) {
+    addSectionTitle("results.sort_title");
     const sort = document.createElement("select");
     sort.dataset.sort = "true";
+    sort.className = "filter-select";
     sort.setAttribute("aria-label", t("results.sort_aria"));
-
-    const defaultOption = document.createElement("option");
-    defaultOption.value = "default";
-    defaultOption.textContent = t("results.sort_default");
-
-    const scoreOption = document.createElement("option");
-    scoreOption.value = "score";
-    scoreOption.textContent = t("results.sort_score");
-
-    sort.append(defaultOption, scoreOption);
-    controls.appendChild(sort);
+    const d = document.createElement("option");
+    d.value = "default";
+    d.textContent = t("results.sort_default");
+    const sc = document.createElement("option");
+    sc.value = "score";
+    sc.textContent = t("results.sort_score");
+    sort.append(d, sc);
+    panel.appendChild(sort);
   }
+
+  const closePanel = () => { panel.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const willOpen = panel.hidden;
+    panel.hidden = !willOpen;
+    btn.setAttribute("aria-expanded", String(willOpen));
+  });
+  const onDocClick = (event) => {
+    if (!document.body.contains(container)) { document.removeEventListener("click", onDocClick); return; }
+    if (!panel.hidden && !container.contains(event.target)) closePanel();
+  };
+  document.addEventListener("click", onDocClick);
+
+  container.append(btn, panel);
+  controls.appendChild(container);
 
   toolbar.append(copy, controls);
   return toolbar;

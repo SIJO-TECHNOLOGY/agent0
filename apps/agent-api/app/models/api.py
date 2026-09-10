@@ -29,6 +29,16 @@ class SearchRequest(BaseModel):
         default=None,
         description="Camel-case session identifier accepted from the web UI.",
     )
+    sources: list[str] | None = Field(
+        default=None,
+        description=(
+            "Candidate sources to search: any of 'boond', 'linkedin'. Empty "
+            "list or omitted means 'no source selected' — resolved server-side "
+            "to BOTH when external search is enabled, else BoondManager only. "
+            "The resolution is authoritative; the frontend cannot force an "
+            "unavailable source."
+        ),
+    )
 
     @field_validator("query")
     @classmethod
@@ -79,6 +89,23 @@ class CandidateCard(BaseModel):
     activity_areas: list[str] = Field(default_factory=list)
     tools: list[dict[str, object]] = Field(default_factory=list)
     languages: list[dict[str, object]] = Field(default_factory=list)
+    # --- Multi-source fields -------------------------------------------------
+    # ``sources`` lists every provider this card was assembled from, e.g.
+    # ["boond"], ["linkedin_web"], or ["boond", "linkedin_web"] when merged.
+    sources: list[str] = Field(default_factory=list)
+    boond_ids: list[str] = Field(default_factory=list)
+    linkedin_url: str | None = None
+    # SIJO qualification (external candidates). Tri-state strings:
+    # "confirmed" | "probable" | "unknown" | "no". ``None`` when not assessed
+    # (e.g. a pure BoondManager candidate).
+    consulting_status: str | None = None
+    long_mission_status: str | None = None
+    longest_mission_months: int | None = None
+    # Grounded external evidence items ({field, value, source_url}); [] for
+    # BoondManager-only candidates.
+    external_evidence: list[dict[str, object]] = Field(default_factory=list)
+    # True for LinkedIn/public-web candidates whose public data may be partial.
+    public_profile_incomplete: bool = False
 
 
 class CandidateCardsUI(BaseModel):
@@ -145,6 +172,13 @@ class ChatRequest(BaseModel):
     sessionId: str | None = None
     debug: bool = False
     interaction: dict[str, object] | None = None
+    sources: list[str] | None = Field(
+        default=None,
+        description=(
+            "Candidate sources for this turn: any of 'boond', 'linkedin'. "
+            "Empty/omitted = no source selected (resolved server-side)."
+        ),
+    )
 
     @field_validator("message")
     @classmethod

@@ -128,10 +128,23 @@
           <div class="state-filter" id="stateFilter">
             <button type="button" class="state-filter-btn" id="stateFilterBtn" aria-haspopup="true" aria-expanded="false" aria-controls="stateFilterPanel">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>
-              <span data-i18n="filters.states_label">États Boond</span>
+              <span data-i18n="filters.filter_label">Filtres</span>
               <span class="state-filter-count" id="stateFilterCount" hidden></span>
             </button>
             <div class="state-filter-panel" id="stateFilterPanel" hidden>
+              <div class="filter-section" id="sourceFilter">
+                <p class="filter-section-title" data-i18n="filters.sources_label">Rechercher dans</p>
+                <label class="state-filter-option">
+                  <input type="checkbox" id="sourceBoond" value="boond" />
+                  <span data-i18n="filters.source_boond">BoondManager</span>
+                </label>
+                <label class="state-filter-option" id="sourceLinkedinWrap">
+                  <input type="checkbox" id="sourceLinkedin" value="linkedin" />
+                  <span data-i18n="filters.source_linkedin">LinkedIn</span>
+                </label>
+              </div>
+              <hr class="filter-divider" />
+              <p class="filter-section-title" data-i18n="filters.states_label">États Boond</p>
               <div class="state-filter-actions">
                 <button type="button" id="stateFilterAll" data-i18n="filters.check_all">Tout cocher</button>
                 <button type="button" id="stateFilterNone" data-i18n="filters.uncheck_all">Tout décocher</button>

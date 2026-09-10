@@ -23,7 +23,8 @@ The frontend never consumes raw MCP or BoondManager payloads by default.
 
 ```json
 {
-  "query": "Find Java candidates in Paris",
+  "query": "Find Java consultants in Paris",
+  "sources": ["boond", "linkedin"],
   "filters": { "candidate_states": ["7", "8"] }
 }
 ```
@@ -31,6 +32,7 @@ The frontend never consumes raw MCP or BoondManager payloads by default.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `query` | string | yes | Natural-language candidate search request. |
+| `sources` | array of strings | no | Candidate sources to search: any of `"boond"`, `"linkedin"`. Empty/omitted = "no selection" (resolved server-side). May also be passed inside `filters.sources`. |
 | `filters` | object | no | Optional structured filters from the UI. Defaults to an empty object. |
 
 Supported filter keys:
@@ -39,6 +41,22 @@ Supported filter keys:
 | --- | --- | --- |
 | `candidate_states` | array of state ids | Candidate pipeline states selected in the UI (ids from `GET /api/candidate-states`). Multiple states are additive (union) and applied server-side on every search pass (`candidateStates`). See ADR-015. |
 | `search_page` | integer | Session-driven provider page for "show me other profiles" follow-ups. |
+
+### Candidate sources (multi-source)
+
+The `sources` selection is resolved **once**, server-side, and drives
+deterministic routing (the LLM planner can never override it). See ADR-017.
+
+| Selection | Effective sources |
+| --- | --- |
+| `["boond"]` | BoondManager only |
+| `["linkedin"]` | LinkedIn only |
+| `["boond","linkedin"]` | both |
+| `[]` or omitted | both when external search is enabled, else BoondManager only |
+
+When `EXTERNAL_SEARCH_ENABLED=false`, LinkedIn is dropped from any resolved set
+(never route to a disabled source). LinkedIn discovery targets **public** web
+pages only (never LinkedIn Recruiter / private data).
 
 ## Chat Request
 
@@ -54,6 +72,7 @@ Supported filter keys:
 | `message` | string | yes, unless `interaction` is provided | User message from the chat UI. |
 | `conversation_id` | string | no | Existing conversation id. A new one is created when omitted. |
 | `interaction` | object | no | Structured UI interaction, such as clarification values. |
+| `sources` | array of strings | no | Candidate sources for this turn (`"boond"`, `"linkedin"`). Empty/omitted = no selection. |
 
 ## Response Body
 
@@ -115,6 +134,14 @@ BoondManager MCP server results.
 | `boond_url` | string \| null | External link when the MCP result provides one. |
 | `state_label` | string \| null | Candidate pipeline-state label resolved from the dictionary (all cards, not just the enriched slice). |
 | `state_id` | string \| null | Stable pipeline-state id backing `state_label`; used by the frontend's display-only state filter. |
+| `sources` | array of strings | Providers this card was assembled from: `["boond"]`, `["linkedin_web"]`, or both when merged. |
+| `boond_ids` | array of strings | BoondManager record id(s) behind the card (multiple when several Boond records map to one person). |
+| `linkedin_url` | string \| null | Canonical public LinkedIn profile URL for external candidates. |
+| `consulting_status` | string \| null | SIJO consultant qualification: `confirmed` / `probable` / `unknown` / `no` (`null` for pure Boond cards). |
+| `long_mission_status` | string \| null | Long-mission (>= threshold) evidence: `confirmed` / `probable` / `unknown` / `no`. |
+| `longest_mission_months` | number \| null | Longest evidenced mission duration in months, when known. |
+| `external_evidence` | array | Grounded `{field, value, source_url}` items for external candidates; `[]` otherwise. |
+| `public_profile_incomplete` | boolean | `true` for LinkedIn/public-web cards whose public data may be partial. |
 
 ## Normalization Rules
 

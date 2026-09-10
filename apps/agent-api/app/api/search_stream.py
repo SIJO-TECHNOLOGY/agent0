@@ -325,8 +325,13 @@ def _build_service(
 
     llm_planner = getattr(request.app.state, "llm_planner", None)
     rag_service = getattr(request.app.state, "rag_service", None)
+    external_source = getattr(request.app.state, "external_source", None)
     return build_search_service(
-        mcp_client, settings, llm_planner=llm_planner, rag_service=rag_service
+        mcp_client,
+        settings,
+        llm_planner=llm_planner,
+        rag_service=rag_service,
+        external_source=external_source,
     )
 
 
