@@ -1118,11 +1118,16 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
     viewState.states = stateInputs.filter((input) => input.checked).map((input) => input.value);
     viewState.source = sourceSelect?.value || "all";
 
+    const activeFilterCount =
+      (viewState.strictOnly ? 1 : 0) +
+      (viewState.availableOnly ? 1 : 0) +
+      (viewState.source && viewState.source !== "all" ? 1 : 0) +
+      viewState.states.length;
     if (stateCountBadge) {
-      stateCountBadge.textContent = String(viewState.states.length);
-      stateCountBadge.hidden = viewState.states.length === 0;
+      stateCountBadge.textContent = String(activeFilterCount);
+      stateCountBadge.hidden = activeFilterCount === 0;
     }
-    stateFilterBox?.classList.toggle("active", viewState.states.length > 0);
+    stateFilterBox?.classList.toggle("active", activeFilterCount > 0);
 
     list.innerHTML = "";
 
@@ -1761,22 +1766,19 @@ function renderCandidateResultsToolbar(ui, candidates) {
 
   const copy = document.createElement("div");
   copy.className = "candidate-results-copy";
-
   const title = document.createElement("h3");
   title.textContent = ui.title || tCount("results.count", candidates.length, { count: candidates.length });
   copy.appendChild(title);
-
   if (ui.subtitle) {
     const subtitle = document.createElement("p");
     subtitle.textContent = ui.subtitle;
     copy.appendChild(subtitle);
   }
-
-  const filters = Array.isArray(ui.filters_summary) ? ui.filters_summary : [];
-  if (filters.length) {
+  const summaryFilters = Array.isArray(ui.filters_summary) ? ui.filters_summary : [];
+  if (summaryFilters.length) {
     const filterList = document.createElement("div");
     filterList.className = "result-filter-tags";
-    filters.forEach((filter) => {
+    summaryFilters.forEach((filter) => {
       const tag = document.createElement("span");
       tag.textContent = filter;
       filterList.appendChild(tag);
@@ -1784,118 +1786,64 @@ function renderCandidateResultsToolbar(ui, candidates) {
     copy.appendChild(filterList);
   }
 
+  // A single "Filtres" popover grouping every display filter + the sort.
   const controls = document.createElement("div");
   controls.className = "candidate-result-controls";
 
-  if (candidates.some((candidate) => typeof candidate.is_full_match === "boolean")) {
-    const label = document.createElement("label");
-    label.className = "availability-toggle";
+  const container = document.createElement("div");
+  container.className = "state-filter result-state-filter result-filters";
 
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "state-filter-btn";
+  btn.setAttribute("aria-haspopup", "true");
+  btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-label", t("results.filters_button"));
+  const icon = document.createElement("span");
+  icon.className = "state-filter-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>';
+  const btnText = document.createElement("span");
+  btnText.textContent = t("results.filters_button");
+  const count = document.createElement("span");
+  count.className = "state-filter-count";
+  count.dataset.stateCount = "true";
+  count.hidden = true;
+  btn.append(icon, btnText, count);
+
+  const panel = document.createElement("div");
+  panel.className = "state-filter-panel";
+  panel.hidden = true;
+
+  const addSectionTitle = (key) => {
+    const heading = document.createElement("p");
+    heading.className = "filter-section-title";
+    heading.textContent = t(key);
+    panel.appendChild(heading);
+  };
+  const addToggle = (dataAttr, labelKey) => {
+    const label = document.createElement("label");
+    label.className = "state-filter-option";
     const input = document.createElement("input");
     input.type = "checkbox";
-    input.dataset.strictOnly = "true";
-
+    input.dataset[dataAttr] = "true";
     const text = document.createElement("span");
-    text.textContent = t("results.strict_toggle");
-
+    text.textContent = t(labelKey);
     label.append(input, text);
-    controls.appendChild(label);
-  }
+    panel.appendChild(label);
+  };
 
-  if (candidates.some((candidate) => candidate.availability)) {
-    const label = document.createElement("label");
-    label.className = "availability-toggle";
+  if (candidates.some((c) => typeof c.is_full_match === "boolean")) addToggle("strictOnly", "results.strict_toggle");
+  if (candidates.some((c) => c.availability)) addToggle("availableOnly", "results.available_toggle");
 
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.dataset.availableOnly = "true";
-
-    const text = document.createElement("span");
-    text.textContent = t("results.available_toggle");
-
-    label.append(input, text);
-    controls.appendChild(label);
-  }
-
-  // Compact "États" dropdown: one checkbox per BoondManager state present
-  // in the received results (display-only filtering — no new backend query).
-  const stateOptions = collectResultStateOptions(candidates);
-  if (stateOptions.length) {
-    const container = document.createElement("div");
-    container.className = "state-filter result-state-filter";
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "state-filter-btn";
-    btn.setAttribute("aria-haspopup", "true");
-    btn.setAttribute("aria-expanded", "false");
-    btn.setAttribute("aria-label", t("results.states_group_aria"));
-
-    const icon = document.createElement("span");
-    icon.className = "state-filter-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>';
-
-    const btnText = document.createElement("span");
-    btnText.textContent = t("results.states_button");
-
-    const count = document.createElement("span");
-    count.className = "state-filter-count";
-    count.dataset.stateCount = "true";
-    count.hidden = true;
-
-    btn.append(icon, btnText, count);
-
-    const panel = document.createElement("div");
-    panel.className = "state-filter-panel";
-    panel.hidden = true;
-
-    stateOptions.forEach((option) => {
-      const label = document.createElement("label");
-      label.className = "state-filter-option";
-
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.value = option.value;
-      input.dataset.stateFilter = "true";
-
-      const text = document.createElement("span");
-      text.textContent = option.label;
-
-      label.append(input, text);
-      panel.appendChild(label);
-    });
-
-    const closePanel = () => {
-      panel.hidden = true;
-      btn.setAttribute("aria-expanded", "false");
-    };
-    btn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const willOpen = panel.hidden;
-      panel.hidden = !willOpen;
-      btn.setAttribute("aria-expanded", String(willOpen));
-    });
-    const onDocClick = (event) => {
-      // Self-cleaning: drop the listener once this result block is gone.
-      if (!document.body.contains(container)) {
-        document.removeEventListener("click", onDocClick);
-        return;
-      }
-      if (!panel.hidden && !container.contains(event.target)) closePanel();
-    };
-    document.addEventListener("click", onDocClick);
-
-    container.append(btn, panel);
-    controls.appendChild(container);
-  }
-
-  // Source display filter — shown only when results span more than one source.
+  // Source — single-choice, only when the results span more than one source.
   const sourceValues = new Set();
   candidates.forEach((c) => candidateSourceValues(c).forEach((v) => sourceValues.add(v)));
   if (sourceValues.size > 1) {
+    addSectionTitle("results.source_title");
     const src = document.createElement("select");
     src.dataset.source = "true";
+    src.className = "filter-select";
     src.setAttribute("aria-label", t("results.source_aria"));
     [["all", t("results.source_all")], ["boond", t("results.source_boond")], ["linkedin_web", t("results.source_linkedin")]]
       .forEach(([value, label]) => {
@@ -1904,25 +1852,59 @@ function renderCandidateResultsToolbar(ui, candidates) {
         opt.textContent = label;
         src.appendChild(opt);
       });
-    controls.appendChild(src);
+    panel.appendChild(src);
   }
 
-  if (candidates.some((candidate) => candidate.match_score !== null && candidate.match_score !== undefined)) {
+  // États — one checkbox per pipeline state present in the received results.
+  const stateOptions = collectResultStateOptions(candidates);
+  if (stateOptions.length) {
+    addSectionTitle("results.states_button");
+    stateOptions.forEach((option) => {
+      const label = document.createElement("label");
+      label.className = "state-filter-option";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = option.value;
+      input.dataset.stateFilter = "true";
+      const text = document.createElement("span");
+      text.textContent = option.label;
+      label.append(input, text);
+      panel.appendChild(label);
+    });
+  }
+
+  // Sort.
+  if (candidates.some((c) => c.match_score !== null && c.match_score !== undefined)) {
+    addSectionTitle("results.sort_title");
     const sort = document.createElement("select");
     sort.dataset.sort = "true";
+    sort.className = "filter-select";
     sort.setAttribute("aria-label", t("results.sort_aria"));
-
-    const defaultOption = document.createElement("option");
-    defaultOption.value = "default";
-    defaultOption.textContent = t("results.sort_default");
-
-    const scoreOption = document.createElement("option");
-    scoreOption.value = "score";
-    scoreOption.textContent = t("results.sort_score");
-
-    sort.append(defaultOption, scoreOption);
-    controls.appendChild(sort);
+    const d = document.createElement("option");
+    d.value = "default";
+    d.textContent = t("results.sort_default");
+    const sc = document.createElement("option");
+    sc.value = "score";
+    sc.textContent = t("results.sort_score");
+    sort.append(d, sc);
+    panel.appendChild(sort);
   }
+
+  const closePanel = () => { panel.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const willOpen = panel.hidden;
+    panel.hidden = !willOpen;
+    btn.setAttribute("aria-expanded", String(willOpen));
+  });
+  const onDocClick = (event) => {
+    if (!document.body.contains(container)) { document.removeEventListener("click", onDocClick); return; }
+    if (!panel.hidden && !container.contains(event.target)) closePanel();
+  };
+  document.addEventListener("click", onDocClick);
+
+  container.append(btn, panel);
+  controls.appendChild(container);
 
   toolbar.append(copy, controls);
   return toolbar;

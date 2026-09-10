@@ -1993,3 +1993,15 @@ textarea:disabled {
   color: var(--text-muted);
   font-style: italic;
 }
+
+/* Selects (source / sort) inside the results "Filtres" popover. */
+.state-filter-panel .filter-select {
+  width: 100%;
+  margin: 2px 0 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
