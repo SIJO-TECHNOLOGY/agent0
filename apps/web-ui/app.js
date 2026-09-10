@@ -1073,7 +1073,7 @@ function renderCandidateCards(candidates, ui = {}) {
   wrapper.className = "candidate-results";
 
   // Preserve filter/sort state across re-renders (e.g. language switch).
-  const viewState = { strictOnly: false, availableOnly: false, sortMode: "default", states: [] };
+  const viewState = { strictOnly: false, availableOnly: false, sortMode: "default", states: [], source: "all" };
   populateCandidateResults(wrapper, candidates, ui, viewState);
 
   // Register for re-render on language change (toolbar + cards are built with
@@ -1099,11 +1099,13 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
   const stateInputs = [...toolbar.querySelectorAll("[data-state-filter]")];
   const stateCountBadge = toolbar.querySelector("[data-state-count]");
   const stateFilterBox = toolbar.querySelector(".result-state-filter");
+  const sourceSelect = toolbar.querySelector("[data-source]");
 
   // Restore prior view state so a re-render does not reset the user's choices.
   if (strictInput) strictInput.checked = viewState.strictOnly;
   if (availableInput) availableInput.checked = viewState.availableOnly;
   if (sortSelect) sortSelect.value = viewState.sortMode;
+  if (sourceSelect) sourceSelect.value = viewState.source || "all";
   const restoredStates = Array.isArray(viewState.states) ? viewState.states : [];
   stateInputs.forEach((input) => {
     input.checked = restoredStates.includes(input.value);
@@ -1114,6 +1116,7 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
     viewState.availableOnly = Boolean(availableInput?.checked);
     viewState.sortMode = sortSelect?.value || "default";
     viewState.states = stateInputs.filter((input) => input.checked).map((input) => input.value);
+    viewState.source = sourceSelect?.value || "all";
 
     if (stateCountBadge) {
       stateCountBadge.textContent = String(viewState.states.length);
@@ -1133,6 +1136,11 @@ function populateCandidateResults(wrapper, candidates, ui, viewState) {
     if (viewState.states.length) {
       visibleCandidates = visibleCandidates.filter((candidate) =>
         viewState.states.includes(candidateStateValue(candidate)),
+      );
+    }
+    if (viewState.source !== "all") {
+      visibleCandidates = visibleCandidates.filter((candidate) =>
+        candidateSourceValues(candidate).includes(viewState.source),
       );
     }
 
@@ -1734,6 +1742,19 @@ function createMetaItem(label, value) {
   return item;
 }
 
+function candidateSourceValues(candidate) {
+  const raw = Array.isArray(candidate.sources) && candidate.sources.length
+    ? candidate.sources
+    : (candidate.source ? [candidate.source] : []);
+  const out = new Set();
+  raw.forEach((sr) => {
+    const key = String(sr).toLowerCase();
+    if (key === "boond" || key === "boondmanager") out.add("boond");
+    else if (key === "linkedin" || key === "linkedin_web") out.add("linkedin_web");
+  });
+  return [...out];
+}
+
 function renderCandidateResultsToolbar(ui, candidates) {
   const toolbar = document.createElement("section");
   toolbar.className = "candidate-results-toolbar";
@@ -1867,6 +1888,23 @@ function renderCandidateResultsToolbar(ui, candidates) {
 
     container.append(btn, panel);
     controls.appendChild(container);
+  }
+
+  // Source display filter — shown only when results span more than one source.
+  const sourceValues = new Set();
+  candidates.forEach((c) => candidateSourceValues(c).forEach((v) => sourceValues.add(v)));
+  if (sourceValues.size > 1) {
+    const src = document.createElement("select");
+    src.dataset.source = "true";
+    src.setAttribute("aria-label", t("results.source_aria"));
+    [["all", t("results.source_all")], ["boond", t("results.source_boond")], ["linkedin_web", t("results.source_linkedin")]]
+      .forEach(([value, label]) => {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        src.appendChild(opt);
+      });
+    controls.appendChild(src);
   }
 
   if (candidates.some((candidate) => candidate.match_score !== null && candidate.match_score !== undefined)) {
