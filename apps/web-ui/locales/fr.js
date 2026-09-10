@@ -131,8 +131,8 @@ export default {
     states_empty: "Aucun état disponible.",
     states_hint: "Les états sélectionnés filtrent la prochaine recherche.",
     sources_label: "Rechercher dans",
-    source_boond: "Recherche par BoondManager",
-    source_linkedin: "Recherche par LinkedIn",
+    source_boond: "BoondManager",
+    source_linkedin: "LinkedIn",
     sources_hint: "Aucune sélection = les deux",
   },
   candidate: {

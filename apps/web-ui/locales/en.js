@@ -131,8 +131,8 @@ export default {
     states_empty: "No state available.",
     states_hint: "Selected states filter the next search.",
     sources_label: "Search in",
-    source_boond: "Search via BoondManager",
-    source_linkedin: "Search via LinkedIn",
+    source_boond: "BoondManager",
+    source_linkedin: "LinkedIn",
     sources_hint: "No selection = both",
   },
   candidate: {
