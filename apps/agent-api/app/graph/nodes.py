@@ -2761,15 +2761,21 @@ async def rank_candidates(state: GraphState, ctx: NodeContext) -> GraphState:
         role=role,
         required_years=required_years,
     )
+    # `_criteria_status` only inspects BoondManager (search-prefixed) results —
+    # LinkedIn/public profiles have no technical document to "verify" against.
+    # So when the result set has no Boond candidate (e.g. a LinkedIn-only
+    # search), every criterion looks "missing" and the message wrongly claims
+    # it could not verify them. Suppress those Boond-only warnings in that case.
+    has_boond_result = any(r.source_tool.startswith("search") for r in re_ranked)
     warnings = list(state.warnings)
-    if missing and not any(w.code == "criteria_unverified" for w in warnings):
+    if has_boond_result and missing and not any(w.code == "criteria_unverified" for w in warnings):
         warnings.append(
             Warning(
                 code="criteria_unverified",
                 message="could not verify: " + ", ".join(missing),
             )
         )
-    if visible_only and not any(w.code == "criteria_visible" for w in warnings):
+    if has_boond_result and visible_only and not any(w.code == "criteria_visible" for w in warnings):
         warnings.append(
             Warning(
                 code="criteria_visible",

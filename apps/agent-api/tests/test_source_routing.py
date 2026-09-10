@@ -243,3 +243,17 @@ def test_external_query_uses_stated_location_over_default() -> None:
     )
     q = _candidate_search_query_from_state(state, ctx)
     assert q.location == "Nantes"
+
+
+@pytest.mark.asyncio
+async def test_linkedin_only_message_has_no_boond_verify_wording() -> None:
+    # The Boond-style "could not verify criteria" wording must not appear for a
+    # LinkedIn-only search (public profiles have no technical doc to verify).
+    mcp = SpyMcpClient()
+    external = FakeExternalSource(candidates=2)
+    resp = await _service(mcp, external).search(
+        SearchRequest(query="Java consultant Paris", sources=["linkedin"])
+    )
+    assert len(_linkedin_cards(resp)) == 2
+    lowered = resp.message.lower()
+    assert "verify" not in lowered and "vérifier" not in lowered
