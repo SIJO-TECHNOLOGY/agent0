@@ -33,6 +33,7 @@ The Agent API now follows the **Architectural Paradigm Shift: From Single-Shot P
 - Enrich candidates with detail, technical document, and CV data via MCP.
 - Normalize candidate data quality before matching (Agent1): reconcile experience, skills, and languages across BoondManager fields, the technical document, and the CV. A deterministic pass always runs; an optional, off-by-default LLM pass (`AGENT1_LLM_RECONCILIATION`) judges coherence on conflicting candidates only.
 - Aggregate, deduplicate, rank, and summarize results.
+- Search multiple candidate sources (BoondManager and/or public LinkedIn via OpenAI web search), with deterministic source routing, SIJO consultant/long-mission qualification, and cross-source merge. LinkedIn discovery lives here (agent-api), never in mcp-boondmanager. See ADR-017.
 - Normalize BoondManager MCP results into UI-friendly response models.
 - Return `conversation_id`, `message`, and `ui` to the web UI by default.
 
@@ -220,5 +221,6 @@ The MCP server must be running and configured with a valid
 - [ADR-010 - LLM-Driven Bounded Replan](../../docs/decisions/adr-010-llm-driven-bounded-replan.md) explains the bounded observe-then-replan loop in the LLM workflow.
 - [ADR-011 - Agent1: Candidate Data Normalization](../../docs/decisions/adr-011-agent1-candidate-data-normalization.md) explains the deterministic-first candidate data-quality layer and its optional, conflict-only LLM reconciliation.
 - [ADR-012 - Reflection Decides Clarify-or-Retry](../../docs/decisions/adr-012-clarify-or-retry.md) explains how the post-ranking reflection may ask the user to clarify an unresolved parameter instead of accepting or retrying.
+- [ADR-017 - Multi-source Candidate Search (BoondManager + LinkedIn/Web)](../../docs/decisions/adr-017-multi-source-candidate-search.md) explains deterministic source routing, grounded LinkedIn discovery (no invented profiles), SIJO qualification (consultant / long mission, French + France experience), tri-state ranking, and cross-source merge.
 - [Milestone 001 - Agent API MCP Fuzzy Search](../../docs/milestones/milestone-001-agent-api-mcp-fuzzy-search.md) records the orchestration milestone with reproducible verification evidence.
 - [Milestone 002 - Bounded ReAct Control Loop](../../docs/milestones/milestone-002-bounded-react-control-loop.md) defines the certification target for the bounded ReAct control-loop migration.
