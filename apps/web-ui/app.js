@@ -1279,9 +1279,11 @@ function createQualificationChips(candidate) {
   const wrap = document.createElement("div");
   wrap.className = "qualification-chips";
 
+  // Only show strong/positive SIJO signals — the weak "probable consultant"
+  // and the "mission length: not enough info" chips are noise, so they are
+  // intentionally not rendered.
   const cs = candidate.consulting_status;
   if (cs === "confirmed") addChip(wrap, t("candidate.consulting.confirmed"), "pos");
-  else if (cs === "probable") addChip(wrap, t("candidate.consulting.probable"), "maybe");
 
   const lm = candidate.long_mission_status;
   const months = candidate.longest_mission_months;
@@ -1292,11 +1294,6 @@ function createQualificationChips(candidate) {
     addChip(wrap, label, "pos");
   } else if (lm === "probable") {
     addChip(wrap, t("candidate.long_mission.probable"), "maybe");
-  } else if (lm === "unknown") {
-    // Neutral — missing evidence is NOT a failure.
-    addChip(wrap, t("candidate.long_mission.unknown"), "neutral");
-  } else if (lm === "no") {
-    addChip(wrap, t("candidate.long_mission.no"), "neutral");
   }
 
   return wrap.children.length ? wrap : document.createComment("no-qualification");
