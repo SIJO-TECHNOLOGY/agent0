@@ -88,6 +88,7 @@ class OpenAIWebSearchBackend:
         model: str,
         linkedin_only: bool = True,
         timeout_seconds: float = 60.0,
+        structure_model: str | None = None,
     ) -> None:
         try:
             from openai import AsyncOpenAI  # type: ignore[import]
@@ -98,6 +99,10 @@ class OpenAIWebSearchBackend:
             ) from exc
         self._client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
         self._model = model
+        # Step-2 structuring does NOT use web search (it only reformats the
+        # cited findings into JSON), so a fast/cheap model is enough there and
+        # keeps latency down. Defaults to the main model when unset.
+        self._structure_model = structure_model or model
         self._linkedin_only = linkedin_only
 
     # Tool-type variants to try (no domain filter: `allowed_domains` is not
@@ -168,7 +173,7 @@ class OpenAIWebSearchBackend:
         )
         try:
             structured = await self._client.responses.parse(
-                model=self._model,
+                model=self._structure_model,
                 input=[
                     {"role": "system", "content": _STRUCTURE_SYSTEM},
                     {"role": "user", "content": struct_prompt},

@@ -112,6 +112,7 @@ def build_external_source(settings) -> object | None:
         backend = OpenAIWebSearchBackend(
             api_key=api_key,
             model=settings.external_search_model,
+            structure_model=getattr(settings, "external_search_structure_model", None),
             linkedin_only=settings.external_search_linkedin_only,
             timeout_seconds=getattr(settings, "llm_timeout_seconds", 60.0),
         )

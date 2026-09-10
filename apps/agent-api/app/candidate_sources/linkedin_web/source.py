@@ -19,6 +19,7 @@ actually returned so we never trust an LLM-emitted URL that has no evidence.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -209,15 +210,22 @@ class LinkedInWebSource:
         excluded_foreign = 0
         start = time.perf_counter()
 
-        for search_query in queries:
-            try:
-                result = await self._backend.search(
-                    _discovery_prompt(search_query, query), DiscoveryResult
-                )
-            except Exception as exc:  # noqa: BLE001 — one failed query is non-fatal
+        # Run all ladder passes CONCURRENTLY (each pass is ~2 sequential OpenAI
+        # calls); gathering them cuts total latency from the SUM of the passes
+        # to roughly the slowest single pass. Order is preserved for
+        # deterministic dedup/merge.
+        gathered = await asyncio.gather(
+            *(
+                self._backend.search(_discovery_prompt(sq, query), DiscoveryResult)
+                for sq in queries
+            ),
+            return_exceptions=True,
+        )
+        for search_query, result in zip(queries, gathered):
+            if isinstance(result, Exception):
                 logger.warning(
                     "linkedin_web.query_failed",
-                    extra={"query": search_query, "error": str(exc)[:500]},
+                    extra={"query": search_query, "error": str(result)[:500]},
                 )
                 failures += 1
                 continue

@@ -421,6 +421,16 @@ class Settings(BaseSettings):
             "yields few/no results). Not hardcoded — override per environment."
         ),
     )
+    external_search_structure_model: str = Field(
+        default="gpt-4o-mini",
+        description=(
+            "Model for the SECOND (structuring) pass of external discovery — it "
+            "reformats already-cited web findings into JSON with no web search, "
+            "so a fast/cheap model keeps latency low with no grounding risk "
+            "(URLs are still validated against the citations). Default "
+            "gpt-4o-mini."
+        ),
+    )
     external_search_max_queries: int = Field(
         default=6, ge=1, le=12,
         description=(
